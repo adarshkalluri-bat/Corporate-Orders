@@ -10,12 +10,12 @@
   const wideMQ = window.matchMedia('(min-width: 960px)');
   const S = {
     me: null, M: null, view: 'dashboard', wide: wideMQ.matches, lastSync: null, online: true, stale: false, busy: false,
-    o: { q: '', status: '', flag: '', store: '', mc: '', buyer: '', sel: null, checked: new Set(), limit: 300, detail: null, sort: null, dir: 1 },
+    o: { q: '', status: '', flag: '', store: '', mc: '', buyer: '', sel: null, checked: new Set(), limit: 300, detail: null, sort: null, dir: 1, collapsed: false, toggled: new Set() },
     s: { only: true, q: '', art: null, qty: {} },
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2;
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 4;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const artOf = (code) => (S.M && S.M.articles[code]) || S.extra[code] || null;
   const tick = () => new Promise((r) => setTimeout(r, 30));
@@ -331,7 +331,7 @@
     const tile = (cls, t, v, s) => `<div class="tile ${cls}"><h3>${t}</h3><b class="${String(v).length > 9 ? 'long' : ''}">${v}</b><span>${s}</span></div>`;
     const tiles = [
       tile('lilac', 'Order lines', inr(lines.length), `${inr(new Set(lines.map((l) => l.order_no)).size)} orders, ${new Set(lines.map((l) => l.store_code)).size} stores`),
-      tile('peach', 'Pending', inr(by.PENDING.length), `${inr(sum(by.PENDING, (l) => l.balance))} pcs waiting`),
+      tile('peach', 'Pending', inr(by.PENDING.length), `${inr(sum(by.PENDING, (l) => l.balance))} pcs to approve`),
       tile('butter', 'Awaiting store', inr(by.AWAITING.length), `${inr(sum(lines, (l) => l.offered))} pcs of alternates held`),
       tile('mint', 'Approved', inr(by.APPROVED.length + by.PARTIAL.length), `${by.PARTIAL.length} partly approved`),
       tile('sky', 'Dispatched', inr(by.DISPATCHED.length), `${inr(sum(lines, (l) => l.dispatched))} pcs sent`),
@@ -341,7 +341,7 @@
     const items = [];
     const go = (label, o) => `<button class="btn sm" data-act="go" data-view="${(o && o.view) || 'orders'}" data-status="${(o && o.status) || ''}" data-flag="${(o && o.flag) || ''}">${label}</button>`;
     const cnt = (k) => lines.filter(FLAGS[k][1]).length;
-    if (!hasStock && lines.length) items.push(['bad', 'No DC stock report is loaded, so free stock shows as zero', editor() ? go('Upload', { view: 'data' }) : '']);
+    if (!hasStock && lines.length) items.push(['bad', 'No DC stock report is loaded, so the balance DC quantity shows as zero', editor() ? go('Upload', { view: 'data' }) : '']);
     if (cnt('DUP')) {
       const ords = Array.from(new Set(lines.filter(FLAGS.DUP[1]).map((l) => l.order_no)));
       items.push(['bad', `Duplicate article in ${inr(ords.length)} ${plural(ords.length, 'order')}: <b>${ords.slice(0, 8).map(esc).join(', ')}</b>${ords.length > 8 ? ` and ${ords.length - 8} more` : ''}. The same article is entered more than once; each is taken once.`, go('Open', { flag: 'DUP' })]);
@@ -354,31 +354,31 @@
       items.push(['warn', `${inr(by.AWAITING.length)} ${plural(by.AWAITING.length, 'line')} awaiting store reply on alternates (${hrs >= 1 ? 'oldest asked ' + Math.round(hrs) + ' h ago' : 'asked within the last hour'})`, go('Open', { status: 'AWAITING' })]);
     }
     const short = hasStock ? Object.entries(M.pos).filter(([, p]) => p.pending > Math.max(p.free, 0)) : [];
-    if (short.length) items.push(['bad', `${inr(short.length)} ${plural(short.length, 'article')} where stores want more than the DC has free`, go(editor() ? 'Split stock' : 'Open', { view: 'shortages' })]);
+    if (short.length) items.push(['bad', `${inr(short.length)} ${plural(short.length, 'article')} where stores want more than the balance DC quantity`, go(editor() ? 'Share out' : 'Open', { view: 'shortages' })]);
     if (hasStock) Object.entries(M.pos).filter(([, p]) => p.free < 0).slice(0, 4).forEach(([c, p]) =>
-      items.push(['bad', `Over-committed: ${esc(c)} ${esc((M.articles[c] || {}).description || '')} - ${inr(p.reserved)} promised, ${inr(p.dc)} at DC in the latest report`,
+      items.push(['bad', `Over-committed: ${esc(c)} ${esc((M.articles[c] || {}).description || '')} - ${inr(p.reserved)} allocated to orders, only ${inr(p.dc)} at the DC in the latest report`,
         `<button class="btn sm" data-act="go" data-view="orders" data-q="${esc(c)}">Open</button>`]));
     const ready = lines.filter((l) => l.approved_open > 0);
     if (ready.length) items.push(['good', `${inr(ready.length)} ${plural(ready.length, 'line')} approved and waiting for dispatch (${inr(sum(ready, (l) => l.approved_open))} pcs)`, go('Open', { status: 'APPROVED' })]);
     if (by.PENDING.length) items.push(['', `${inr(by.PENDING.length)} ${plural(by.PENDING.length, 'line')} not looked at yet`, go('Open', { status: 'PENDING' })]);
     const open = (k) => lines.filter((l) => FLAGS[k][1](l) && l.balance > 0).length;
-    if (open('NOPRICE')) items.push(['', `${inr(open('NOPRICE'))} open ${plural(open('NOPRICE'), 'line')} came without a price - MRP was used`, go('Open', { flag: 'NOPRICE' })]);
-    if (open('INACTIVE')) items.push(['warn', `${inr(open('INACTIVE'))} open ${plural(open('INACTIVE'), 'line')} on In-Active articles`, go('Open', { flag: 'INACTIVE' })]);
-    if (open('OUTSIDE')) items.push(['', `${inr(open('OUTSIDE'))} open ${plural(open('OUTSIDE'), 'line')} on articles outside the Diwali range`, go('Open', { flag: 'OUTSIDE' })]);
+    if (open('NOPRICE')) items.push(['', `${inr(open('NOPRICE'))} pending ${plural(open('NOPRICE'), 'line')} came without a price - MRP was used`, go('Open', { flag: 'NOPRICE' })]);
+    if (open('INACTIVE')) items.push(['warn', `${inr(open('INACTIVE'))} pending ${plural(open('INACTIVE'), 'line')} on In-Active articles`, go('Open', { flag: 'INACTIVE' })]);
+    if (open('OUTSIDE')) items.push(['', `${inr(open('OUTSIDE'))} pending ${plural(open('OUTSIDE'), 'line')} on articles outside the Diwali range`, go('Open', { flag: 'OUTSIDE' })]);
     if (hasStock) {
       const age = (Date.now() - new Date(M.meta.stock_asof)) / 3600e3;
       if (age > 12) items.push(['warn', `DC stock report is ${Math.round(age)} hours old`, editor() ? go('Upload new', { view: 'data' }) : '']);
     }
     const parts = [['Approved, at DC', sum(live, (l) => l.approved_open), '#7FDDB5'], ['Dispatched', sum(live, (l) => l.dispatched), '#8EC5FF'],
-      ['Offered as alternate', sum(live, (l) => l.offered), '#FFC98A'], ['Balance still open', sum(live, (l) => l.balance), '#C9C2EA'],
-      ['Balance closed', sum(live.filter((l) => l.balance_closed), (l) => l.open_qty), '#FF9DBB']];
+      ['Offered as alternate', sum(live, (l) => l.offered), '#FFC98A'], ['Pending, not yet approved', sum(live, (l) => l.balance), '#C9C2EA'],
+      ['Will not be supplied', sum(live.filter((l) => l.balance_closed), (l) => l.open_qty), '#FF9DBB']];
     /* discount and margin */
     const mrow = (name, m) => `<tr><td>${name}</td><td class="right">${inr(m.mrpV)}</td><td class="right b">${inr(m.val)}</td>
       <td class="right ${m.disc > 0.0005 ? 'warn b' : ''}">${pct(m.disc)}</td><td class="right b">${pct(m.margin)}</td><td class="right">${inr(m.marginRs)}</td></tr>`;
     const pend = money(live, (l) => l.balance);
     const moneyCard = `<div class="card stack"><h2>Discount given and margin after it</h2>
-      <div class="tablewrap"><table><thead><tr><th></th><th class="right">At MRP</th><th class="right">At price wanted</th><th class="right">Discount</th><th class="right">Margin %</th><th class="right">Margin Rs</th></tr></thead><tbody>
-      ${mrow('Ordered', asked)}${mrow('Approved so far', given)}${mrow('Still open', pend)}</tbody></table></div>
+      <div class="tablewrap"><table class="tight"><thead><tr><th></th><th class="right">At MRP</th><th class="right">At price wanted</th><th class="right">Discount</th><th class="right">Margin %</th><th class="right">Margin Rs</th></tr></thead><tbody>
+      ${mrow('Ordered', asked)}${mrow('Approved so far', given)}${mrow('Still pending', pend)}</tbody></table></div>
       <p class="small">Values in rupees, rejected lines left out. Margin = (price without GST - cost) / price without GST, on the cost of the ordered article.${asked.noCost ? ` ${asked.noCost} ${plural(asked.noCost, 'line')} left out of the margin because the article has no cost on file.` : ''}</p></div>`;
     /* by buyer */
     const buyers = {};
@@ -395,9 +395,10 @@
     const altFree = (arr) => arr.reduce((t, a) => t + Math.max(0, C.freeOf(M, a.article_code)), 0);
     const shortRows = short.slice(0, 8).map(([c, p]) => {
       const gap = p.pending - Math.max(p.free, 0), al = C.alternates(M, c), sf = altFree(al.same), df = altFree(al.diff);
-      return `<tr class="pick" data-act="shortOpen" data-code="${esc(c)}"><td>${esc(c)}</td><td class="w">${esc((M.articles[c] || {}).description || '')}</td>
+      const a = M.articles[c] || {}, ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
+      return `<tr class="pick" data-act="shortOpen" data-code="${esc(c)}"><td class="w">${esc(a.mc_name || '')}</td><td class="right">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
         <td class="right">${inr(Math.max(p.free, 0))}</td><td class="right">${p.n_stores}</td><td class="right">${inr(p.pending)}</td>
-        <td class="right bad b">${inr(gap)}</td><td class="right">${inr(sf)}</td><td class="right">${inr(df)}</td><td class="right">${sf + df >= gap ? 'Yes' : sf + df ? 'Partly' : 'No'}</td></tr>`;
+        <td class="right bad b">${inr(gap)}</td><td class="right">${ppo ? inr(ppo) : '-'}</td><td class="right">${inr(sf)}</td><td class="right">${inr(df)}</td><td class="right">${sf + df >= gap ? 'Yes' : sf + df ? 'Partly' : 'No'}</td></tr>`;
     }).join('');
     return `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>
       <div class="tiles">${tiles}</div>
@@ -410,8 +411,8 @@
       </div>
       ${buyerCard ? `<div style="margin-top:12px">${buyerCard}</div>` : ''}
       <div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Biggest shortages</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
-        ${short.length ? `<div class="tablewrap"><table><thead><tr><th>Article</th><th>Description</th><th class="right">DC free</th><th class="right">Stores waiting</th>
-          <th class="right">Pending demand</th><th class="right">Short by</th><th class="right">Free in same design</th><th class="right">Free in other designs</th><th class="right">Covered by alternates?</th></tr></thead><tbody>${shortRows}</tbody></table></div>`
+        ${short.length ? `<div class="tablewrap"><table><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Balance DC qty</th><th class="right">Stores waiting</th>
+          <th class="right">Pending order qty</th><th class="right">Short by</th><th class="right">Pending PO</th><th class="right">Balance in same design</th><th class="right">Balance in other designs</th><th class="right">Covered by alternates?</th></tr></thead><tbody>${shortRows}</tbody></table></div>`
         : `<div class="note ${hasStock ? 'good' : 'info'}">${hasStock ? 'No article is short right now.' : 'Shortages appear once a DC stock report is loaded.'}</div>`}</div>`;
   }
   const l0 = (k) => (k === '(buyer not set)' ? '-' : k);
@@ -448,7 +449,7 @@
     if (l.status === 'REJECTED') return esc(l.reject_reason || '');
     if (l.offered) return `${inr(l.offered)} pcs of alternate offered`;
     if (l.supplied && l.supplied !== l.article_code) return 'Given in ' + esc(l.supplied);
-    if (l.balance_closed && l.open_qty) return `Balance ${inr(l.open_qty)} closed`;
+    if (l.balance_closed && l.open_qty) return `${inr(l.open_qty)} pcs will not be supplied`;
     return '';
   }
   const priceCell = (l) => `<b>${inr(l.req_price)}</b><div class="small">${l.price_missing ? 'not given' : 'MRP ' + inr(l.mrp)}${l.discount > 0.0005 ? ` <span class="warn ltxl">-${pct(l.discount, 0)}</span>` : ''}</div>`;
@@ -458,61 +459,114 @@
     const tone = l.late ? 'bad b' : l.tight ? 'warn b' : '';
     return `<span class="${tone}">${when(l.del_date)}</span>${l.allocate_by ? `<div class="small ${l.late ? 'bad' : ''}">${l.late ? 'late by ' + (-l.days_left) + ' d' : 'allocate by ' + when(l.allocate_by)}</div>` : ''}`;
   }
-  function oListHtml() {
-    const rows = ordersFiltered(), M = S.M, o = S.o, shown = rows.slice(0, o.limit), ed = editor();
-    const sum = (f) => rows.reduce((t, l) => t + f(l), 0);
-    setTimeout(() => setHtml('osum', `${inr(rows.length)} of ${inr(M.lines.length)} lines &nbsp;|&nbsp; ${inr(sum((l) => l.req_qty))} pcs required &nbsp;|&nbsp; ${inr(sum((l) => l.approved))} approved &nbsp;|&nbsp; ${inr(sum((l) => l.balance))} balance &nbsp;|&nbsp; ${rupees(sum((l) => l.ask_value))}`), 0);
-    if (!rows.length) return `<div class="empty card">${M.lines.length ? 'No order lines match these filters.' : 'No orders loaded yet.'}</div>`;
-    const more = rows.length > shown.length ? `<button class="btn more" data-act="more">Show more (${inr(rows.length - shown.length)} hidden)</button>` : '';
-    const dash = (n) => (n ? inr(n) : '-');
-    if (S.wide) {
-      const th = (k, t, r, cls) => `<th class="${r ? 'right' : ''} ${cls || ''}" data-act="sort" data-key="${k}" style="cursor:pointer">${t}${o.sort === k ? (o.dir > 0 ? ' &#9650;' : ' &#9660;') : ''}</th>`;
-      return `<div class="tablewrap" data-keep="otable"><table class="otable"><thead><tr>${ed ? '<th><input type="checkbox" data-act="chkAll" aria-label="Select all"></th>' : ''}
-        ${th('order', 'Order / store')}${th('article', 'Article')}${th('req', 'Req', 1)}${th('appr', 'Appr', 1)}
-        ${th('bal', 'Bal', 1)}${th('free', 'DC free', 1)}${th('status', 'Status')}${th('price', 'Price', 1)}${th('disc', 'Disc.', 1, 'xl')}${th('margin', 'Margin', 1, 'xl')}${th('del', 'Deliver by', 0, 'xl')}</tr></thead><tbody>
-        ${shown.map((l) => {
-          const free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l);
-          return `<tr class="pick ${o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">
-            ${ed ? `<td><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Select line"></td>` : ''}
-            <td class="${l.dup_count > 0 ? 'dup' : ''}" title="${esc(l.store_name + (l.city ? ', ' + l.city : ''))}"><b>${esc(ref(l))}</b><div class="small">${esc(l.store_code)} &middot; ${when(l.order_date)}</div>${dupBadge(l)}</td>
-            <td class="art" title="${esc(l.description)}"><div class="clip">${esc(l.description || '(article details not on file)')}</div><div class="small clip">${esc(l.article_code)} &middot; ${esc(l.mc_name)}</div></td>
-            <td class="right b">${inr(l.req_qty)}</td><td class="right ${l.approved ? 'good b' : 'muted'}">${dash(l.approved)}</td>
-            <td class="right">${dash(l.balance)}</td><td class="right ${short ? 'bad b' : ''}">${inr(free)}</td>
-            <td>${pill(l.status)}${note ? `<div class="small clip" style="max-width:150px" title="${esc(note.replace(/<[^>]+>/g, ''))}">${note}</div>` : ''}</td>
-            <td class="right">${priceCell(l)}</td><td class="right xl">${discCell(l)}</td><td class="right xl">${pct(l.margin)}</td><td class="xl">${delCell(l)}</td></tr>`;
-        }).join('')}</tbody></table>${more}</div>`;
+  /* The Orders screen: lines grouped by store, then by order number; inside an order they
+     run MC by MC, lowest MRP first. */
+  function orderGroups(rows) {
+    const stores = new Map();
+    for (const l of rows) {
+      let s = stores.get(l.store_code);
+      if (!s) stores.set(l.store_code, s = { code: l.store_code, name: l.store_name, city: l.city, state: l.state, orders: new Map(), lines: 0, value: 0, todo: 0 });
+      let o = s.orders.get(l.order_no);
+      if (!o) s.orders.set(l.order_no, o = { no: l.order_no, lines: [] });
+      o.lines.push(l); s.lines++; s.value += l.status === 'REJECTED' ? 0 : l.ask_value; if (NEEDS.includes(l.status)) s.todo++;
     }
-    return shown.map((l) => {
-      const free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l);
-      return `<div class="ocard ${o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">${thumb(l.article_code, 's')}
-        <div class="grow"><div class="row"><b class="grow">${esc(ref(l))}</b>${pill(l.status)}</div>
-        <div>${esc(l.description)} <span class="muted">${esc(l.article_code)}</span> ${dupBadge(l)}</div>
-        <div class="small">${esc(l.store_code)} ${esc(l.store_name)} &middot; ${when(l.order_date)}${l.del_date ? ` &middot; <span class="${l.late ? 'bad' : l.tight ? 'warn' : ''}">wants ${when(l.del_date)}</span>` : ''}</div>
-        <div class="nums"><span>Req <b>${inr(l.req_qty)}</b></span><span>Appr <b class="${l.approved ? 'good' : ''}">${dash(l.approved)}</b></span>
-          <span>Bal <b>${dash(l.balance)}</b></span><span>DC free <b class="${short ? 'bad' : ''}">${inr(free)}</b></span>
-          <span>Price <b>${inr(l.req_price)}</b>${l.discount > 0.0005 ? ` <span class="warn">-${pct(l.discount)}</span>` : ''}</span></div>
-        ${note ? `<div class="small">${note}</div>` : ''}</div></div>`;
-    }).join('') + more;
+    const list = Array.from(stores.values()).sort((a, b) => a.code.localeCompare(b.code));
+    for (const s of list) {
+      s.orders = Array.from(s.orders.values());
+      for (const o of s.orders) o.lines.sort((a, b) => (a.mc_name || '').localeCompare(b.mc_name || '') || a.mrp - b.mrp || a.description.localeCompare(b.description));
+      s.orders.sort((a, b) => (a.lines[0].order_date || '').localeCompare(b.lines[0].order_date || '') || a.no.localeCompare(b.no));
+    }
+    return list;
+  }
+  const storeClosed = (code) => S.o.collapsed !== S.o.toggled.has(code);
+  /* What can be approved on this line right now, in full packs (0 = nothing). */
+  const approvable = (l) => Math.max(0, Math.min(C.roundPack(l.open_qty, l.pack), C.floorPack(C.freeOf(S.M, l.article_code), l.pack)));
+  function lineRow(l, ed) {
+    const M = S.M, free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l);
+    const canAct = ed && l.status !== 'REJECTED' && l.open_qty > 0, top = canAct ? approvable(l) : 0;
+    const hasAlt = canAct && !top && C.allAlternates(M, l.article_code).length > 0;
+    const price = `<b>${inr(l.req_price)}</b>${l.price_missing ? '<div class="small">not given,<br>MRP used</div>' : l.discount > 0.0005 ? `<div class="small warn nowrap">${pct(l.discount)} below MRP</div>` : ''}`;
+    const done = l.approved ? `<div class="small"><b class="good">${inr(l.approved)} approved</b>${l.balance ? `, ${inr(l.balance)} pending` : ''}</div>` : '';
+    const tags = [dupBadge(l), l.art_status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '', l.late ? `<span class="badge bad" title="Allocate-by date has passed">Late for ${when(l.del_date)}</span>` : l.tight ? '<span class="badge warn">Allocate now</span>' : ''].filter(Boolean).join(' ');
+    return `<tr class="pick ${S.o.sel === l.id ? 'sel' : ''} ${l.status === 'REJECTED' ? 'rej' : ''}" data-act="sel" data-id="${l.id}">
+      ${ed ? `<td><input type="checkbox" data-act="chk" data-id="${l.id}" ${S.o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : ''}
+      <td class="mc ${l.dup_count > 0 ? 'dup' : ''}">${esc(l.mc_name || '-')}</td>
+      <td class="right num">${inr(l.mrp)}</td>
+      <td class="art"><span class="code">${esc(l.article_code)}</span> ${tags}<div class="desc">${esc(l.description || '(article details not on file)')}</div></td>
+      <td class="right num"><b>${inr(l.req_qty)}</b><div class="small">pack of ${l.pack}</div></td>
+      <td class="right num">${price}</td>
+      <td class="right num ${short ? 'bad b' : ''}">${inr(free)}</td>
+      <td>${pill(l.status)}${done}${note ? `<div class="small">${note}</div>` : ''}</td>
+      ${ed ? `<td class="apcell">${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}"><button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev"></div>`
+        : canAct ? `<span class="small bad">No balance at DC</span>${hasAlt ? `<div><button class="btn link" data-act="sel" data-id="${l.id}">See alternates</button></div>` : ''}` : ''}</td>` : ''}
+      <td class="acts"><button class="btn sm" data-act="sel" data-id="${l.id}" title="Stock by location, alternates, history${ed ? ', reject, dispatch' : ''}">Details</button>${ed ? `<button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker">Delete</button>` : ''}</td></tr>`;
+  }
+  function lineCard(l) {                             // the same line on a phone
+    const free = C.freeOf(S.M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l);
+    return `<div class="ocard ${S.o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">${thumb(l.article_code, 's')}
+      <div class="grow"><div class="row"><span class="mcname grow">${esc(l.mc_name || '-')}</span>${pill(l.status)}</div>
+      <div><b>${esc(l.description || '(article details not on file)')}</b> <span class="muted">${esc(l.article_code)}</span> ${dupBadge(l)}</div>
+      <div class="nums"><span>MRP <b>${inr(l.mrp)}</b></span><span>Price wanted <b>${inr(l.req_price)}</b>${l.discount > 0.0005 ? ` <span class="warn">-${pct(l.discount)}</span>` : ''}</span><span>Qty wanted <b>${inr(l.req_qty)}</b></span>
+        <span>Approved <b class="${l.approved ? 'good' : ''}">${l.approved ? inr(l.approved) : '-'}</b></span><span>Balance DC qty <b class="${short ? 'bad' : ''}">${inr(free)}</b></span></div>
+      ${note ? `<div class="small">${note}</div>` : ''}</div></div>`;
+  }
+  function orderBlock(o, ed, first) {
+    const L = o.lines, f = L[0], uniq = (fn) => Array.from(new Set(L.map(fn).filter((v) => v !== '' && v != null)));
+    const dels = uniq((l) => l.del_date).sort(), late = L.some((l) => l.late), tight = L.some((l) => l.tight);
+    const tel = (f.phone || '').replace(/\D/g, '');
+    const who = f.poc_name || tel ? `<span>Booked by <b>${esc(f.poc_name || '')}</b>${tel ? ` <a href="tel:${esc(tel)}">${esc(f.phone)}</a>` : ''}</span>` : '';
+    const value = L.reduce((t, l) => t + (l.status === 'REJECTED' ? 0 : l.ask_value), 0);
+    const allTicked = ed && L.every((l) => S.o.checked.has(l.id));
+    const head = `<div class="ohead">${ed && S.wide ? `<input type="checkbox" data-act="chkOrder" data-order="${esc(o.no)}" ${allTicked ? 'checked' : ''} title="Tick every line of this order" aria-label="Tick every line of order ${esc(o.no)}">` : ''}
+        <span class="ono ${L.some((l) => l.dup_count > 0) ? 'bad' : ''}">Order ${esc(o.no)}</span><span>Booked ${when(f.order_date)}</span>
+        ${dels.length ? `<span class="${late ? 'bad b' : tight ? 'warn b' : ''}">Delivery wanted ${when(dels[0])}${dels.length > 1 ? ' onwards' : ''}${f.allocate_by && dels.length === 1 ? ` <span class="small">(allocate by ${when(f.allocate_by)})</span>` : ''}</span>` : ''}
+        ${who}<span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'article')} &middot; ${rupees(value)}</span></div>
+      <div class="ometa"><span><i>MC</i> ${uniq((l) => l.mc_name).map(esc).join(', ') || '-'}</span><span><i>MRP</i> ${uniq((l) => l.mrp).sort((a, b) => a - b).map(inr).join(', ')}</span></div>`;
+    if (!S.wide) return `<div class="oblock">${head}${L.map(lineCard).join('')}</div>`;
+    const cols = `<colgroup>${ed ? '<col style="width:44px">' : ''}<col style="width:${ed ? 12 : 16}%"><col style="width:64px"><col><col style="width:80px"><col style="width:112px"><col style="width:86px"><col style="width:132px">${ed ? '<col style="width:156px">' : ''}<col style="width:92px"></colgroup>`;
+    const thead = `<thead><tr>${ed ? '<th></th>' : ''}<th>MC</th><th class="right">MRP</th><th>Article</th><th class="right">Qty wanted</th><th class="right">Price wanted</th><th class="right">Balance DC qty</th><th>Status</th>${ed ? '<th>Approve qty</th>' : ''}<th></th></tr></thead>`;
+    return `<div class="oblock">${head}<table class="otable ${first ? '' : 'nohead'}">${cols}${thead}<tbody>${L.map((l) => lineRow(l, ed)).join('')}</tbody></table></div>`;
+  }
+  function oListHtml() {
+    const rows = ordersFiltered(), M = S.M, o = S.o, ed = editor();
+    const sum = (f) => rows.reduce((t, l) => t + f(l), 0);
+    setTimeout(() => setHtml('osum', `${inr(rows.length)} of ${inr(M.lines.length)} lines &nbsp;|&nbsp; ${inr(sum((l) => l.req_qty))} pcs wanted &nbsp;|&nbsp; ${inr(sum((l) => l.approved))} approved &nbsp;|&nbsp; ${inr(sum((l) => l.balance))} pending &nbsp;|&nbsp; ${rupees(sum((l) => l.ask_value))}`), 0);
+    if (!rows.length) return `<div class="empty card">${M.lines.length ? 'No order lines match these filters.' : 'No orders loaded yet.'}</div>`;
+    const groups = orderGroups(rows);
+    let shown = 0, hiddenStores = 0, hiddenLines = 0, html = '';
+    for (const g of groups) {
+      if (shown >= o.limit) { hiddenStores++; hiddenLines += g.lines; continue; }
+      const closed = storeClosed(g.code);
+      if (!closed) shown += g.lines;
+      html += `<section class="sgroup ${closed ? 'closed' : ''}">
+        <div class="shead" data-act="toggleStore" data-store="${esc(g.code)}" title="${closed ? 'Show' : 'Hide'} the orders of this store">
+          <span class="scode">${esc(g.code)}</span><span class="sname">${esc(g.name || '(store not in the store list)')}</span><span class="sloc">${esc([g.city, g.state].filter(Boolean).join(', '))}</span><span class="grow"></span>
+          <span class="ssum">${g.orders.length} ${plural(g.orders.length, 'order')} &middot; ${g.lines} ${plural(g.lines, 'line')} &middot; ${rupees(g.value)}${g.todo ? ` &middot; <b>${g.todo} to act on</b>` : ''}</span><span class="chev">${closed ? '&#9656;' : '&#9662;'}</span></div>
+        ${closed ? '' : g.orders.map((ord, i) => orderBlock(ord, ed, i === 0)).join('')}</section>`;
+    }
+    return html + (hiddenStores ? `<button class="btn more" data-act="more">Show more (${inr(hiddenStores)} more ${plural(hiddenStores, 'store')}, ${inr(hiddenLines)} lines)</button>` : '');
   }
   function vOrders() {
-    const o = S.o, M = S.M;
+    const o = S.o, M = S.M, ed = editor();
     const opt = (v, t, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(t)}</option>`;
     const stores = Array.from(new Set(M.lines.map((l) => l.store_code))).sort();
     const mcs = Array.from(new Set(M.lines.map((l) => l.mc_name).filter(Boolean))).sort();
     const buyers = Array.from(new Set(M.lines.map((l) => l.buyer || '-'))).sort();
-    const bulk = editor() && S.wide ? `<span class="grow"></span><button class="btn sm" data-act="bulkApprove" title="Approves the full balance of every ticked line where the DC has enough free stock, rounded up to full packs">Approve ticked in full</button>
-      <button class="btn sm" data-act="bulkDispatch">Mark ticked dispatched</button><button class="btn sm danger" data-act="bulkReject">Reject ticked ...</button>` : '';
-    const detail = `<div id="odetail" class="detail ${!S.wide && o.sel ? 'sheetpage' : ''}" data-keep="odetail" ${!S.wide && !o.sel ? 'hidden' : ''}>${oDetailHtml()}</div>`;
-    return `<div class="head"><h1>Orders</h1><span class="sub" id="osum"></span>${bulk}</div>
+    const bulk = ed && S.wide ? `<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>
+      <button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
+      <button class="btn sm" data-act="bulkDispatch">Mark dispatched</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>` : '';
+    const detail = `<div id="odetail" class="detail ${o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${o.sel ? '' : 'hidden'}>${o.sel ? oDetailHtml() : ''}</div>`;
+    return `<div class="head"><h1>Orders</h1><span class="sub" id="osum"></span></div>
       <div class="toolbar six">
-        <input type="search" id="oq" class="wide" placeholder="Search order, store, article, customer, contact ..." value="${esc(o.q)}" aria-label="Search orders">
+        <input type="search" id="oq" class="wide" placeholder="Search store, order, article, MC, who booked ..." value="${esc(o.q)}" aria-label="Search orders">
         <select id="ostatus" aria-label="Status">${opt('', 'All statuses', o.status)}${opt('NEEDS', 'Needs action', o.status)}${C.STATUS_ORDER.map((s) => opt(s, C.STATUS_LABEL[s], o.status)).join('')}</select>
         <select id="oflag" aria-label="Flag">${opt('', 'Any flag', o.flag)}${Object.keys(FLAGS).map((k) => opt(k, FLAGS[k][0], o.flag)).join('')}</select>
         <select id="ostore" aria-label="Store">${opt('', 'All stores', o.store)}${stores.map((s) => opt(s, s + '  ' + ((M.stores[s] || {}).store_name || ''), o.store)).join('')}</select>
         <select id="omc" aria-label="MC">${opt('', 'All MCs', o.mc)}${mcs.map((m) => opt(m, m, o.mc)).join('')}</select>
         <select id="obuyer" aria-label="Buyer">${opt('', 'All buyers', o.buyer)}${buyers.map((b) => opt(b, b === '-' ? '(buyer not set)' : b, o.buyer)).join('')}</select>
       </div>
-      <div class="panes"><div id="olist">${oListHtml()}</div>${detail}</div>`;
+      <div class="row wrap bulkbar"><button class="btn sm" data-act="collapseAll">${o.collapsed ? 'Open all stores' : 'Close all stores (summary by store)'}</button><span class="grow"></span>${bulk}</div>
+      <div id="olist">${oListHtml()}</div>${detail}`;
   }
   async function loadDetail() {
     const id = S.o.sel;
@@ -543,7 +597,7 @@
     if (!alts.length) return '';
     const M = S.M;
     return `<div class="altsec"><h3>${title}</h3><div class="small">${hint}</div></div>
-      <div class="alt"><span></span><span class="h">Article</span><span class="h right">DC free</span><span class="h right">${canAct ? 'Qty' : ''}</span>
+      <div class="alt"><span></span><span class="h">Article</span><span class="h right">Balance DC qty</span><span class="h right">${canAct ? 'Qty' : ''}</span>
       ${alts.map((a) => {
         const af = C.freeOf(M, a.article_code), pk = C.packOf(a), max = Math.max(0, Math.min(C.floorPack(af, pk), C.roundPack(l.open_qty, pk)));
         const mg = C.marginAt(l.req_price, a.gst, a.cost), mrpDiff = Number(a.mrp) !== Number(l.mrp);
@@ -563,7 +617,7 @@
     const tel = (l.phone || '').replace(/\D/g, '');
     const contact = [l.poc_name ? esc(l.poc_name) : '', tel ? `<a href="tel:${esc(tel)}">${esc(l.phone)}</a>` : '', l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''].filter(Boolean).join(' &middot; ');
     const badges = [a.status === 'In-Active' ? '<span class="badge bad">In-Active article</span>' : '', l.in_master ? '' : '<span class="badge">Not in the Diwali range</span>'].join('');
-    out.push(`<div class="back"><button class="btn" data-act="unsel">&#8249; Orders</button></div>`);
+    out.push(`<div class="back"><button class="btn" data-act="unsel">&#8249; Back to orders</button></div>`);
     out.push(`<div class="card stack">
       <div class="row"><h2 class="grow">Order ${esc(ref(l))}</h2>${pill(l.status)}</div>
       <div class="small"><b>${esc(l.store_code)} ${esc(l.store_name)}</b>${l.city ? ', ' + esc(l.city) : ''}${l.state ? ', ' + esc(l.state) : ''}${l.customer ? ' &nbsp;|&nbsp; ' + esc(l.customer) : ''} &nbsp;|&nbsp; booked ${when(l.order_date)}</div>
@@ -573,7 +627,7 @@
         <div class="small">Pack of ${pack}${a.vendor_name ? ' &nbsp;|&nbsp; ' + esc(a.vendor_name) : ''}</div>${badges ? `<div style="margin-top:4px">${badges}</div>` : ''}</div></div>
       <div class="stats">${stat('MRP', inr(l.mrp))}${stat(l.price_missing ? 'Price (MRP used)' : 'Price wanted', inr(l.req_price))}${stat('Discount', l.discount > 0.0005 ? pct(l.discount) : 'None', l.discount > 0.0005 ? 'warn' : '')}${stat('Margin', pct(l.margin), l.margin != null && l.margin < 0 ? 'bad' : '')}</div>
       <div class="small">${l.margin == null ? 'Margin cannot be worked out: cost or GST for this article is not on file.' : `${l.price_missing ? 'The store gave no price, so MRP is used. ' : ''}Margin after this discount is ${pct(l.margin)}; at ${Number(a.vrp) > 0 && Number(a.vrp) !== Number(l.mrp) ? 'VRP ' + inr(a.vrp) : 'MRP'} it would be ${pct(l.base_margin)}. Order value ${rupees(l.ask_value)}${l.approved ? ', approved ' + rupees(l.value) : ''}.`}</div>
-      <div class="stats">${stat('Required', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered', inr(l.offered), l.offered ? 'warn' : '')}${stat('Balance', inr(l.balance), l.balance ? 'bad' : '')}</div>
+      <div class="stats">${stat('Qty wanted', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered (alternate)', inr(l.offered), l.offered ? 'warn' : '')}${stat('Pending qty', inr(l.balance), l.balance ? 'bad' : '')}</div>
       ${deliveryNote(l)}</div>`);
     if (l.dup_count > 0) {
       out.push(`<div class="card stack"><div class="note bad"><b>Duplicate article in order ${esc(l.order_no)}.</b> ${esc(l.article_code)} is ${esc(dupText(l))}. It is taken once here, with ${inr(l.req_qty)} pcs. Check with the store what it really wants.</div>
@@ -588,25 +642,25 @@
     let shortNote = '';
     if (!M.meta.stock_asof) shortNote = '<div class="note warn">No DC stock report is loaded, so nothing can be approved yet.</div>';
     else if (l.balance > 0 && p.pending > Math.max(free, 0)) {
-      shortNote = `<div class="note bad">Short: ${p.n_stores} ${p.n_stores !== 1 ? 'stores are' : 'store is'} waiting for ${inr(p.pending)} pcs of this article and only ${inr(Math.max(free, 0))} are free${others > 0 ? ` (${inr(others)} pcs asked by other stores)` : ''}.</div>`;
+      shortNote = `<div class="note bad">Short: ${p.n_stores} ${p.n_stores !== 1 ? 'stores are' : 'store is'} waiting for ${inr(p.pending)} pcs of this article and the balance DC quantity is only ${inr(Math.max(free, 0))}${others > 0 ? ` (${inr(others)} pcs asked by other stores)` : ''}.</div>`;
     } else if (l.balance > 0 && others > 0) {
-      shortNote = `<div class="note good">${inr(others)} pcs more are waiting on other stores' orders; free stock covers all of it.</div>`;
+      shortNote = `<div class="note good">${inr(others)} pcs more are waiting on other stores' orders; the balance DC quantity covers all of it.</div>`;
     }
     const canAct = ed && l.status !== 'REJECTED' && l.open_qty > 0;
     const maxOpen = C.roundPack(l.open_qty, pack), freePk = C.floorPack(free, pack), top = Math.max(0, Math.min(maxOpen, freePk));
     const dflt = maxOpen <= freePk ? l.open_qty : top;
     const ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
     out.push(`<div class="card stack"><h3>DC stock of the ordered article</h3>
-      <div class="stats">${stat('Total at DC', inr(p.dc))}${stat('Promised', inr(p.reserved))}${stat('Free now', inr(free), free >= pack ? 'good' : 'bad')}${stat('Pending PO', ppo ? inr(ppo) : '-')}</div>
+      <div class="stats">${stat('Total DC qty', inr(p.dc))}${stat('Allocated to orders', inr(p.reserved))}${stat('Balance DC qty', inr(free), free >= pack ? 'good' : 'bad')}${stat('Pending PO', ppo ? inr(ppo) : '-')}</div>
       ${p.dc ? locChips(p.loc) : ''}
       ${shortNote}
       ${canAct ? `<div class="row wrap"><span>Approve qty</span><input class="qty" id="ap-qty" type="number" inputmode="numeric" min="0" max="${top}" value="${dflt || ''}" data-pack="${pack}" ${top ? '' : 'disabled'} aria-label="Quantity to approve">
         <button class="btn primary" data-act="approve" ${top ? '' : 'disabled'}>Approve</button><span class="small" id="ap-prev"></span></div>
-        <div class="small">${top ? `${inr(l.open_qty)} pcs open. Whatever is approved is rounded up to full packs of ${pack}.` : (free > 0 ? `Only ${inr(free)} pcs free - less than one pack of ${pack}. Use an alternate below.` : 'No free stock - use an alternate below.')}</div>` : ''}</div>`);
+        <div class="small">${top ? `${inr(l.open_qty)} pcs pending. Whatever is approved is rounded up to full packs of ${pack}.` : (free > 0 ? `Balance DC quantity is only ${inr(free)} pcs - less than one pack of ${pack}. Use an alternate below.` : 'No balance DC quantity - use an alternate below.')}</div>` : ''}</div>`);
     const alts = C.alternates(M, l.article_code);
     if (alts.same.length || alts.diff.length) {
       const freeIn = (arr) => arr.reduce((t, x) => t + Math.max(0, C.freeOf(M, x.article_code)), 0);
-      out.push(`<div class="card stack"><div class="row"><h2 class="grow">Alternates</h2><span class="small">${inr(freeIn(alts.same) + freeIn(alts.diff))} pcs free in ${alts.same.length + alts.diff.length}</span></div>
+      out.push(`<div class="card stack"><div class="row"><h2 class="grow">Alternates</h2><span class="small">${inr(freeIn(alts.same) + freeIn(alts.diff))} pcs balance at DC in ${alts.same.length + alts.diff.length}</span></div>
         ${altSection('Same design', 'Other colour or vendor of the same model', alts.same, l, canAct)}
         ${altSection('Same price, different design', 'Another model at the same MRP', alts.diff, l, canAct)}
         ${canAct ? `<div class="small" id="alt-prev"></div>
@@ -620,10 +674,10 @@
     const acts = [];
     if (ed) {
       if (l.approved_open > 0) acts.push('<button class="btn" data-act="dispatch" title="Use when the allocation team has sent the stock, so it is not deducted again after the next stock report">Mark dispatched</button>');
-      if (l.status === 'PARTIAL') acts.push('<button class="btn" data-act="closeBal" title="The remaining quantity will not be supplied">Close balance</button>');
+      if (l.status === 'PARTIAL') acts.push('<button class="btn" data-act="closeBal" title="The pending quantity will not be supplied">Close pending qty</button>');
       if (l.status === 'REJECTED') acts.push('<button class="btn" data-act="reopen">Reopen</button>');
       else if (l.dispatched === 0) acts.push('<button class="btn danger" data-act="reject">Reject line ...</button>');
-      if (l.balance_closed) acts.push('<button class="btn" data-act="reopen">Reopen balance</button>');
+      if (l.balance_closed) acts.push('<button class="btn" data-act="reopen">Reopen pending qty</button>');
     }
     out.push(`<div class="card stack"><h3>Approved on this line</h3>
       ${!allocs ? '<div class="muted">Loading ...</div>' : !allocs.length ? '<div class="muted">Nothing yet.</div>' : allocs.map((x) => {
@@ -643,6 +697,11 @@
         `<div><span class="muted">${when(e.ts)} ${esc(e.user_name || '')}</span> <b>${esc(e.action.charAt(0) + e.action.slice(1).toLowerCase())}</b> ${esc(e.detail || '')}</div>`).join('')}</div></div>`);
     }
     return out.join('');
+  }
+  function rowPreview(i) {                           // under the Approve box of a row: what the typed quantity becomes
+    const el = $('.rowprev', i.closest('td')); if (!el) return;
+    const q = Math.round(+i.value || 0), pk = +i.dataset.pack || 1, f = C.roundPack(q, pk), max = +i.max || 0;
+    el.innerHTML = !q ? '' : f > max ? `<span class="bad">at most ${inr(max)}</span>` : pk > 1 ? `= <b>${inr(f)} pcs</b> (${inr(f / pk)} ${plural(f / pk, 'pack')})` : '';
   }
   /* What the typed quantities become once rounded up to full packs. */
   function packPreview() {
@@ -677,21 +736,22 @@
     if (!M.meta.stock_asof) list = '<div class="empty card">Shortages appear once a DC stock report is loaded.</div>';
     else if (!rows.length) list = `<div class="empty card">${S.s.only ? 'No article is short. Every pending order line can be covered from free DC stock.' : 'No pending demand.'}</div>`;
     else if (S.wide) {
-      list = `<div class="tablewrap"><table class="twoline"><thead><tr><th>Article</th><th>Description</th><th>Buyer</th><th class="right">Pack</th><th class="right">At DC</th><th class="right">Promised</th>
-        <th class="right">Free</th><th class="right">Demand</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Free in<br>same design</th><th class="right">Free in<br>other designs</th></tr></thead><tbody>
-        ${rows.map(({ c, p, a, gap }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff);
-          return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
-          <td>${esc(a.buyer || '')}</td><td class="right">${C.packOf(a)}</td><td class="right">${inr(p.dc)}</td><td class="right">${p.reserved ? inr(p.reserved) : '-'}</td><td class="right b ${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</td>
-          <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td>
+      list = `<div class="tablewrap"><table class="twoline"><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Total<br>DC qty</th><th class="right">Allocated<br>to orders</th>
+        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th><th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th></tr></thead><tbody>
+        ${rows.map(({ c, p, a, gap }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff), ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
+          return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td class="w mc">${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
+          <td class="right">${inr(p.dc)}</td><td class="right">${p.reserved ? inr(p.reserved) : '-'}</td><td class="right b ${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</td>
+          <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td><td class="right ${ppo ? '' : 'muted'}" title="${ppo ? `This month ${inr(a.ppo_cm || 0)}, next month ${inr(a.ppo_nm || 0)}` : ''}">${ppo ? inr(ppo) : '-'}</td>
           <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td></tr>`; }).join('')}</tbody></table></div>`;
     } else {
       list = rows.map(({ c, p, a, gap }) => `<div class="ocard" data-act="shortSel" data-code="${esc(c)}">${thumb(c, 's')}<div class="grow">
-        <div class="row"><b class="grow">${esc(a.description || c)}</b>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>
-        <div class="small">${esc(c)} &middot; ${p.n_stores} ${plural(p.n_stores, 'store')} waiting</div>
-        <div class="nums"><span>Free <b class="${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</b></span><span>Demand <b>${inr(p.pending)}</b></span><span>In alternates <b>${inr(altFreeOf(C.allAlternates(M, c)))}</b></span></div></div></div>`).join('');
+        <div class="row"><span class="mcname grow">${esc(a.mc_name || '')}</span>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>
+        <div><b>${esc(a.description || c)}</b></div>
+        <div class="small">MRP ${inr(a.mrp)} &middot; ${esc(c)} &middot; ${p.n_stores} ${plural(p.n_stores, 'store')} waiting</div>
+        <div class="nums"><span>Balance DC qty <b class="${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</b></span><span>Pending order qty <b>${inr(p.pending)}</b></span><span>Pending PO <b>${inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0))}</b></span><span>In alternates <b>${inr(altFreeOf(C.allAlternates(M, c)))}</b></span></div></div></div>`).join('');
     }
     const detail = `<div id="sdetail" class="${!S.wide && S.s.art ? 'sheetpage' : ''}" ${!S.wide && !S.s.art ? 'hidden' : ''}>${sDetailHtml()}</div>`;
-    return `<div class="head"><h1>Shortages</h1><span class="sub">Articles that several stores are waiting for${editor() ? ' - split the free stock here' : ''}</span></div>
+    return `<div class="head"><h1>Shortages</h1><span class="sub">Articles that several stores are waiting for${editor() ? ' - share out the balance DC quantity here' : ''}</span></div>
       <div class="toolbar two"><input type="search" id="sq" placeholder="Search article, MC or buyer ..." value="${esc(S.s.q)}" aria-label="Search shortages">
         <label class="row" style="min-height:38px"><input type="checkbox" id="sonly" ${S.s.only ? 'checked' : ''}> Only articles that are short</label></div>
       <div class="vpanes"><div data-keep="slist">${list}</div>${detail}</div>`;
@@ -708,22 +768,22 @@
     let body;
     const hasCust = waiting.some((l) => l.customer);
     if (S.wide) {
-      body = `<div class="tablewrap"><table><thead><tr><th>Order</th><th>Booked</th><th>Deliver by</th><th>Store</th>${hasCust ? '<th>Customer</th>' : ''}<th class="right">Price</th><th class="right">Disc.</th><th class="right">Required</th>
-        <th class="right">Approved</th><th class="right">Balance</th>${ed ? '<th class="right">Allocate now</th>' : ''}</tr></thead><tbody>
-        ${waiting.map((l) => `<tr><td>${esc(ref(l))}</td><td>${when(l.order_date)}</td><td>${delCell(l)}</td><td>${esc(l.store_code)} ${esc(l.store_name)}</td>${hasCust ? `<td>${esc(l.customer)}</td>` : ''}
+      body = `<div class="tablewrap"><table><thead><tr><th>Order</th><th>Booked</th><th>Deliver by</th><th>Store</th>${hasCust ? '<th>Customer</th>' : ''}<th class="right">Price wanted</th><th class="right">Disc.</th><th class="right">Qty wanted</th>
+        <th class="right">Approved</th><th class="right">Pending qty</th>${ed ? '<th class="right">Approve qty</th>' : ''}</tr></thead><tbody>
+        ${waiting.map((l) => `<tr><td>${esc(ref(l))}</td><td>${when(l.order_date)}</td><td>${delCell(l)}</td><td class="w"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}</td>${hasCust ? `<td>${esc(l.customer)}</td>` : ''}
           <td class="right">${inr(l.req_price)}</td><td class="right">${discCell(l)}</td><td class="right">${inr(l.req_qty)}</td><td class="right">${l.approved ? inr(l.approved) : '-'}</td><td class="right b">${inr(l.balance)}</td>
           ${ed ? `<td class="right">${input(l)}</td>` : ''}</tr>`).join('')}</tbody></table></div>`;
     } else {
-      body = waiting.map((l) => `<div class="ocard" style="cursor:default"><div class="grow"><div class="row"><b class="grow">${esc(l.store_code)} ${esc(l.store_name)}</b><span>Balance <b>${inr(l.balance)}</b></span></div>
+      body = waiting.map((l) => `<div class="ocard" style="cursor:default"><div class="grow"><div class="row"><b class="grow">${esc(l.store_code)} ${esc(l.store_name)}</b><span>Pending qty <b>${inr(l.balance)}</b></span></div>
         <div class="small">${esc(ref(l))} &middot; ${when(l.order_date)}${l.customer ? ' &middot; ' + esc(l.customer) : ''}${l.del_date ? ' &middot; wants ' + when(l.del_date) : ''}</div>
-        ${ed ? `<div class="row" style="margin-top:6px"><span class="grow small">Allocate now</span>${input(l)}</div>` : ''}</div></div>`).join('');
+        ${ed ? `<div class="row" style="margin-top:6px"><span class="grow small">Approve qty</span>${input(l)}</div>` : ''}</div></div>`).join('');
     }
     return `<div class="back"><button class="btn" data-act="shortUnsel">&#8249; Shortages</button></div>
-      <div class="card stack"><div class="row top">${thumb(c, 'm', true)}<div class="grow"><h2>${esc(a.description || '')} (${esc(c)})</h2>
+      <div class="card stack"><div class="row top">${thumb(c, 'm', true)}<div class="grow"><div class="mcname">${esc(a.mc_name || '')} &nbsp;|&nbsp; MRP ${inr(a.mrp)}</div><h2>${esc(c)} &nbsp; ${esc(a.description || '')}</h2>
         <div class="small">Pack of ${pack}${a.buyer ? ' &nbsp;|&nbsp; ' + esc(a.buyer) : ''}</div>
-        ${al.same.length ? `<div>Same design, free at DC - ${names(al.same)}</div>` : ''}${al.diff.length ? `<div>Same price, other design - ${names(al.diff)}</div>` : ''}${!al.same.length && !al.diff.length ? '<div class="muted">No alternates listed.</div>' : ''}
+        ${al.same.length ? `<div>Same design, balance DC qty - ${names(al.same)}</div>` : ''}${al.diff.length ? `<div>Same price, other design, balance DC qty - ${names(al.diff)}</div>` : ''}${!al.same.length && !al.diff.length ? '<div class="muted">No alternates listed.</div>' : ''}
         ${ed ? '<div class="small">Give each store its share below, in full packs. Lines left short stay open so alternates can be offered from the Orders screen.</div>' : ''}</div></div>
-      <div class="stats">${stat('Total at DC', inr(p.dc))}${stat('Promised', inr(p.reserved))}${stat('Free now', inr(p.free), p.free > 0 ? 'good' : 'bad')}${stat('Pending demand', inr(p.pending), p.pending > free ? 'bad' : '')}</div>
+      <div class="stats five">${stat('Total DC qty', inr(p.dc))}${stat('Allocated to orders', inr(p.reserved))}${stat('Balance DC qty', inr(p.free), p.free > 0 ? 'good' : 'bad')}${stat('Pending order qty', inr(p.pending), p.pending > free ? 'bad' : '')}${stat('Pending PO', (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0) ? inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0)) : '-')}</div>
       ${p.dc ? locChips(p.loc) : ''}
       ${body}
       ${ed ? `<div class="row wrap"><span>Fill:</span><button class="btn sm" data-act="fill" data-m="fifo">Oldest order first</button><button class="btn sm" data-act="fill" data-m="prorata">Share in proportion</button>
@@ -733,7 +793,7 @@
     const el = document.getElementById('stally'); if (!el || !S.s.art) return;
     const free = Math.max(S.M.pos[S.s.art].free, 0), pack = C.packOf(S.M.articles[S.s.art]);
     const total = Object.values(S.s.qty).reduce((t, v) => t + C.roundPack(+v || 0, pack), 0), over = total > free;
-    el.innerHTML = `<span class="${over ? 'bad' : 'good'}">Allocating <b>${inr(total)}</b> of <b>${inr(free)}</b> free${pack > 1 ? ' (full packs of ' + pack + ')' : ''} - ${over ? inr(total - free) + ' too many' : inr(free - total) + ' left'}</span>`;
+    el.innerHTML = `<span class="${over ? 'bad' : 'good'}">Approving <b>${inr(total)}</b> of <b>${inr(free)}</b> balance DC qty${pack > 1 ? ' (full packs of ' + pack + ')' : ''} - ${over ? inr(total - free) + ' too many' : inr(free - total) + ' left'}</span>`;
     const b = document.getElementById('sapply'); if (b) b.disabled = !total || over;
   }
 
@@ -747,7 +807,7 @@
   function cCard(a, free) {
     const tags = [a.status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '', a.in_master ? '' : '<span class="badge">Not in Diwali range</span>'].join(' ');
     return `<div class="ccard" data-act="art" data-code="${esc(a.article_code)}">${thumb(a.article_code, '')}
-      <b>${esc(a.article_code)}</b><div class="d">${esc(a.description)}</div><div class="small">Free <b class="${free > 0 ? 'good' : 'bad'}">${inr(free)}</b> &nbsp;|&nbsp; Rs ${inr(a.mrp)}</div>${tags ? `<div style="margin-top:3px">${tags}</div>` : ''}</div>`;
+      <b>${esc(a.article_code)}</b><div class="d">${esc(a.description)}</div><div class="small">MRP ${inr(a.mrp)} &nbsp;|&nbsp; Balance DC <b class="${free > 0 ? 'good' : 'bad'}">${inr(free)}</b></div>${tags ? `<div style="margin-top:3px">${tags}</div>` : ''}</div>`;
   }
   function cGridHtml() {
     const M = S.M, c = S.c;
@@ -809,7 +869,7 @@
     const locs = C.LOCATIONS.filter(([k]) => k === 'v' || sumOf(k));
     const kv = (k, v) => (v === '' || v == null ? '' : `<span>${k}</span><b>${v}</b>`);
     const strip = (title, arr) => (arr.length ? `<h3>${title}</h3><div class="strip">${arr.map((m) => { const f = C.freeOf(M, m.article_code);
-      return `<div data-act="art" data-code="${esc(m.article_code)}">${thumb(m.article_code, '')}<div class="small">${esc(m.article_code)}</div><b class="${f > 0 ? 'good' : 'bad'}">Free ${inr(f)}</b></div>`; }).join('')}</div>` : '');
+      return `<div data-act="art" data-code="${esc(m.article_code)}">${thumb(m.article_code, '')}<div class="small">${esc(m.article_code)}</div><b class="${f > 0 ? 'good' : 'bad'}">Balance ${inr(f)}</b></div>`; }).join('')}</div>` : '');
     const baseM = C.marginAt(a.mrp, a.gst, a.cost);
     deal = { a, free, pack, altCount: al.same.length + al.diff.length, ppo };
     $('.pop', me).innerHTML = `<div class="artgrid"><div>${thumb(code, 'bigimg')}
@@ -822,7 +882,7 @@
           ${kv('GST', a.gst == null ? '' : pct(a.gst, 0))}${kv('Margin at MRP', baseM == null ? '' : pct(baseM))}${kv('Pack size', pack)}
           ${kv('Same design group', esc(a.group_same))}${kv('Same price group', esc(a.group_diff))}</div>
         <h3>DC stock</h3>
-        <div class="stats">${stat('Total at DC', inr(dc))}${stat('Promised', inr(reserved))}${stat('Free now', inr(free), free >= pack ? 'good' : 'bad')}${stat('Pending PO', ppo ? inr(ppo) : '-')}</div>
+        <div class="stats">${stat('Total DC qty', inr(dc))}${stat('Allocated to orders', inr(reserved))}${stat('Balance DC qty', inr(free), free >= pack ? 'good' : 'bad')}${stat('Pending PO', ppo ? inr(ppo) : '-')}</div>
         ${sites.length ? `<div class="tablewrap"><table class="twoline"><thead><tr><th>DC</th><th class="right">Total</th>${locs.map(([, t]) => `<th class="right">${t.replace(' (', '<br>(')}</th>`).join('')}</tr></thead><tbody>
           ${sites.map((s) => `<tr><td>${esc(s.site_code)}</td><td class="right b">${inr(s.total)}</td>${locs.map(([k]) => `<td class="right ${s[k] ? '' : 'muted'}">${s[k] ? inr(s[k]) : '-'}</td>`).join('')}</tr>`).join('')}
           ${sites.length > 1 ? `<tr><td class="b">All DCs</td><td class="right b">${inr(dc)}</td>${locs.map(([k]) => `<td class="right b">${sumOf(k) ? inr(sumOf(k)) : '-'}</td>`).join('')}</tr>` : ''}</tbody></table></div>`
@@ -856,8 +916,8 @@
     if (qty) {
       L.push(`Quantity in full packs <b>${inr(fq)} pcs</b> (${inr(fq / deal.pack)} ${plural(fq / deal.pack, 'pack')} of ${deal.pack})`);
       L.push(`Deal value <b>${rupees(fq * price)}</b> (${(fq * price / 1e5).toFixed(2)} lakh)${per != null ? `, margin value ${rupees(fq * per)}` : ''}`);
-      L.push(fq <= deal.free ? `<span class="good">DC free stock covers it (${inr(deal.free)} free)</span>`
-        : `<span class="bad">DC is short by ${inr(fq - Math.max(deal.free, 0))} pcs (${inr(Math.max(deal.free, 0))} free)</span>${deal.altCount ? ` - ${deal.altCount} ${plural(deal.altCount, 'alternate')} listed above` : ''}${deal.ppo ? `, pending PO ${inr(deal.ppo)}` : ''}`);
+      L.push(fq <= deal.free ? `<span class="good">The balance DC quantity covers it (${inr(deal.free)} pcs)</span>`
+        : `<span class="bad">DC is short by ${inr(fq - Math.max(deal.free, 0))} pcs (balance DC qty ${inr(Math.max(deal.free, 0))})</span>${deal.altCount ? ` - ${deal.altCount} ${plural(deal.altCount, 'alternate')} listed above` : ''}${deal.ppo ? `, pending PO ${inr(deal.ppo)}` : ''}`);
     }
     const sc = C.code($('#dl-store').value).toUpperCase(), st = sc && S.M.stores[sc];
     if (sc) L.push(st ? `${esc(st.store_code)} ${esc(st.store_name || '')}${st.state ? ', ' + esc(st.state) : ''}: ${st.lead_time == null ? 'lead time not on file' : `lead time <b>${st.lead_time} ${plural(st.lead_time, 'day')}</b>${st.dc ? ' from ' + esc(st.dc) : ''} - allocated today, it reaches about ${when(C.addDays(C.today(), st.lead_time))}`}` : `Store ${esc(sc)} is not in the store list`);
@@ -878,16 +938,17 @@
     const step = (title, text, btns, status) => `<div class="card step"><div class="row wrap"><h2 class="grow">${title}</h2>${btns}</div><p class="small">${text}</p>${status ? `<p>${status}</p>` : ''}</div>`;
     const b = (label, act, extra, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" ${extra || ''}>${label}</button>`;
     const left = [];
-    if (ed && M.schema < 3) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then, duplicate articles inside an order are reported when you upload but not kept marked on the order lines. Your data stays as it is.</div></div>');
+    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then two things do not work: deleting order lines, and keeping duplicate articles marked. Your data stays as it is.</div></div>');
     if (ed) {
       left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
       left.push(step('3 &nbsp;Full article data (second file)', 'The complete article sheet (DSR article-wise). Used for any article that is ordered but is not in the Diwali master, and for status, pending PO and store stock of all articles. It never overwrites what the Diwali master says.', b('Upload file ...', 'pick', 'data-kind="data"'), last('Full article data')));
       left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files: upload each one, they are merged by store code.', b('Upload file ...', 'pick', 'data-kind="stores"'), last('Store list')));
-      left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, free stock is recalculated.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary'), last('DC stock')));
+      left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, and the balance DC quantity is worked out again.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary'), last('DC stock')));
       left.push(step('6 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary'), last('Orders')));
     }
     left.push(step('Export', 'Every order line in the layout of the order tracker (approved qty, final qty to store in full packs, order value, discount, margin, reject reason, who approved), plus allocations, stock by location and the activity log.', b('Export to Excel', 'export')));
+    if (M.counts.deleted) left.push(step('Deleted order lines', `${inr(M.counts.deleted)} order ${plural(M.counts.deleted, 'line')} deleted from the Orders screen. They stay out when the SAP export is uploaded again. ${ed ? 'You can bring any of them back.' : ''}`, b('Show deleted lines', 'showDeleted')));
     left.push(`<div class="card stack" id="teamcard"><div class="row"><h2 class="grow">Team</h2></div><div id="team" class="muted">Loading ...</div></div>`);
     left.push(step('Your account', `Signed in as ${esc(S.me.email)} (${ed ? 'editor' : 'view only'}).`, b('Change password', 'password') + b('Sign out', 'signout')));
     if (ed) left.push(step('Try it out', 'Loads an invented range in the same file layouts as your real reports: a Diwali master with both kinds of alternates, a larger article data sheet, stores with lead times, DC stock by location and a first batch of orders. "Clear everything" removes all articles, stock, orders and approvals (the team stays).', b('Load test data', 'testdata') + b('Clear everything ...', 'wipe', '', 'danger')));
@@ -949,16 +1010,16 @@
       } else if (kind === 'orders') {
         const shaped = C.shape.orders(rows), parts = chunks(shaped, 1000);
         if (!shaped.length) throw new Error('No order lines were found in this file.');
-        let added = 0, skipped = 0, flagged = 0, noPrice = 0, notes = [];
+        let added = 0, skipped = 0, flagged = 0, noPrice = 0, gone = 0, notes = [];
         for (let i = 0; i < parts.length; i++) {
           prog.set(`Checking ${inr(Math.min((i + 1) * 1000, shaped.length))} of ${inr(shaped.length)} order lines ...`);
           const r = await A.rpc('import_orders', { p_rows: parts[i], p_file: file.name, p_log: false });
-          added += r.added; skipped += r.skipped; flagged += r.flagged; noPrice += r.no_price || 0; notes = notes.concat(r.notes || []);
+          added += r.added; skipped += r.skipped; flagged += r.flagged; noPrice += r.no_price || 0; gone += r.deleted || 0; notes = notes.concat(r.notes || []);
         }
         await A.rpc('log_import', { p_detail: `Orders '${file.name}': added ${added}, already here ${skipped}, quantity changed in SAP ${flagged}` + (shaped.extraRows ? `, duplicate article in order ${Array.from(new Set(shaped.filter((o) => o.dups).map((o) => o.order_no))).join(', ')}` : '') });
         const dupOrders = Array.from(new Set(shaped.filter((o) => o.dups).map((o) => o.order_no)));
         msg = `${where}Rows in the file: ${inr(shaped.length + shaped.extraRows)}\nNew order lines added: ${inr(added)}\nAlready in the tracker (skipped): ${inr(skipped)}\nQuantity changed in SAP (flagged for review): ${inr(flagged)}` +
-          (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') +
+          (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') + (gone ? `\nDeleted by you earlier (not added again): ${inr(gone)}` : '') +
           (dupOrders.length ? `\n\nDUPLICATE ARTICLE in ${dupOrders.length} ${plural(dupOrders.length, 'order')}: ${dupOrders.join(', ')}\nThe same article is entered more than once in the order. Each is taken once${S.M.schema >= 3 ? ' and marked on the Orders screen (filter: "Duplicate article in the order")' : ''}:` + firstFew(shaped.repeats, 15).replace(/^\n\n/, '\n') +
             (S.M.schema >= 3 ? '' : '\n(To keep these marked on the Orders screen, run the newest supabase-setup.sql once in Supabase. Your data stays as it is.)') : '') + firstFew(Array.from(new Set(notes)), 12);
       } else {
@@ -1064,8 +1125,8 @@
       const r1 = (x) => (x == null ? null : Math.round(x * 1000) / 10), locs = C.LOCATIONS;
       sheet('Order lines', ['Status', 'Site', 'Store Name', 'Order No', 'MC Code', 'MC Desc', 'Article Code', 'Article Desc', 'MRP', 'Qty Wanted', 'Book Date', 'Delivery Date', 'Price Wanted',
         'Booked By', 'Contact Number', 'State', 'City', 'Buyer', 'Category', 'In Diwali Range', 'Article Status', 'Price given by store', 'Discount %', 'Margin % after discount', 'Pk size',
-        'Approved qty (as entered)', 'Final Qty to Store', 'Order Value', 'Supplied in article(s)', 'Alternate details', 'Offered (awaiting store)', 'Dispatched Qty', 'Balance Qty',
-        'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'DC Stock (Total MSA)', 'DC Free Now'].concat(locs.map(([, t]) => t),
+        'Approved qty (as entered)', 'Final Qty to Store', 'Order Value', 'Supplied in article(s)', 'Alternate details', 'Offered (awaiting store)', 'Dispatched Qty', 'Pending Qty',
+        'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'Total DC Qty (Total MSA)', 'Balance DC Qty'].concat(locs.map(([, t]) => t),
         ['SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']),
         M.lines.map((l) => {
           const mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), alt = mine.filter((a) => a.article_code !== l.article_code);
@@ -1081,8 +1142,8 @@
         ex.allocations.map((a) => { const l = M.byId[a.line_id] || {};
           return [l.order_no, l.line_no === l.article_code ? '' : l.line_no, l.store_code, l.article_code, a.article_code, a.article_code === l.article_code ? 'Ordered article' : 'Alternate',
             a.entered_qty == null ? a.qty : a.entered_qty, a.qty, C.STATUS_LABEL[a.state], when(a.created_at), a.created_by, when(a.decided_at), when(a.dispatched_at)]; }));
-      sheet('Stock position', ['Article', 'Description', 'MC Name', 'Buyer', 'Same design group', 'Same price group', 'MRP', 'Pack', 'DC Stock (Total MSA)'].concat(locs.map(([, t]) => t),
-        ['Promised', 'DC Free', 'Pending Demand', 'Stores Waiting', 'Short By', 'Pending PO']),
+      sheet('Stock position', ['Article', 'Description', 'MC Name', 'Buyer', 'Same design group', 'Same price group', 'MRP', 'Pack', 'Total DC Qty (Total MSA)'].concat(locs.map(([, t]) => t),
+        ['Allocated to orders', 'Balance DC Qty', 'Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO']),
         Object.keys(M.pos).sort().map((c) => { const p = M.pos[c], a = M.articles[c] || {};
           return [c, a.description, a.mc_name, a.buyer, a.group_same, a.group_diff, a.mrp == null ? null : +a.mrp, C.packOf(a), p.dc].concat(locs.map(([k]) => p.loc[k] || 0),
             [p.reserved, p.free, p.pending, p.n_stores, Math.max(0, p.pending - Math.max(p.free, 0)), (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0)]); }));
@@ -1162,17 +1223,59 @@
     hardReload: () => location.reload(),
     signout: async () => { clearInterval(poller); poller = null; await A.sb.auth.signOut().catch(() => {}); S.M = null; S.me = null; screenLogin(); },
     refresh: () => run(async () => {}),
-    nav: (el) => { S.view = el.dataset.view; if (!S.wide) { S.o.sel = null; S.s.art = null; } render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
+    nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
     go: (el) => {
       S.view = el.dataset.view;
-      if (el.dataset.view === 'orders') Object.assign(S.o, { status: el.dataset.status || '', flag: el.dataset.flag || '', q: el.dataset.q || '', buyer: el.dataset.buyer || '', store: '', mc: '', sel: null, limit: 300 });
+      if (el.dataset.view === 'orders') { Object.assign(S.o, { status: el.dataset.status || '', flag: el.dataset.flag || '', q: el.dataset.q || '', buyer: el.dataset.buyer || '', store: '', mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear(); }
       render();
     },
     shortOpen: (el) => { S.view = 'shortages'; S.s.art = el.dataset.code; S.s.qty = {}; render(); },
     sel: (el) => { S.o.sel = +el.dataset.id; S.o.detail = null; render(); packPreview(); },
     unsel: () => { S.o.sel = null; render(); },
     chk: (el) => { const id = +el.dataset.id; if (el.checked) S.o.checked.add(id); else S.o.checked.delete(id); },
-    chkAll: (el) => { ordersFiltered().slice(0, S.o.limit).forEach((l) => { if (el.checked) S.o.checked.add(l.id); else S.o.checked.delete(l.id); }); setHtml('olist', oListHtml()); const c = $('[data-act=chkAll]'); if (c) c.checked = el.checked; },
+    chkAll: (el) => { $$('#olist input[data-act=chk]').forEach((i) => { i.checked = el.checked; const id = +i.dataset.id; if (el.checked) S.o.checked.add(id); else S.o.checked.delete(id); }); $$('#olist input[data-act=chkOrder]').forEach((i) => { i.checked = el.checked; }); },
+    chkOrder: (el) => { $$('input[data-act=chk]', el.closest('.oblock')).forEach((i) => { i.checked = el.checked; const id = +i.dataset.id; if (el.checked) S.o.checked.add(id); else S.o.checked.delete(id); }); },
+    toggleStore: (el) => { const c = el.dataset.store; if (S.o.toggled.has(c)) S.o.toggled.delete(c); else S.o.toggled.add(c); setHtml('olist', oListHtml()); hydrate(); },
+    collapseAll: () => { S.o.collapsed = !S.o.collapsed; S.o.toggled.clear(); S.o.limit = 300; render(); },
+    rowApprove: (el) => {
+      const l = S.M.byId[+el.dataset.id], i = $(`.rowq[data-id="${el.dataset.id}"]`), q = Math.round(+(i && i.value) || 0), max = +(i && i.max) || 0;
+      if (!l || !i) return;
+      if (q <= 0) { i.focus(); return tell('Approve', 'Type the quantity to approve in the box first.'); }
+      const f = C.roundPack(q, l.pack);
+      if (f > max) return tell('Approve', `${inr(f)} pcs${f !== q ? ` (${inr(q)} rounded up to full packs of ${l.pack})` : ''} is more than can be approved on this line now: ${inr(max)} pcs.`);
+      run(() => A.rpc('allocate', { p_line: l.id, p_article: l.article_code, p_qty: q }), `Approved ${inr(f)} pcs of ${l.article_code}` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : ''));
+    },
+    delLine: async (el) => {
+      const l = S.M.byId[+el.dataset.id]; if (!l) return;
+      if (S.M.schema < 4) return tell('Delete line', 'Deleting needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
+      if (l.dispatched > 0) return tell('Delete line', 'Stock on this line is already dispatched, so it cannot be deleted.');
+      const held = l.approved_open + l.offered;
+      if (!(await confirmBox('Delete this order line?', `Store ${l.store_code} ${l.store_name}\nOrder ${l.order_no}\n${l.article_code}  ${l.description}\nQty wanted ${inr(l.req_qty)}\n\n` + (held ? `The ${inr(held)} pcs approved or offered on it go back to the balance DC quantity.\n` : '') +
+        'The line is removed from every screen and stays out when the SAP export is uploaded again. You can bring it back from Data > Deleted order lines.', 'Delete line', true))) return;
+      if (S.o.sel === l.id) S.o.sel = null;
+      run(() => A.rpc('delete_lines', { p_lines: [l.id] }), 'Line deleted');
+    },
+    bulkDelete: async () => {
+      const ids = Array.from(S.o.checked).filter((id) => S.M.byId[id]);
+      if (!ids.length) return tell('Delete ticked', 'Tick one or more order lines first.');
+      if (S.M.schema < 4) return tell('Delete ticked', 'Deleting needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
+      if (!(await confirmBox(`Delete ${ids.length} ticked ${plural(ids.length, 'line')}?`, 'Anything approved or offered on these lines goes back to the balance DC quantity. Lines with stock already dispatched are left alone.\n\nDeleted lines are removed from every screen and stay out when the SAP export is uploaded again. You can bring them back from Data > Deleted order lines.', 'Delete lines', true))) return;
+      run(async () => { const r = await A.rpc('delete_lines', { p_lines: ids }); S.o.checked.clear(); S.o.sel = null; return r; }, (r) => `Deleted ${r.done} ${plural(r.done, 'line')}` + (r.skipped ? `, ${r.skipped} left alone (dispatched)` : ''));
+    },
+    showDeleted: async () => {
+      let rows;
+      try { rows = await A.rpc('deleted_lines'); } catch (e) { return tell('Deleted order lines', e.message); }
+      const ed = editor();
+      const d = pop(`<h2>Deleted order lines</h2>${rows.length ? `<div class="tablewrap" style="max-height:60vh"><table><thead><tr><th>Store</th><th>Order</th><th>Article</th><th class="right">MRP</th><th class="right">Qty wanted</th><th>Deleted</th>${ed ? '<th></th>' : ''}</tr></thead><tbody>
+        ${rows.map((r) => `<tr><td>${esc(r.store_code)} ${esc(r.store_name || '')}</td><td>${esc(r.order_no)}</td><td class="w"><b>${esc(r.article_code)}</b> ${esc(r.description || '')}</td><td class="right">${inr(r.mrp)}</td><td class="right">${inr(r.req_qty)}</td>
+          <td>${when(r.deleted_at)}<div class="small">${esc(r.deleted_by || '')}</div></td>${ed ? `<td><button class="btn sm" data-restore="${r.id}">Bring back</button></td>` : ''}</tr>`).join('')}</tbody></table></div>` : '<p class="muted">Nothing is deleted.</p>'}
+        <div class="actions"><button class="btn" data-act="closePop">Close</button></div>`, 'big');
+      d.addEventListener('click', async (e) => {
+        const b = e.target.closest('[data-restore]'); if (!b) return;
+        b.disabled = true;
+        try { await A.rpc('restore_lines', { p_lines: [+b.dataset.restore] }); b.closest('tr').remove(); await reload(); toast('Line brought back as it was (pending, nothing approved)'); } catch (err) { await tell('Not done', err.message); }
+      });
+    },
     sort: (el) => { const k = el.dataset.key; if (S.o.sort === k) { if (S.o.dir === 1) S.o.dir = -1; else { S.o.sort = null; S.o.dir = 1; } } else { S.o.sort = k; S.o.dir = 1; } setHtml('olist', oListHtml()); },
     more: () => { S.o.limit += 300; setHtml('olist', oListHtml()); hydrate(); },
     approve: () => {
@@ -1213,7 +1316,7 @@
     declineOffer: (el) => run(() => A.rpc('decline_offer', { p_alloc: +el.dataset.alloc }), 'Offer cancelled, stock released'),
     undo: (el) => run(() => A.rpc('undo_alloc', { p_alloc: +el.dataset.alloc }), 'Undone'),
     dispatch: () => run(() => A.rpc('dispatch_lines', { p_lines: [S.o.sel] }), 'Marked dispatched'),
-    closeBal: () => run(() => A.rpc('close_balance', { p_line: S.o.sel }), 'Balance closed'),
+    closeBal: () => run(() => A.rpc('close_balance', { p_line: S.o.sel }), 'Pending quantity closed'),
     reopen: () => run(() => A.rpc('reopen_line', { p_line: S.o.sel }), 'Reopened'),
     sapAccept: () => run(() => A.rpc('sap_accept', { p_line: S.o.sel })),
     sapDismiss: () => run(() => A.rpc('sap_dismiss', { p_line: S.o.sel })),
@@ -1239,16 +1342,16 @@
     },
     bulkApprove: async () => {
       const ids = Array.from(S.o.checked);
-      if (!ids.length) return tell('Approve ticked in full', 'Tick one or more order lines first.');
+      if (!ids.length) return tell('Approve in full', 'Tick one or more order lines first.');
       const items = ids.map((id) => S.M.byId[id]).filter((l) => l && !l.rejected && l.open_qty > 0).map((l) => ({ line: l.id, article: l.article_code, qty: l.open_qty }));
-      if (!items.length) return tell('Approve ticked in full', 'None of the ticked lines has an open balance.');
+      if (!items.length) return tell('Approve in full', 'None of the ticked lines has a pending quantity.');
       S.busy = true;
       try {
         const res = await allocMany(items);
         S.o.checked.clear();
         await reload();
         const bad = res.filter((r) => !r.ok);
-        await tell('Approve ticked in full', `Approved in full (rounded up to full packs): ${res.length - bad.length} ${plural(res.length - bad.length, 'line')}.` + (bad.length ? `\n\nNot approved (${bad.length}):\n` +
+        await tell('Approve in full', `Approved in full (rounded up to full packs): ${res.length - bad.length} ${plural(res.length - bad.length, 'line')}.` + (bad.length ? `\n\nNot approved (${bad.length}):\n` +
           bad.slice(0, 15).map((r) => { const l = S.M.byId[r.line] || {}; return `${ref(l)}  ${r.error}`; }).join('\n') + (bad.length > 15 ? `\n... and ${bad.length - 15} more` : '') : ''));
       } catch (e) { await tell('Not done', e.message); } finally { S.busy = false; }
     },
@@ -1325,8 +1428,9 @@
   document.addEventListener('click', (e) => {
     const el = e.target.closest('[data-act]');
     if (!el) return;
-    if (el.dataset.act === 'sel' && e.target.closest('input[type=checkbox]')) return;      // the tick box handles itself
-    if ((el.dataset.act === 'chk' || el.dataset.act === 'chkAll')) { ACT[el.dataset.act](el); return; }
+    const inner = e.target.closest('input, button, a, select, label');                       // a control inside a row or a store heading handles itself
+    if (inner && inner !== el && el.contains(inner) && !inner.dataset.act) return;
+    if (['chk', 'chkAll', 'chkOrder'].includes(el.dataset.act)) { ACT[el.dataset.act](el); return; }
     const fn = ACT[el.dataset.act];
     if (fn) fn(el, e);
   });
@@ -1338,6 +1442,7 @@
     else if (t.id === 'sq') { S.s.q = t.value; const a = document.activeElement, pos = t.selectionStart; render(); const n = $('#sq'); if (a === t && n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.classList.contains('sq')) { const v = Math.max(0, Math.round(+t.value || 0)); if (v) S.s.qty[t.dataset.id] = v; else delete S.s.qty[t.dataset.id]; tally(); }
     else if (t.id === 'ap-qty' || t.classList.contains('altq')) packPreview();
+    else if (t.classList.contains('rowq')) rowPreview(t);
     else if (t.id === 'dl-disc') dealCalc('disc');
     else if (t.id === 'dl-price') dealCalc('price');
     else if (t.id === 'dl-qty' || t.id === 'dl-store') dealCalc();
@@ -1393,7 +1498,11 @@
       render();
       if (r.length === 1) openArticle(r[0].article_code); else if (!r.length && /^\d{6,}$/.test(code)) openArticle(code);
     }
-    if (e.key === 'Escape') { const o = $('#modal').lastElementChild; const c = o && $('[data-cancel],[data-done],[data-act=closePop]', o); if (c) c.click(); }
+    if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('rowq')) { e.preventDefault(); ACT.rowApprove(e.target); }
+    if (e.key === 'Escape') {
+      const o = $('#modal').lastElementChild, c = o && $('[data-cancel],[data-done],[data-act=closePop]', o);
+      if (c) c.click(); else if (!o && S.view === 'orders' && S.o.sel) ACT.unsel();
+    }
   });
   wideMQ.addEventListener('change', (e) => { S.wide = e.matches; if (S.M) render(); });
   window.addEventListener('error', (e) => { if (S.M && e.message) toast('Something went wrong: ' + e.message); });
