@@ -310,8 +310,11 @@
     NOPRICE: ['Price not given (MRP used)', (l) => !!l.price_missing],
     OUTSIDE: ['Not in the Diwali range', (l) => !l.in_master],
     INACTIVE: ['In-Active article', (l) => l.art_status === 'In-Active'],
-    SAP: ['SAP quantity changed', (l) => l.sap_new_qty != null]
+    SAP: ['SAP quantity changed', (l) => l.sap_new_qty != null],
+    DUP: ['Duplicate article in the order', (l) => l.dup_count > 0]
   };
+  const dupText = (l) => `entered ${l.dup_count} times in the SAP export (qty ${l.dup_qty || '?'})`;
+  const dupBadge = (l) => (l.dup_count > 0 ? `<span class="badge bad" title="${esc('The same article is ' + dupText(l) + '. It is taken once.')}">Duplicate article</span>` : '');
   function vDashboard() {
     const M = S.M, lines = M.lines, hasStock = !!M.meta.stock_asof;
     const sub = hasStock ? `DC stock as of ${when(M.meta.stock_asof)} (${esc(M.meta.stock_file || '')})` : 'No DC stock report loaded yet';
@@ -339,6 +342,10 @@
     const go = (label, o) => `<button class="btn sm" data-act="go" data-view="${(o && o.view) || 'orders'}" data-status="${(o && o.status) || ''}" data-flag="${(o && o.flag) || ''}">${label}</button>`;
     const cnt = (k) => lines.filter(FLAGS[k][1]).length;
     if (!hasStock && lines.length) items.push(['bad', 'No DC stock report is loaded, so free stock shows as zero', editor() ? go('Upload', { view: 'data' }) : '']);
+    if (cnt('DUP')) {
+      const ords = Array.from(new Set(lines.filter(FLAGS.DUP[1]).map((l) => l.order_no)));
+      items.push(['bad', `Duplicate article in ${inr(ords.length)} ${plural(ords.length, 'order')}: <b>${ords.slice(0, 8).map(esc).join(', ')}</b>${ords.length > 8 ? ` and ${ords.length - 8} more` : ''}. The same article is entered more than once; each is taken once.`, go('Open', { flag: 'DUP' })]);
+    }
     if (cnt('SAP')) items.push(['warn', `${inr(cnt('SAP'))} ${plural(cnt('SAP'), 'line')}: quantity changed in SAP after import`, go('Review', { flag: 'SAP' })]);
     if (cnt('LATE')) items.push(['bad', `${inr(cnt('LATE'))} ${plural(cnt('LATE'), 'line')} can no longer reach the store by the date it asked for (lead time)`, go('Open', { flag: 'LATE' })]);
     if (cnt('SOON')) items.push(['warn', `${inr(cnt('SOON'))} ${plural(cnt('SOON'), 'line')} must be allocated today or tomorrow to arrive on time`, go('Open', { flag: 'SOON' })]);
@@ -467,7 +474,7 @@
           const free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l);
           return `<tr class="pick ${o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">
             ${ed ? `<td><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Select line"></td>` : ''}
-            <td title="${esc(l.store_name + (l.city ? ', ' + l.city : ''))}"><b>${esc(ref(l))}</b><div class="small">${esc(l.store_code)} &middot; ${when(l.order_date)}</div></td>
+            <td class="${l.dup_count > 0 ? 'dup' : ''}" title="${esc(l.store_name + (l.city ? ', ' + l.city : ''))}"><b>${esc(ref(l))}</b><div class="small">${esc(l.store_code)} &middot; ${when(l.order_date)}</div>${dupBadge(l)}</td>
             <td class="art" title="${esc(l.description)}"><div class="clip">${esc(l.description || '(article details not on file)')}</div><div class="small clip">${esc(l.article_code)} &middot; ${esc(l.mc_name)}</div></td>
             <td class="right b">${inr(l.req_qty)}</td><td class="right ${l.approved ? 'good b' : 'muted'}">${dash(l.approved)}</td>
             <td class="right">${dash(l.balance)}</td><td class="right ${short ? 'bad b' : ''}">${inr(free)}</td>
@@ -479,7 +486,7 @@
       const free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l);
       return `<div class="ocard ${o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">${thumb(l.article_code, 's')}
         <div class="grow"><div class="row"><b class="grow">${esc(ref(l))}</b>${pill(l.status)}</div>
-        <div>${esc(l.description)} <span class="muted">${esc(l.article_code)}</span></div>
+        <div>${esc(l.description)} <span class="muted">${esc(l.article_code)}</span> ${dupBadge(l)}</div>
         <div class="small">${esc(l.store_code)} ${esc(l.store_name)} &middot; ${when(l.order_date)}${l.del_date ? ` &middot; <span class="${l.late ? 'bad' : l.tight ? 'warn' : ''}">wants ${when(l.del_date)}</span>` : ''}</div>
         <div class="nums"><span>Req <b>${inr(l.req_qty)}</b></span><span>Appr <b class="${l.approved ? 'good' : ''}">${dash(l.approved)}</b></span>
           <span>Bal <b>${dash(l.balance)}</b></span><span>DC free <b class="${short ? 'bad' : ''}">${inr(free)}</b></span>
@@ -568,6 +575,11 @@
       <div class="small">${l.margin == null ? 'Margin cannot be worked out: cost or GST for this article is not on file.' : `${l.price_missing ? 'The store gave no price, so MRP is used. ' : ''}Margin after this discount is ${pct(l.margin)}; at ${Number(a.vrp) > 0 && Number(a.vrp) !== Number(l.mrp) ? 'VRP ' + inr(a.vrp) : 'MRP'} it would be ${pct(l.base_margin)}. Order value ${rupees(l.ask_value)}${l.approved ? ', approved ' + rupees(l.value) : ''}.`}</div>
       <div class="stats">${stat('Required', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered', inr(l.offered), l.offered ? 'warn' : '')}${stat('Balance', inr(l.balance), l.balance ? 'bad' : '')}</div>
       ${deliveryNote(l)}</div>`);
+    if (l.dup_count > 0) {
+      out.push(`<div class="card stack"><div class="note bad"><b>Duplicate article in order ${esc(l.order_no)}.</b> ${esc(l.article_code)} is ${esc(dupText(l))}. It is taken once here, with ${inr(l.req_qty)} pcs. Check with the store what it really wants.</div>
+        ${ed ? '<div class="row"><button class="btn sm" data-act="dupClear" title="Use once the store has confirmed, or corrected the order in SAP">Checked with the store - remove this mark</button></div>' : ''}</div>`);
+    }
+    else if (l.dup_count < 0) out.push(`<div class="card"><div class="small">This article was entered ${-l.dup_count} times in order ${esc(l.order_no)} in the SAP export (qty ${esc(l.dup_qty || '?')}); taken once. Marked as checked with the store.</div></div>`);
     if (l.sap_new_qty != null) {
       out.push(`<div class="card stack"><div class="note warn">SAP now shows ${inr(l.sap_new_qty)} pcs for this line; the tracker has ${inr(l.req_qty)}. Nothing was changed automatically.</div>
         ${ed ? `<div class="row"><button class="btn primary" data-act="sapAccept">Use ${inr(l.sap_new_qty)}</button><button class="btn" data-act="sapDismiss">Keep ${inr(l.req_qty)}</button></div>` : ''}</div>`);
@@ -866,6 +878,7 @@
     const step = (title, text, btns, status) => `<div class="card step"><div class="row wrap"><h2 class="grow">${title}</h2>${btns}</div><p class="small">${text}</p>${status ? `<p>${status}</p>` : ''}</div>`;
     const b = (label, act, extra, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" ${extra || ''}>${label}</button>`;
     const left = [];
+    if (ed && M.schema < 3) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then, duplicate articles inside an order are reported when you upload but not kept marked on the order lines. Your data stays as it is.</div></div>');
     if (ed) {
       left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
@@ -942,10 +955,12 @@
           const r = await A.rpc('import_orders', { p_rows: parts[i], p_file: file.name, p_log: false });
           added += r.added; skipped += r.skipped; flagged += r.flagged; noPrice += r.no_price || 0; notes = notes.concat(r.notes || []);
         }
-        await A.rpc('log_import', { p_detail: `Orders '${file.name}': added ${added}, duplicates skipped ${skipped}, quantity changed in SAP ${flagged}` });
-        const uniq = Array.from(new Set(notes.concat(shaped.repeats || [])));
-        msg = `${where}Order lines in the file: ${inr(shaped.length + (shaped.repeats || []).length)}\nNew order lines added: ${inr(added)}\nAlready in the tracker (skipped): ${inr(skipped)}\nQuantity changed in SAP (flagged for review): ${inr(flagged)}` +
-          (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') + ((shaped.repeats || []).length ? `\nRepeated inside the file (first one taken): ${shaped.repeats.length}` : '') + firstFew(uniq, 12);
+        await A.rpc('log_import', { p_detail: `Orders '${file.name}': added ${added}, already here ${skipped}, quantity changed in SAP ${flagged}` + (shaped.extraRows ? `, duplicate article in order ${Array.from(new Set(shaped.filter((o) => o.dups).map((o) => o.order_no))).join(', ')}` : '') });
+        const dupOrders = Array.from(new Set(shaped.filter((o) => o.dups).map((o) => o.order_no)));
+        msg = `${where}Rows in the file: ${inr(shaped.length + shaped.extraRows)}\nNew order lines added: ${inr(added)}\nAlready in the tracker (skipped): ${inr(skipped)}\nQuantity changed in SAP (flagged for review): ${inr(flagged)}` +
+          (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') +
+          (dupOrders.length ? `\n\nDUPLICATE ARTICLE in ${dupOrders.length} ${plural(dupOrders.length, 'order')}: ${dupOrders.join(', ')}\nThe same article is entered more than once in the order. Each is taken once${S.M.schema >= 3 ? ' and marked on the Orders screen (filter: "Duplicate article in the order")' : ''}:` + firstFew(shaped.repeats, 15).replace(/^\n\n/, '\n') +
+            (S.M.schema >= 3 ? '' : '\n(To keep these marked on the Orders screen, run the newest supabase-setup.sql once in Supabase. Your data stays as it is.)') : '') + firstFew(Array.from(new Set(notes)), 12);
       } else {
         msg = await importStock(rows, rd, file, prog, quiet);
         if (msg === null) { prog.close(); return; }
@@ -1050,7 +1065,7 @@
       sheet('Order lines', ['Status', 'Site', 'Store Name', 'Order No', 'MC Code', 'MC Desc', 'Article Code', 'Article Desc', 'MRP', 'Qty Wanted', 'Book Date', 'Delivery Date', 'Price Wanted',
         'Booked By', 'Contact Number', 'State', 'City', 'Buyer', 'Category', 'In Diwali Range', 'Article Status', 'Price given by store', 'Discount %', 'Margin % after discount', 'Pk size',
         'Approved qty (as entered)', 'Final Qty to Store', 'Order Value', 'Supplied in article(s)', 'Alternate details', 'Offered (awaiting store)', 'Dispatched Qty', 'Balance Qty',
-        'Remarks / reject reason', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'DC Stock (Total MSA)', 'DC Free Now'].concat(locs.map(([, t]) => t),
+        'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'DC Stock (Total MSA)', 'DC Free Now'].concat(locs.map(([, t]) => t),
         ['SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']),
         M.lines.map((l) => {
           const mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), alt = mine.filter((a) => a.article_code !== l.article_code);
@@ -1059,7 +1074,7 @@
             l.poc_name, l.phone, l.state, l.city, l.buyer, l.category, l.in_master ? 'Yes' : 'No', l.art_status, l.price_missing ? 'No (MRP used)' : 'Yes',
             r1(l.discount), r1(l.margin), l.pack, mine.reduce((t, a) => t + (a.entered_qty == null ? a.qty : a.entered_qty), 0), l.approved, l.value,
             l.supplied || '', alt.map((a) => a.article_code + ' x ' + a.qty).join(', '), l.offered, l.dispatched, l.balance,
-            l.status === 'REJECTED' ? (l.reject_reason || '') : (l.balance_closed && l.open_qty ? 'Balance closed' : ''), ex.approvers[l.id] || '', l.lead_time, l.dc, l.allocate_by || '', l.late ? 'Yes' : '',
+            l.status === 'REJECTED' ? (l.reject_reason || '') : (l.balance_closed && l.open_qty ? 'Balance closed' : ''), l.dup_count ? `Entered ${Math.abs(l.dup_count)} times (qty ${l.dup_qty || ''}), taken once${l.dup_count < 0 ? ' - checked with the store' : ''}` : '', ex.approvers[l.id] || '', l.lead_time, l.dc, l.allocate_by || '', l.late ? 'Yes' : '',
             p.dc || 0, p.free || 0].concat(locs.map(([k]) => p.loc[k] || 0), [l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
         }));
       sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated Article', 'Type', 'Qty entered', 'Qty in full packs', 'State', 'Created', 'By', 'Decided', 'Dispatched'],
@@ -1202,6 +1217,7 @@
     reopen: () => run(() => A.rpc('reopen_line', { p_line: S.o.sel }), 'Reopened'),
     sapAccept: () => run(() => A.rpc('sap_accept', { p_line: S.o.sel })),
     sapDismiss: () => run(() => A.rpc('sap_dismiss', { p_line: S.o.sel })),
+    dupClear: () => run(() => A.rpc('dup_clear', { p_line: S.o.sel }), 'Mark removed'),
     reject: async (el) => {
       const l = cur(), reorder = !!el.dataset.reorder;
       const alts = C.allAlternates(S.M, l.article_code).filter((a) => C.freeOf(S.M, a.article_code) >= C.packOf(a));

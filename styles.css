@@ -124,6 +124,7 @@ th.right, td.right { text-align: right; }
 .alt { display: grid; grid-template-columns: 46px minmax(0, 1fr) auto auto; gap: 8px 8px; align-items: center; }
 .altsec { border-top: 1px solid #F0EBFB; padding-top: 10px; } .altsec h3 { color: var(--accent-deep); }
 .otable .xl { display: none; }
+.otable td.dup { box-shadow: inset 4px 0 0 var(--bad); padding-left: 12px; } .otable td.dup b { color: var(--bad); } .otable td .badge { margin-top: 2px; }
 table.twoline th { white-space: normal; line-height: 1.2; vertical-align: bottom; }
 .alt .h { font-size: 11.5px; color: var(--muted); }
 .alloc { display: flex; gap: 8px; align-items: flex-start; } .alloc + .alloc { margin-top: 8px; }

@@ -333,23 +333,27 @@
       store_code: code(r.store_code).toUpperCase(), store_name: txt(r.store_name), city: txt(r.city), state: txt(r.state),
       email: txt(r.email), lead_time: int(r.lead_time), dc: txt(r.dc) })).filter((r) => r.store_code && r.store_code.length <= 12),
     /* Orders. A line is order ID + line item, or order ID + article when the report has no
-       line item. Repeats of the same line inside one file are dropped and reported. */
+       line item. The same article entered again in the same order is a mistake at the store:
+       the line is taken once and marked (dups = times entered, dup_qty = the quantities). */
     orders: (rows) => {
-      const seen = new Set(), out = [], repeats = [];
+      const seen = new Map(), out = [];
+      let extra = 0;
       for (const r of rows) {
         const o = {
           order_no: code(r.order_no), line_no: code(r.line_no), order_date: dateStr(r.order_date), del_date: dateStr(r.del_date),
           store_code: code(r.store_code).toUpperCase(), store_name: txt(r.store_name), customer: txt(r.customer),
           phone: code(r.phone), poc_name: txt(r.poc_name), article_code: code(r.article_code), description: txt(r.description),
           mc_name: txt(r.mc_name), mrp: numOrNull(r.mrp), req_price: numOrNull(r.req_price), pack_size: int(r.pack_size),
-          req_qty: Math.round(num(r.req_qty))
+          req_qty: Math.round(num(r.req_qty)), dups: 0, dup_qty: ''
         };
         if (!o.order_no || !o.article_code || !/\d/.test(o.article_code)) continue;
-        const key = o.order_no + '|' + (o.line_no || o.article_code);
-        if (seen.has(key)) { repeats.push(`Order ${o.order_no}, article ${o.article_code}: repeated in the file (qty ${o.req_qty}) - only the first was taken`); continue; }
-        seen.add(key); out.push(o);
+        const key = o.order_no + '|' + (o.line_no || o.article_code), first = seen.get(key);
+        if (first) { first.qtys.push(o.req_qty); extra++; continue; }       // same article again in the same order: taken once, marked
+        seen.set(key, { o, qtys: [o.req_qty] }); out.push(o);
       }
-      out.repeats = repeats;
+      for (const { o, qtys } of seen.values()) if (qtys.length > 1) { o.dups = qtys.length; o.dup_qty = qtys.join(', '); }
+      out.extraRows = extra;
+      out.repeats = out.filter((o) => o.dups).map((o) => `Order ${o.order_no}: article ${o.article_code} ${o.description} is entered ${o.dups} times (qty ${o.dup_qty}) - taken once, with ${o.req_qty}`);
       return out;
     },
     /* DC stock: one row per article per DC with the quantity in each location.
