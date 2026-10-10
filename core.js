@@ -15,6 +15,30 @@
     'Wrong order', 'Wrong price', 'Duplicate order', 'Order cancelled', 'Store requirement', 'Other'];
   /* DC stock locations, in the order they are shown. key = field in the stock data. */
   const LOCATIONS = [['v', 'V01 & V02'], ['nso', 'NSO (0023)'], ['hh', 'HH reserved (0043)'], ['spl', 'Special buy (0041)'], ['best', 'Best seller (0042)'], ['sea', 'Sea stock']];
+  /* 'oth' = stock the report gives only in its total, with no location against it. */
+  const LOC_KEYS = ['v', 'nso', 'hh', 'spl', 'best', 'sea', 'oth'];
+  const LOC_NAME = { v: 'V01 & V02', nso: 'NSO (0023)', hh: 'HH reserved (0043)', spl: 'Special buy (0041)', best: 'Best seller (0042)', sea: 'Sea stock', oth: 'No location given' };
+  const LOC_SHORT = { v: 'V01&V02', nso: 'NSO', hh: 'HH reserved', spl: 'Special buy', best: 'Best seller', sea: 'Sea', oth: 'No location' };
+  const DEFAULT_LOC_ORDER = 'v,best,spl,hh,nso,sea';
+  /* {v: 400, best: 104} -> "V01&V02 400 + Best seller 104"; a single location shows without its quantity when bare is set */
+  function locText(locs, bare) {
+    const parts = LOC_KEYS.filter((k) => locs && Number(locs[k]) > 0);
+    if (!parts.length) return '';
+    if (bare && parts.length === 1) return LOC_SHORT[parts[0]];
+    return parts.map((k) => LOC_SHORT[k] + ' ' + inr(locs[k])).join(' + ');
+  }
+  /* Take qty from the locations in the standing order (the same rule the database uses).
+     avail: {location: pieces that can be taken}. Returns {use: {location: qty}, left: what could not be placed}. */
+  function splitByOrder(order, avail, qty) {
+    const use = {}; let left = Math.max(0, Math.round(qty) || 0);
+    for (const k of order.concat(['oth'])) {
+      if (left <= 0) break;
+      const q = Math.min(left, Math.max(0, Math.round(Number(avail[k]) || 0)));
+      if (q > 0) { use[k] = q; left -= q; }
+    }
+    return { use, left };
+  }
+  const autoSplit = (M, code, qty) => splitByOrder(M.locOrder, (M.pos[code] || {}).locFree || {}, qty);
 
   function statusOf(l) {
     if (l.rejected) return 'REJECTED';
@@ -62,17 +86,31 @@
       if (gd) (diff[gd] = diff[gd] || []).push(a.article_code);
     }
     for (const s of snap.stores) stores[s.store_code] = s;
-    const P = (c) => pos[c] || (pos[c] = { dc: 0, loc: { v: 0, nso: 0, hh: 0, spl: 0, best: 0, sea: 0 }, reserved: 0, free: 0, pending: 0, n_lines: 0, n_stores: 0, _st: new Set() });
+    /* For each article:  stock = the quantity in the stock report,  inward = received since that report,
+       dc = stock + inward (the total DC quantity),  reserved = allocated to orders,  free = dc - reserved.
+       The same by location: loc (report), locIn (inwards), locRes (allocated), locFree (balance). */
+    const P = (c) => pos[c] || (pos[c] = { dc: 0, stock: 0, inward: 0, loc: { v: 0, nso: 0, hh: 0, spl: 0, best: 0, sea: 0, oth: 0 }, locIn: {}, locRes: {}, locFree: {},
+      reserved: 0, free: 0, pending: 0, n_lines: 0, n_stores: 0, _st: new Set() });
     for (const c in articles) P(c);
     for (const c in snap.stock) {
       const p = P(c), s = snap.stock[c];
-      p.dc = s[0]; p.loc = { v: s[1], nso: s[2], hh: s[3], spl: s[4], best: s[5], sea: s[6] };
+      p.stock = s[0]; p.loc = { v: s[1], nso: s[2], hh: s[3], spl: s[4], best: s[5], sea: s[6], oth: s[0] - s[1] - s[2] - s[3] - s[4] - s[5] - s[6] };
     }
+    const inw = snap.inward || {}, lres = snap.loc_reserved || {};
+    for (const c in inw) { const p = P(c); p.locIn = inw[c]; p.inward = LOC_KEYS.reduce((t, k) => t + (Number(inw[c][k]) || 0), 0); }
+    for (const c in lres) P(c).locRes = lres[c];
     for (const c in snap.reserved) P(c).reserved = snap.reserved[c];
     const lines = snap.lines.map((x) => {
       const l = Object.assign({}, x);
       const a = articles[l.article_code] || {}, s = stores[l.store_code] || {};
       l.description = a.description || ''; l.category = a.category || ''; l.buyer = a.buyer || ''; l.mc_code = a.mc_code || '';
+      /* A line can hand part of its quantity to alternate lines split from it: what is wanted here is the SAP quantity minus that. */
+      l.sap_qty = l.req_qty; l.moved_qty = l.moved_qty || 0; l.req_qty = Math.max(0, l.req_qty - l.moved_qty);
+      /* An approved alternate takes the place of the ordered article; orig_article remembers what the store ordered. */
+      l.orig_article = l.orig_article || ''; l.orig_desc = l.orig_article ? ((articles[l.orig_article] || {}).description || '') : '';
+      const base = String(l.line_no || '').split('~')[0];
+      l.line_item = base && base !== (l.orig_article || l.article_code) ? base : '';       // a real SAP line item number, when the export has one
+      l.locs = l.locs || null;                             // which DC locations the approved / offered quantity is taken from
       l.in_master = !!a.in_master; l.art_status = a.status || '';
       l.image_path = a.image_path; l.image_ver = a.image_ver;
       l.pack = Math.max(1, Math.round(Number(a.pack_size) || Number(l.pack_size) || 1));
@@ -95,10 +133,15 @@
       if (l.balance > 0) { const p = P(l.article_code); p.pending += l.balance; p.n_lines++; p._st.add(l.store_code); }
       return l;
     });
-    for (const c in pos) { const p = pos[c]; p.free = p.dc - p.reserved; p.n_stores = p._st.size; delete p._st; }
+    for (const c in pos) {
+      const p = pos[c];
+      p.dc = p.stock + p.inward; p.free = p.dc - p.reserved; p.n_stores = p._st.size; delete p._st;
+      for (const k of LOC_KEYS) p.locFree[k] = (p.loc[k] || 0) + (Number(p.locIn[k]) || 0) - (Number(p.locRes[k]) || 0);
+    }
     const byId = {};
     for (const l of lines) byId[l.id] = l;
-    return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [],
+    const locOrder = String(snap.loc_order || DEFAULT_LOC_ORDER).split(',').filter((k) => LOC_NAME[k] && k !== 'oth');
+    return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [],
              oldestOffer: snap.oldest_offer, rev: snap.rev, counts: snap.counts || {}, schema: snap.schema || 1 };
   }
 
@@ -221,16 +264,28 @@
     hh: ['hh reserved (0043) -qty', 'hh reserve qty', 'hh reserved qty', '0043 qty', '0043'],
     spl: ['special buy (0041) -qty', 'special buy qty', '0041 qty', '0041'],
     best: ['best seller (0042) -qty', 'bestseller qty', 'best seller qty', '0042 qty', '0042'],
-    sea: ['sea stk -qty', 'sea stk qty', 'sea stock qty']
+    sea: ['sea stk -qty', 'sea stk qty', 'sea stock qty'],
+    // inwards (GRN) received at the DC after the stock report
+    in_qty: ['inward qty', 'inward quantity', 'inwards qty', 'grn qty', 'grn quantity', 'received qty', 'received quantity', 'receipt qty', 'gr qty', 'gr quantity',
+      'qty in une', 'quantity in une', 'qty in unit of entry', 'quantity', 'qty'],
+    doc_no: ['grn no', 'grn number', 'grn', 'material document', 'mat. doc.', 'mat doc', 'material doc', 'material doc.', 'document number', 'document no', 'doc no',
+      'inbound delivery', 'reference'],
+    in_date: ['grn date', 'posting date', 'pstng date', 'inward date', 'entry date', 'entered on', 'received date', 'received on', 'receipt date', 'gr date', 'document date', 'doc. date', 'date'],
+    in_time: ['grn time', 'time of entry', 'entry time', 'posting time', 'received time', 'time'],
+    sloc: ['storage location', 'stor. loc.', 'stor loc', 'storage loc', 'sloc', 's.loc', 'stock location', 'location', 'sl']
   };
   const SPECS = {
     master: { required: ['article_code'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'mrp', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'group_same', 'group_diff', 'status'] },
     data: { required: ['article_code', 'mrp'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'status', 'bogo_count', 'ppo_cm', 'ppo_nm', 'store_stock', 'intransit'] },
     stores: { required: ['store_code'], optional: ['store_name', 'city', 'state', 'email', 'lead_time', 'dc'], need: ['store_name', 'email', 'lead_time'] },
     stock: { required: ['article_code', 'total'], optional: ['site_code', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'] },
-    orders: { required: ['order_no', 'store_code', 'article_code', 'req_qty'], optional: ['line_no', 'order_date', 'del_date', 'customer', 'phone', 'poc_name', 'description', 'mc_name', 'mrp', 'req_price', 'pack_size', 'store_name'] }
+    orders: { required: ['order_no', 'store_code', 'article_code', 'req_qty'], optional: ['line_no', 'order_date', 'del_date', 'customer', 'phone', 'poc_name', 'description', 'mc_name', 'mrp', 'req_price', 'pack_size', 'store_name'] },
+    /* Inwards: either one row per receipt (article, quantity, and if the file has them: GRN number, date, time, storage location, DC),
+       or the layout of the DC stock report with the received quantity under each location. */
+    inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
+      need: ['in_qty', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'], needNice: 'Inward qty' }
   };
-  const NICE = { article_code: 'Article', total: 'Total MSA qty', req_qty: 'Qty wanted', order_no: 'Order ID', store_code: 'Store Code', mrp: 'MRP' };
+  const NICE = { article_code: 'Article', total: 'Total MSA qty', req_qty: 'Qty wanted', order_no: 'Order ID', store_code: 'Store Code', mrp: 'MRP', in_qty: 'Inward qty' };
 
   function code(v) {                                 // text, no '.0', no leading zeros on pure numbers
     if (v == null) return '';
@@ -267,6 +322,30 @@
     return s;
   }
 
+  /* Time of day in minutes from whatever a report gives: an Excel time (0.61), a date-time serial (46305.61), '14:35:00', '10.10.2026 14:35'. Null when there is none. */
+  function minutesOf(v) {
+    if (v == null || v === '') return null;
+    if (v instanceof Date) return v.getHours() * 60 + v.getMinutes();
+    if (typeof v === 'number') { const f = v - Math.floor(v); return (v < 1 || v > 20000) && (f > 1e-9 || v < 1) && !(v > 20000 && f < 1e-9) ? Math.min(1439, Math.round(f * 1440)) : null; }
+    const s = String(v).trim();
+    let m = s.match(/(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap]m)?/i);
+    if (m) { let h = +m[1] % 24; if (m[3]) h = (h % 12) + (/p/i.test(m[3]) ? 12 : 0); return h * 60 + +m[2]; }
+    if (/^\d{5}\.\d+$/.test(s) || /^0?\.\d+$/.test(s)) return minutesOf(parseFloat(s));
+    m = s.match(/^(\d{2})(\d{2})(\d{2})$/);                         // SAP time as 143500
+    return m && +m[1] < 24 && +m[2] < 60 ? +m[1] * 60 + +m[2] : null;
+  }
+  /* Which location key a storage location stands for: 0023 / NSO, 0043 / HH reserved, 0041 / special buy, 0042 / best seller, sea; anything else is V01 & V02. */
+  function locOfSloc(v) {
+    const s = norm(v);
+    if (!s) return 'v';
+    if (s.includes('0023') || s === '23' || s.includes('nso')) return 'nso';
+    if (s.includes('0043') || s === '43' || s.includes('hh')) return 'hh';
+    if (s.includes('0041') || s === '41' || s.includes('special')) return 'spl';
+    if (s.includes('0042') || s === '42' || s.includes('best')) return 'best';
+    if (s.startsWith('sea')) return 'sea';
+    return 'v';
+  }
+
   /* Look at the first rows of a sheet: which row is the heading row for this kind of file,
      and how many of the fields does it have?  Returns {row, map, score, missing}. */
   function findHeader(rows2d, kind) {
@@ -290,7 +369,7 @@
     const needMissing = spec.need && !spec.need.some((f) => f in h.map);
     if (h.row < 0 || h.missing.length || needMissing) {
       const seen = ((rows2d[Math.max(0, h.row)]) || []).filter((c) => c != null && c !== '').map((c) => String(c).replace(/\s+/g, ' ')).slice(0, 40).join(', ');
-      const nice = h.missing.map((f) => NICE[f] || ALIASES[f][0]).join(', ') || (needMissing ? spec.need.map((f) => ALIASES[f][0]).join(' or ') : 'any known heading');
+      const nice = h.missing.map((f) => NICE[f] || ALIASES[f][0]).join(', ') || (needMissing ? (spec.needNice || spec.need.map((f) => ALIASES[f][0]).join(' or ')) : 'any known heading');
       throw new Error('Could not find the column(s): ' + nice + '.\nHeadings found in the file: ' + (seen || '(none)'));
     }
     const out = [];
@@ -370,6 +449,29 @@
         if (cur) for (const f of ['t', 'v', 'n', 'h', 'p', 'b', 'e']) cur[f] += q[f]; else agg.set(k, q);
       }
       return Array.from(agg.values()).filter((r) => r.t !== 0 || r.v || r.n || r.h || r.p || r.b || r.e);
+    },
+    /* Inwards. Each entry: {a: article, q: pcs, l: location key, s: DC code, d: GRN / document number,
+       day: 'YYYY-MM-DD' or '', mins: time of day in minutes or null}. Totals rows and rows without an article number are skipped. */
+    inward: (rows) => {
+      const out = [];
+      for (const r of rows) {
+        const a = code(r.article_code);
+        if (!/^\d{6,}$/.test(a)) continue;
+        const base = { a, s: code(r.site_code), d: code(r.doc_no), day: dateStr(r.in_date), mins: minutesOf(r.in_time) };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(base.day)) base.day = '';
+        if (base.mins == null) base.mins = minutesOf(r.in_date);        // a date cell that carries the time as well
+        const byLoc = { v: Math.round(num(r.v0102) + num(r.v01) + num(r.v02)), nso: Math.round(num(r.nso)), hh: Math.round(num(r.hh)), spl: Math.round(num(r.spl)), best: Math.round(num(r.best)), sea: Math.round(num(r.sea)) };
+        const placed = Object.keys(byLoc).reduce((t, k) => t + Math.max(0, byLoc[k]), 0);
+        if (placed > 0) {                                               // laid out like the stock report: a quantity under each location
+          for (const k in byLoc) if (byLoc[k] > 0) out.push(Object.assign({ q: byLoc[k], l: k }, base));
+          const rest = Math.round(num(r.total)) - placed;
+          if (rest > 0) out.push(Object.assign({ q: rest, l: 'v' }, base));
+        } else {
+          const q = Math.round(r.in_qty != null && r.in_qty !== '' ? num(r.in_qty) : num(r.total));
+          if (q > 0) out.push(Object.assign({ q, l: locOfSloc(r.sloc) }, base));
+        }
+      }
+      return out;
     }
   };
 
@@ -437,7 +539,7 @@
     return L.join('\r\n');
   }
 
-  root.Core = { STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
+  root.Core = { STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
     packOf, roundPack, floorPack, marginAt, discountOf, pct, addDays, today, dayDiff, inr, rupees, when, whenLong,
     norm, ALIASES, SPECS, code, num, dateStr, findHeader, readTable, shape, offerSubject, offerText, reorderSubject, reorderText, mailHtml,
     buildEml, esc, b64utf8 };

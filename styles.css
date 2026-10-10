@@ -113,7 +113,13 @@ td.w { white-space: normal; min-width: 150px; }
 .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- orders: store > order > lines ---------- */
-.bulkbar { margin: -2px 0 12px; } .tickall { font-weight: 600; cursor: pointer; }
+.bulkbar { margin: 0 0 12px; } .tickall { font-weight: 600; cursor: pointer; }
+.chipsbar { margin: -4px 0 10px; min-height: 0; } .chipsbar:empty { display: none; }
+.fchip { border: 1px solid #C9B8FA; background: #EFE8FF; color: #3B2A8F; border-radius: 999px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+.fchip:hover { background: #E2D7FF; } .fchip b { margin-left: 4px; color: var(--bad); }
+.segs { display: inline-flex; flex-wrap: wrap; gap: 4px; background: #EAE3FB; border-radius: 12px; padding: 4px; margin-bottom: 12px; }
+.segs button { border: none; background: none; border-radius: 9px; padding: 7px 14px; cursor: pointer; color: #4A4370; } .segs button.on { background: #fff; color: var(--accent-deep); font-weight: 700; }
+.segs button b { font-weight: 700; margin-left: 4px; }
 .sgroup { background: #fff; border: 1px solid #D9CCFB; border-radius: 16px; overflow: hidden; margin-bottom: 16px; }
 .shead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 12px 16px; cursor: pointer; background: linear-gradient(90deg, #E2D7FF, #FBE1EE); }
 .shead .scode { font-size: 19px; font-weight: 800; letter-spacing: .02em; color: #3B2A8F; }
@@ -133,6 +139,13 @@ td.w { white-space: normal; min-width: 150px; }
 .otable td.mc { font-weight: 700; color: #3B2A8F; font-size: 13px; }
 .otable td.num { font-size: 15px; white-space: nowrap; } .otable td.num .small { font-size: 11.5px; white-space: normal; }
 .otable td.art .code { font-weight: 700; } .otable td.art .desc { margin-top: 1px; }
+.otable td.dates { font-size: 13px; white-space: nowrap; } .otable td.dates i, .ometa i { font-style: normal; } .otable td.dates i { display: inline-block; width: 50px; font-size: 11px; color: var(--muted); }
+.otable td.so { font-size: 13.5px; } .otable td.so .ordno { font-weight: 700; margin-top: 1px; }
+.otable .rowlinks { margin-top: 4px; font-size: 13px; white-space: nowrap; } .otable .rowlinks .btn { font-size: 13px; padding: 2px 4px; } .otable .rowlinks .del { color: var(--bad); margin-left: 6px; }
+.otable .acts .rowlinks .btn { display: inline-block; }
+.badge.alt { background: #DDEEFF; color: #1F6DB5; }
+.otable .badge { white-space: nowrap; }
+.shead input[type=checkbox] { align-self: center; }
 .otable tr.rej td { color: #9A95B5; } .otable tr.rej td.mc { color: #9A95B5; }
 .otable .apcell .row { gap: 6px; } .otable input.rowq { width: 64px; min-height: 34px; padding: 5px 6px; }
 .otable .acts { text-align: right; } .otable .acts .btn { display: block; margin-left: auto; } .otable .acts .del { color: var(--bad); margin-top: 4px; font-size: 13px; }
@@ -210,7 +223,7 @@ table.twoline th { white-space: normal; line-height: 1.2; vertical-align: bottom
   .toolbar { grid-template-columns: minmax(0, 1fr) 170px 210px 170px; } .toolbar .wide { grid-column: auto; }
   .toolbar.two { grid-template-columns: minmax(0, 1fr) 300px; }
   .toolbar.three { grid-template-columns: minmax(0, 1fr) 220px 220px; }
-  .toolbar.six { grid-template-columns: minmax(180px, 1fr) repeat(5, minmax(0, 150px)); }
+  .toolbar.seven { grid-template-columns: minmax(170px, 1fr) minmax(0, 190px) repeat(5, minmax(0, 132px)); }
   .dealgrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); } .tile b { font-size: clamp(15px, 1.35vw, 22px); white-space: nowrap; }
   .grid2 { grid-template-columns: minmax(0, 4fr) minmax(0, 5fr); }
@@ -229,3 +242,17 @@ table.twoline th { white-space: normal; line-height: 1.2; vertical-align: bottom
 @media (min-width: 1500px) {
   .otable { font-size: 14.5px; } .otable td.num { font-size: 15.5px; }
 }
+
+/* ---- DC locations and inwards ---- */
+.chips > .small { align-self: center; }
+.chip i { font-style: normal; color: var(--muted); } .chip.neg { background: #FFE0EA; color: #B82A58; } .chip.neg b { color: #B82A58; }
+.otable .rowloc { margin-top: 2px; line-height: 1.3; } .otable .rowloc b { font-weight: 700; } .otable .rowloc .btn { font-size: 12.5px; padding: 0 2px; }
+.otable td.from { font-size: 13px; font-weight: 600; color: #3B2A8F; }
+.aploc { margin-top: -2px; } .allocfrom { font-size: 13px; color: #3B2A8F; margin: 2px 0; }
+.locgrid { display: grid; grid-template-columns: minmax(0, 1fr) auto 104px; gap: 8px 12px; align-items: center; }
+.locgrid.two { grid-template-columns: minmax(0, 1fr) minmax(150px, 220px); }
+.locgrid .h { font-size: 11.5px; color: var(--muted); } .locgrid input.qty { width: 104px; } .locgrid i { font-style: normal; color: var(--warn, #8A4B0A); }
+.stepstatus { margin-top: 6px; } .loads { display: grid; margin-top: 4px; }
+.loads .m { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid #F3EFFB; font-size: 13.5px; }
+table.calc tr.plus td { color: #0F7A55; } table.calc tr.minus td { color: #8A4B0A; } table.calc tr.tot td { font-weight: 700; } table.calc tr.bal td { background: #F6F2FF; }
+.locpop label.f { display: flex; align-items: center; gap: 12px; } .locpop label.f input.qty { width: 110px; }
