@@ -72,7 +72,7 @@
     const lines = snap.lines.map((x) => {
       const l = Object.assign({}, x);
       const a = articles[l.article_code] || {}, s = stores[l.store_code] || {};
-      l.description = a.description || ''; l.category = a.category || ''; l.buyer = a.buyer || '';
+      l.description = a.description || ''; l.category = a.category || ''; l.buyer = a.buyer || ''; l.mc_code = a.mc_code || '';
       l.in_master = !!a.in_master; l.art_status = a.status || '';
       l.image_path = a.image_path; l.image_ver = a.image_ver;
       l.pack = Math.max(1, Math.round(Number(a.pack_size) || Number(l.pack_size) || 1));
@@ -174,25 +174,25 @@
     // orders
     order_no: ['order id', 'order no', 'order number', 'sales order', 'sales document', 'so no', 'so number', 'document number', 'booking no', 'order', 'document'],
     line_no: ['item', 'line item', 'line no', 'item no', 'sales document item', 'line number', 'item number', 'line'],
-    order_date: ['booking date', 'order date', 'document date', 'created on', 'date'],
+    order_date: ['booking date', 'book date', 'order date', 'document date', 'created on', 'date'],
     del_date: ['del date', 'delivery date', 'req delivery date', 'requested delivery date', 'reqd delivery date', 'required delivery date'],
     customer: ['customer', 'customer name', 'corporate', 'corporate name', 'party name'],
     phone: ['ph no.', 'ph no', 'phone', 'phone no', 'mobile', 'mobile no', 'contact no', 'contact number'],
-    poc_name: ['poc name', 'contact person', 'contact name', 'store poc'],
+    poc_name: ['booked by', 'poc name', 'contact person', 'contact name', 'store poc'],
     req_price: ['price wanted', 'required price', 'requested price', 'price required', 'offer price', 'order price', 'net price', 'selling price', 'rate', 'price'],
-    req_qty: ['qty wanted', 'order qty', 'order quantity', 'required qty', 'required quantity', 'req qty', 'qty required', 'quantity', 'qty'],
+    req_qty: ['quantity wanted', 'qty wanted', 'order qty', 'order quantity', 'required qty', 'required quantity', 'req qty', 'qty required', 'quantity', 'qty'],
     // articles
     article_code: ['material', 'art code', 'article code', 'article', 'article no', 'article number', 'material number', 'sku'],
     description: ['desc', 'description', 'short text', 'article description', 'material description', 'article desc', 'article name'],
-    mc_code: ['mc code', 'mdse cat.', 'mdse cat', 'merchandise category code'],
-    mc_name: ['mc name', 'mc', 'nc name', 'mc description', 'merchandise category', 'mc desc'],
+    mc_code: ['mc code', 'merchandise category', 'mdse cat.', 'mdse cat', 'merchandise category code'],
+    mc_name: ['mc name', 'mc desc', 'mc description', 'mc', 'nc name', 'merchandise category name', 'merchandise category desc'],
     category: ['category', 'cat'],
     buyer: ['buyer', 'buy'],
     mrp: ['new mrp', 'mrp', 'old mrp'],
     vrp: ['new vrp', 'vrp', 'old vrp'],
     cost: ['new cost', 'cost', 'article cost as per sap', 'cost including bogo'],
     gst: ['gst%', 'gst', 'gst rate', 'gst %'],
-    pack_size: ['packsize', 'pack size', 'pk size', 'pack'],
+    pack_size: ['packsize', 'pack size', 'pk size', 'pak size', 'pack'],
     vendor_code: ['vendor code'],
     vendor_name: ['vendor name', 'vendor'],
     group_same: ['same model alternatives', 'same model alternative', 'same model', 'same design alternatives', 'same design'],
@@ -205,7 +205,7 @@
     intransit: ['lntransit stock', 'intransit stock', 'in transit stock'],
     // stores
     store_code: ['store code', 'st cd', 'site code', 'site', 'store', 'plant', 'receiving site'],
-    store_name: ['store name', 'st-nm', 'site name', 'plant name'],
+    store_name: ['store name', 'st-nm', 'site name', 'plant name', 'name'],
     city: ['city', 'town'],
     state: ['state'],
     email: ['storeemails', 'store emails', 'store email', 'email', 'e-mail', 'email id', 'mail id'],

@@ -422,7 +422,7 @@
       if (o.mc && l.mc_name !== o.mc) return false;
       if (o.buyer && (l.buyer || '-') !== o.buyer) return false;
       if (words.length) {
-        const hay = [l.order_no, l.store_code, l.store_name, l.city, l.state, l.article_code, l.description, l.customer, l.mc_name, l.poc_name, l.phone, l.supplied].join(' ').toLowerCase();
+        const hay = [l.order_no, l.store_code, l.store_name, l.city, l.state, l.article_code, l.description, l.customer, l.mc_code, l.mc_name, l.poc_name, l.phone, l.supplied].join(' ').toLowerCase();
         if (!words.every((w) => hay.includes(w))) return false;
       }
       return true;
@@ -560,9 +560,9 @@
     out.push(`<div class="card stack">
       <div class="row"><h2 class="grow">Order ${esc(ref(l))}</h2>${pill(l.status)}</div>
       <div class="small"><b>${esc(l.store_code)} ${esc(l.store_name)}</b>${l.city ? ', ' + esc(l.city) : ''}${l.state ? ', ' + esc(l.state) : ''}${l.customer ? ' &nbsp;|&nbsp; ' + esc(l.customer) : ''} &nbsp;|&nbsp; booked ${when(l.order_date)}</div>
-      ${contact ? `<div class="small">Contact: ${contact}</div>` : ''}
+      ${contact ? `<div class="small">Booked by: ${contact}</div>` : ''}
       <div class="row top">${thumb(l.article_code, 'l', true)}<div class="grow"><h2>${esc(l.description || '(article details not on file)')}</h2>
-        <div class="small">${esc(l.article_code)} &nbsp;|&nbsp; ${esc(l.mc_name || '-')}${l.buyer ? ' &nbsp;|&nbsp; ' + esc(l.buyer) : ''}${l.category ? ' &nbsp;|&nbsp; ' + esc(l.category) : ''}</div>
+        <div class="small">${esc(l.article_code)} &nbsp;|&nbsp; MC ${esc([l.mc_code, l.mc_name].filter(Boolean).join(' ') || '-')}${l.buyer ? ' &nbsp;|&nbsp; ' + esc(l.buyer) : ''}${l.category ? ' &nbsp;|&nbsp; ' + esc(l.category) : ''}</div>
         <div class="small">Pack of ${pack}${a.vendor_name ? ' &nbsp;|&nbsp; ' + esc(a.vendor_name) : ''}</div>${badges ? `<div style="margin-top:4px">${badges}</div>` : ''}</div></div>
       <div class="stats">${stat('MRP', inr(l.mrp))}${stat(l.price_missing ? 'Price (MRP used)' : 'Price wanted', inr(l.req_price))}${stat('Discount', l.discount > 0.0005 ? pct(l.discount) : 'None', l.discount > 0.0005 ? 'warn' : '')}${stat('Margin', pct(l.margin), l.margin != null && l.margin < 0 ? 'bad' : '')}</div>
       <div class="small">${l.margin == null ? 'Margin cannot be worked out: cost or GST for this article is not on file.' : `${l.price_missing ? 'The store gave no price, so MRP is used. ' : ''}Margin after this discount is ${pct(l.margin)}; at ${Number(a.vrp) > 0 && Number(a.vrp) !== Number(l.mrp) ? 'VRP ' + inr(a.vrp) : 'MRP'} it would be ${pct(l.base_margin)}. Order value ${rupees(l.ask_value)}${l.approved ? ', approved ' + rupees(l.value) : ''}.`}</div>
@@ -872,7 +872,7 @@
       left.push(step('3 &nbsp;Full article data (second file)', 'The complete article sheet (DSR article-wise). Used for any article that is ordered but is not in the Diwali master, and for status, pending PO and store stock of all articles. It never overwrites what the Diwali master says.', b('Upload file ...', 'pick', 'data-kind="data"'), last('Full article data')));
       left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files: upload each one, they are merged by store code.', b('Upload file ...', 'pick', 'data-kind="stores"'), last('Store list')));
       left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, free stock is recalculated.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary'), last('DC stock')));
-      left.push(step('6 &nbsp;Orders', 'Upload the order download as often as you like. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary'), last('Orders')));
+      left.push(step('6 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary'), last('Orders')));
     }
     left.push(step('Export', 'Every order line in the layout of the order tracker (approved qty, final qty to store in full packs, order value, discount, margin, reject reason, who approved), plus allocations, stock by location and the activity log.', b('Export to Excel', 'export')));
     left.push(`<div class="card stack" id="teamcard"><div class="row"><h2 class="grow">Team</h2></div><div id="team" class="muted">Loading ...</div></div>`);
@@ -1047,22 +1047,22 @@
         X.utils.book_append_sheet(wb, ws, name);
       };
       const r1 = (x) => (x == null ? null : Math.round(x * 1000) / 10), locs = C.LOCATIONS;
-      sheet('Order lines', ['Status', 'Store Code', 'Store Name', 'State', 'City', 'POC Name', 'Ph No.', 'Customer', 'Order ID', 'Line', 'Booking Date', 'Del Date', 'Buyer', 'Category',
-        'MC Name', 'Art Code', 'Desc', 'In Diwali Range', 'Article Status', 'MRP', 'Price wanted', 'Price given by store', 'Discount %', 'Margin % after discount', 'Pk size', 'Qty Wanted',
+      sheet('Order lines', ['Status', 'Site', 'Store Name', 'Order No', 'MC Code', 'MC Desc', 'Article Code', 'Article Desc', 'MRP', 'Qty Wanted', 'Book Date', 'Delivery Date', 'Price Wanted',
+        'Booked By', 'Contact Number', 'State', 'City', 'Buyer', 'Category', 'In Diwali Range', 'Article Status', 'Price given by store', 'Discount %', 'Margin % after discount', 'Pk size',
         'Approved qty (as entered)', 'Final Qty to Store', 'Order Value', 'Supplied in article(s)', 'Alternate details', 'Offered (awaiting store)', 'Dispatched Qty', 'Balance Qty',
         'Remarks / reject reason', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'DC Stock (Total MSA)', 'DC Free Now'].concat(locs.map(([, t]) => t),
         ['SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']),
         M.lines.map((l) => {
           const mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), alt = mine.filter((a) => a.article_code !== l.article_code);
           const p = M.pos[l.article_code] || { loc: {} };
-          return [C.STATUS_LABEL[l.status], l.store_code, l.store_name, l.state, l.city, l.poc_name, l.phone, l.customer, l.order_no, l.line_no === l.article_code ? '' : l.line_no, l.order_date, l.del_date || '',
-            l.buyer, l.category, l.mc_name, l.article_code, l.description, l.in_master ? 'Yes' : 'No', l.art_status, +l.mrp, +l.req_price, l.price_missing ? 'No (MRP used)' : 'Yes',
-            r1(l.discount), r1(l.margin), l.pack, l.req_qty, mine.reduce((t, a) => t + (a.entered_qty == null ? a.qty : a.entered_qty), 0), l.approved, l.value,
+          return [C.STATUS_LABEL[l.status], l.store_code, l.store_name, l.order_no, l.mc_code, l.mc_name, l.article_code, l.description, +l.mrp, l.req_qty, l.order_date, l.del_date || '', +l.req_price,
+            l.poc_name, l.phone, l.state, l.city, l.buyer, l.category, l.in_master ? 'Yes' : 'No', l.art_status, l.price_missing ? 'No (MRP used)' : 'Yes',
+            r1(l.discount), r1(l.margin), l.pack, mine.reduce((t, a) => t + (a.entered_qty == null ? a.qty : a.entered_qty), 0), l.approved, l.value,
             l.supplied || '', alt.map((a) => a.article_code + ' x ' + a.qty).join(', '), l.offered, l.dispatched, l.balance,
             l.status === 'REJECTED' ? (l.reject_reason || '') : (l.balance_closed && l.open_qty ? 'Balance closed' : ''), ex.approvers[l.id] || '', l.lead_time, l.dc, l.allocate_by || '', l.late ? 'Yes' : '',
             p.dc || 0, p.free || 0].concat(locs.map(([k]) => p.loc[k] || 0), [l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
         }));
-      sheet('Allocations', ['Order ID', 'Line', 'Store', 'Ordered Article', 'Allocated Article', 'Type', 'Qty entered', 'Qty in full packs', 'State', 'Created', 'By', 'Decided', 'Dispatched'],
+      sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated Article', 'Type', 'Qty entered', 'Qty in full packs', 'State', 'Created', 'By', 'Decided', 'Dispatched'],
         ex.allocations.map((a) => { const l = M.byId[a.line_id] || {};
           return [l.order_no, l.line_no === l.article_code ? '' : l.line_no, l.store_code, l.article_code, a.article_code, a.article_code === l.article_code ? 'Ordered article' : 'Alternate',
             a.entered_qty == null ? a.qty : a.entered_qty, a.qty, C.STATUS_LABEL[a.state], when(a.created_at), a.created_by, when(a.decided_at), when(a.dispatched_at)]; }));
@@ -1071,7 +1071,7 @@
         Object.keys(M.pos).sort().map((c) => { const p = M.pos[c], a = M.articles[c] || {};
           return [c, a.description, a.mc_name, a.buyer, a.group_same, a.group_diff, a.mrp == null ? null : +a.mrp, C.packOf(a), p.dc].concat(locs.map(([k]) => p.loc[k] || 0),
             [p.reserved, p.free, p.pending, p.n_stores, Math.max(0, p.pending - Math.max(p.free, 0)), (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0)]); }));
-      sheet('Activity log', ['When', 'User', 'Order ID', 'Line', 'Action', 'Detail'], ex.events.map((e) => [when(e.ts), e.user_name, e.order_no, e.line_no, e.action, e.detail]));
+      sheet('Activity log', ['When', 'User', 'Order No', 'Line', 'Action', 'Detail'], ex.events.map((e) => [when(e.ts), e.user_name, e.order_no, e.line_no, e.action, e.detail]));
       const d = new Date(), name = `Corporate_Orders_${String(d.getDate()).padStart(2, '0')}${when(d).slice(3, 6)}_${when(d).slice(7).replace(':', '')}.xlsx`;
       saveBlob(new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), name);
       prog.close(); toast(`Exported ${inr(M.lines.length)} order lines`);
