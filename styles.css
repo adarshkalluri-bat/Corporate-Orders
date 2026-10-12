@@ -294,8 +294,21 @@ tbody.ol.sel td { background: var(--select); } tbody.ol.pick { cursor: pointer; 
 .otable .rowstate { margin-bottom: 6px; } .otable td.chk { padding-top: 14px; }
 .otable .rowprev:empty { display: none; } .otable .apcell .rowloc { margin-top: 3px; }
 /* the article code is never broken; below a sensible width the list scrolls sideways instead of squeezing */
-.otable { min-width: 980px; } .otable td.art .acode { white-space: nowrap; } .oblock { overflow-x: auto; }
+.otable { min-width: 1010px; } .otable td.art .acode { white-space: nowrap; } .oblock { overflow-x: auto; }
 .otable td.art { min-width: 200px; } .otable td.so { overflow-wrap: anywhere; }
 .toolbar.eight { grid-template-columns: 1fr 1fr; }
 @media (min-width: 960px) { .toolbar.eight { grid-template-columns: repeat(10, minmax(0, 1fr)); } .toolbar.eight > * { grid-column: span 2; } .toolbar.eight > .search { grid-column: span 4; } .toolbar.eight > .gsel { grid-column: span 3; } }
 .otable td.so b, .otable td.so .ordno { white-space: nowrap; } .otable td.so { overflow-wrap: normal; word-break: normal; }
+/* ---- orders inside a store: each order its own coloured band ---- */
+.oblock.oc0, .oblock.oc1, .oblock.oc2 { border-left: 6px solid var(--band); margin-top: 8px; border-top: none; }
+.oblock.oc0 { --band: #7FB8F5; --bandbg: #E6F1FE; } .oblock.oc1 { --band: #F5A35F; --bandbg: #FEEEDF; } .oblock.oc2 { --band: #5FC79A; --bandbg: #E1F6EB; }
+.oblock.oc0 .ohead, .oblock.oc1 .ohead, .oblock.oc2 .ohead, .oblock.oc0 .ometa, .oblock.oc1 .ometa, .oblock.oc2 .ometa { background: var(--bandbg); }
+.oblock.oc0 .ohead, .oblock.oc1 .ohead, .oblock.oc2 .ohead { padding-top: 10px; } .oblock.oc0 .ometa, .oblock.oc1 .ometa, .oblock.oc2 .ometa { padding-bottom: 9px; }
+.ohead .onum { background: var(--band); color: #fff; font-weight: 800; font-size: 12px; border-radius: 999px; padding: 2px 10px; align-self: center; }
+.ssum b.multi { background: #3B2A8F; color: #fff; border-radius: 999px; padding: 1px 9px; font-weight: 700; }
+/* ---- price approved ---- */
+.otable input.rowp { width: 70px; min-height: 34px; padding: 5px 6px; } .otable .apcell .row { flex-wrap: nowrap; }
+input.rowp.changed, #ap-price.changed { border-color: var(--warn); background: #FFF6EA; font-weight: 700; }
+#ap-price { width: 90px; }
+.otable td.big b.warnt { color: var(--warn); }
+table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; } table.fit th { font-size: 11px; }

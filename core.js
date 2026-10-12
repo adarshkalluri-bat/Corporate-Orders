@@ -11,8 +11,7 @@
     OFFERED: 'Offered', CANCELLED: 'Cancelled'
   };
   const STATUS_ORDER = ['PENDING', 'AWAITING', 'PARTIAL', 'APPROVED', 'DISPATCHED', 'REJECTED'];
-  const REJECT_REASONS = ['Not available', 'Stock given in alternate article', 'Reorder in new article', 'Inactive article',
-    'Wrong order', 'Wrong price', 'Duplicate order', 'Order cancelled', 'Store requirement', 'Other'];
+  const REJECT_REASONS = ['Reorder in new article', 'Wrong order', 'Stock given in alternate article', 'Stock out'];
   /* DC stock locations, in the order they are shown. key = field in the stock data. */
   const LOCATIONS = [['v', 'V01 & V02'], ['nso', 'NSO (0023)'], ['hh', 'HH reserved (0043)'], ['spl', 'Special buy (0041)'], ['best', 'Best seller (0042)'], ['sea', 'Sea stock']];
   /* 'oth' = stock the report gives only in its total, with no location against it. */
@@ -124,7 +123,10 @@
       l.discount = discountOf(l.req_price, l.mrp);
       l.margin = marginAt(l.req_price, a.gst, a.cost);
       l.base_margin = marginAt(Number(a.vrp) || l.mrp, a.gst, a.cost);
-      l.value = l.approved * l.req_price; l.ask_value = l.req_qty * l.req_price;
+      /* value approved: at the price approved with each quantity (the price asked, where none was approved) */
+      l.value = l.approved_value != null ? Number(l.approved_value) : l.approved * l.req_price; l.ask_value = l.req_qty * l.req_price;
+      l.appr_price = l.approved ? Math.round(l.value / l.approved * 100) / 100 : null;
+      l.price_changed = l.appr_price != null && Math.abs(l.appr_price - l.req_price) > 0.004;
       /* delivery: the stock must be allocated at least "lead time" days before the date the store wants it */
       l.allocate_by = l.del_date && l.lead_time != null ? addDays(l.del_date, -l.lead_time) : null;
       l.days_left = l.allocate_by ? dayDiff(now, l.allocate_by) : null;

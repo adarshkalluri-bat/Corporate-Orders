@@ -5,6 +5,7 @@
   'use strict';
   const C = window.Core, A = window.Api, R = window.Reader, esc = C.esc, inr = C.inr, rupees = C.rupees, when = C.when, pct = C.pct;
   const $ = (s, r) => (r || document).querySelector(s);
+  const inr2 = (n) => { n = Number(n) || 0; return Math.abs(n - Math.round(n)) > 0.004 ? inr(Math.floor(n)) + '.' + String(Math.round((n - Math.floor(n)) * 100)).padStart(2, '0') : inr(n); };
   const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
   const app = $('#app');
   const wideMQ = window.matchMedia('(min-width: 960px)');
@@ -17,10 +18,11 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 7;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 8;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
+  const priceOn = () => !!S.M && S.M.schema >= 8;     // approving a price with the quantity needs database version 8
   const artOf = (code) => (S.M && S.M.articles[code]) || S.extra[code] || null;
   const tick = () => new Promise((r) => setTimeout(r, 30));
   const ICON = {
@@ -303,15 +305,18 @@
   /* ================= Dashboard ================= */
   /* Value at MRP, value at the price wanted, the discount that is, and the margin left after it.
      qf(line) = the quantity to count for that line. */
-  function money(lines, qf) {
-    let mrpV = 0, val = 0, net = 0, cost = 0, noCost = 0;
+  /* approved = count the price approved (where one was approved) instead of the price asked.
+     marginMrp = the margin the same pieces would make at MRP, with no discount. */
+  function money(lines, qf, approved) {
+    let mrpV = 0, val = 0, net = 0, netMrp = 0, cost = 0, noCost = 0;
     for (const l of lines) {
       const q = qf(l); if (!q) continue;
-      mrpV += q * l.mrp; val += q * l.req_price;
+      const price = approved && l.appr_price != null ? l.appr_price : l.req_price;
+      mrpV += q * l.mrp; val += q * price;
       const a = S.M.articles[l.article_code];
-      if (a && Number(a.cost) > 0 && a.gst != null) { net += q * l.req_price / (1 + Number(a.gst)); cost += q * Number(a.cost); } else noCost++;
+      if (a && Number(a.cost) > 0 && a.gst != null) { net += q * price / (1 + Number(a.gst)); netMrp += q * l.mrp / (1 + Number(a.gst)); cost += q * Number(a.cost); } else noCost++;
     }
-    return { mrpV, val, disc: mrpV ? 1 - val / mrpV : null, margin: net ? (net - cost) / net : null, marginRs: net - cost, noCost };
+    return { mrpV, val, disc: mrpV ? 1 - val / mrpV : null, margin: net ? (net - cost) / net : null, marginMrp: netMrp ? (netMrp - cost) / netMrp : null, marginRs: net - cost, noCost };
   }
   const FLAGS = {
     LATE: ['Delivery date at risk', (l) => l.late],
@@ -340,17 +345,18 @@
     const live = lines.filter((l) => l.status !== 'REJECTED');
     const sum = (arr, f) => arr.reduce((t, x) => t + f(x), 0);
     const req = sum(live, (l) => l.req_qty), appr = sum(live, (l) => l.approved);
-    const asked = money(live, (l) => l.req_qty), given = money(live, (l) => l.approved);
+    const asked = money(live, (l) => l.req_qty), given = money(live, (l) => l.approved, true);
+    const gap = given.margin != null && given.marginMrp != null ? (given.marginMrp - given.margin) * 100 : null;
     const tile = (cls, t, v, s) => `<div class="tile ${cls}"><h3>${t}</h3><b class="${String(v).length > 9 ? 'long' : ''}">${v}</b><span>${s}</span></div>`;
     const tiles = [
       tile('lilac', 'Order lines', inr(lines.length), `${inr(new Set(lines.map((l) => l.order_no)).size)} orders, ${new Set(lines.map((l) => l.store_code)).size} stores`),
       tile('peach', 'Pending', inr(by.PENDING.length), `${inr(sum(by.PENDING, (l) => l.balance))} pcs to approve`),
-      tile('butter', 'Awaiting store', inr(by.AWAITING.length), `${inr(sum(lines, (l) => l.offered))} pcs of alternates held`),
-      tile('mint', 'Approved', inr(by.APPROVED.length + by.PARTIAL.length), `${by.PARTIAL.length} partly approved`),
-      tile('sky', 'Dispatched', inr(by.DISPATCHED.length), `${inr(sum(lines, (l) => l.dispatched))} pcs left the DC`),
+      tile('mint', 'Approved', inr(by.APPROVED.length + by.PARTIAL.length + by.DISPATCHED.length), `${by.PARTIAL.length} partly approved`),
       tile('pink', 'Rejected', inr(by.REJECTED.length), `${inr(sum(by.REJECTED, (l) => l.req_qty))} pcs`),
       tile('lilac', 'Value approved', rupees(given.val), `of ${rupees(asked.val)} ordered`),
-      tile('mint', 'Margin after discount', pct(given.margin), given.disc == null ? 'nothing approved yet' : `${pct(given.disc)} average discount given`)].join('');
+      tile('mint', 'Margin after discount', pct(given.margin), given.disc == null ? 'on what is approved - nothing yet' : 'on what is approved, at the prices approved'),
+      tile('sky', 'Margin without discount', pct(given.marginMrp), gap == null ? 'the same pieces sold at MRP' : `at MRP; ${gap.toFixed(1)} points more than after discount`),
+      tile('butter', 'Discount given', given.disc == null ? '-' : pct(given.disc), given.disc == null ? 'nothing approved yet' : `Rs ${inr(given.mrpV - given.val)} below MRP on what is approved`)].join('');
     const items = [];
     const go = (label, o) => `<button class="btn sm" data-act="go" data-view="${(o && o.view) || 'orders'}" data-status="${(o && o.status) || ''}" data-flag="${(o && o.flag) || ''}">${label}</button>`;
     const cnt = (k) => lines.filter(FLAGS[k][1]).length;
@@ -386,17 +392,18 @@
       const age = (Date.now() - new Date(M.meta.stock_asof)) / 3600e3;
       if (age > 12) items.push(['warn', `DC stock report is ${Math.round(age)} hours old`, editor() ? go('Upload new', { view: 'data' }) : '']);
     }
-    const parts = [['Approved', sum(live, (l) => l.approved_open), '#7FDDB5'], ['Dispatched', sum(live, (l) => l.dispatched), '#8EC5FF'],
-      ['Offered as alternate', sum(live, (l) => l.offered), '#FFC98A'], ['Pending, not yet approved', sum(live, (l) => l.balance), '#C9C2EA'],
-      ['Will not be supplied', sum(live.filter((l) => l.balance_closed), (l) => l.open_qty), '#FF9DBB']];
+    const parts = [['Approved', sum(live, (l) => l.approved), '#7FDDB5'], ['Pending, not yet approved', sum(live, (l) => l.balance), '#C9C2EA'],
+      ['Will not be supplied', sum(live.filter((l) => l.balance_closed), (l) => l.open_qty), '#FFC98A'], ['Rejected', sum(by.REJECTED, (l) => l.req_qty), '#FF9DBB']];
+    const reqAll = sum(lines, (l) => l.req_qty);
     /* discount and margin */
     const mrow = (name, m) => `<tr><td>${name}</td><td class="right">${inr(m.mrpV)}</td><td class="right b">${inr(m.val)}</td>
-      <td class="right ${m.disc > 0.0005 ? 'warn b' : ''}">${pct(m.disc)}</td><td class="right b">${pct(m.margin)}</td><td class="right">${inr(m.marginRs)}</td></tr>`;
+      <td class="right ${m.disc > 0.0005 ? 'warn b' : ''}">${pct(m.disc)}</td><td class="right">${pct(m.marginMrp)}</td><td class="right b">${pct(m.margin)}</td>
+      <td class="right ${m.margin != null && m.marginMrp != null && m.marginMrp - m.margin > 0.0005 ? 'warn' : 'muted'}">${m.margin != null && m.marginMrp != null ? (m.marginMrp - m.margin > 0.0005 ? '-' + ((m.marginMrp - m.margin) * 100).toFixed(1) + ' pts' : '-') : '-'}</td><td class="right">${inr(m.marginRs)}</td></tr>`;
     const pend = money(live, (l) => l.balance);
-    const moneyCard = `<div class="card stack"><h2>Discount given and margin after it</h2>
-      <div class="tablewrap"><table class="tight"><thead><tr><th></th><th class="right">At MRP</th><th class="right">At price wanted</th><th class="right">Discount</th><th class="right">Margin %</th><th class="right">Margin Rs</th></tr></thead><tbody>
+    const moneyCard = `<div class="card stack"><h2>Discount given, and margin with and without it</h2>
+      <div class="tablewrap"><table class="tight twoline fit"><thead><tr><th></th><th class="right">At MRP<br>(Rs)</th><th class="right">At the price<br>(Rs)</th><th class="right">Discount</th><th class="right">Margin %<br>without discount</th><th class="right">Margin %<br>after discount</th><th class="right">Margin lost<br>to discount</th><th class="right">Margin<br>(Rs)</th></tr></thead><tbody>
       ${mrow('Ordered', asked)}${mrow('Approved so far', given)}${mrow('Still pending', pend)}</tbody></table></div>
-      <p class="small">Values in rupees, rejected lines left out. Margin = (price without GST - cost) / price without GST, on the cost of the ordered article.${asked.noCost ? ` ${asked.noCost} ${plural(asked.noCost, 'line')} left out of the margin because the article has no cost on file.` : ''}</p></div>`;
+      <p class="small">Values in rupees, rejected lines left out. "Ordered" and "Still pending" use the price the store asked; "Approved so far" uses the price approved. Margin without discount = the same pieces at MRP. Margin = (price without GST - cost) / price without GST, on the cost of the ordered article.${asked.noCost ? ` ${asked.noCost} ${plural(asked.noCost, 'line')} left out of the margin because the article has no cost on file.` : ''}</p></div>`;
     /* by buyer */
     const buyers = {};
     for (const l of lines) { const k = l.buyer || '(buyer not set)'; (buyers[k] = buyers[k] || []).push(l); }
@@ -423,8 +430,8 @@
         <div class="card stack"><h2>Needs attention</h2>
           ${items.length ? items.map(([tone, text, btn]) => `<div class="attn"><div class="note ${tone || 'info'}">${text}</div>${btn}</div>`).join('') : '<div class="note good">Nothing needs attention.</div>'}</div>
         <div class="stack"><div class="card stack"><h2>Where the ordered quantity stands</h2><div class="bars">
-          ${parts.map(([n, q, col]) => `<span>${n}</span><div class="bar"><i style="width:${req ? Math.min(100, q / req * 100) : 0}%;background:${col}"></i></div><b class="right">${inr(q)}</b><span class="small right">${req ? Math.round(q / req * 100) : 0}%</span>`).join('')}
-        </div><p class="small">${inr(appr)} of ${inr(req)} pcs approved (${req ? Math.round(appr / req * 100) : 0}%). Approved quantities are in full packs, so they can be a little above what was asked.</p></div>${moneyCard}</div>
+          ${parts.map(([n, q, col]) => `<span>${n}</span><div class="bar"><i style="width:${reqAll ? Math.min(100, q / reqAll * 100) : 0}%;background:${col}"></i></div><b class="right">${inr(q)}</b><span class="small right">${reqAll ? Math.round(q / reqAll * 100) : 0}%</span>`).join('')}
+        </div><p class="small">${inr(appr)} of ${inr(req)} pcs approved (${req ? Math.round(appr / req * 100) : 0}%), not counting rejected lines; the bars are out of all ${inr(reqAll)} pcs ordered. Approved quantities are in full packs, so they can be a little above what was asked.</p></div>${moneyCard}</div>
       </div>
       ${buyerCard ? `<div style="margin-top:12px">${buyerCard}</div>` : ''}
       <div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Biggest shortages</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
@@ -561,13 +568,13 @@
     const W = (w) => `<col style="width:${w}">`, TH = (t, sub, cls) => `<th class="${cls || ''}">${t}${sub ? `<span class="thsub">${sub}</span>` : ''}</th>`;
     let cols = (c.chk ? W('36px') : '') + (c.so ? '<col>' : '') + (c.art ? W(c.so ? '190px' : '230px') : '') + (c.so ? '' : W('104px')) + W('84px') + W('94px');
     let th = (c.chk ? '<th></th>' : '') + (c.so ? TH('Store / order', 'booked, delivery') : '') + (c.art ? TH('Article') : '') + (c.so ? '' : TH('Booked', 'delivery')) +
-      TH('Qty wanted', 'pcs', 'right') + TH('Price wanted', 'Rs per pc', 'right');
+      TH('Qty wanted', 'pcs', 'right') + (view === 'approved' ? TH('Price', 'Rs per pc', 'right') : TH('Price wanted', 'Rs per pc', 'right'));
     if (view === 'approved') {
       cols += W('110px') + (locsOn() ? W('170px') : '') + W('116px') + W('124px') + W(ed && locsOn() ? '120px' : '84px');
       th += TH('Approved', 'pcs', 'right') + (locsOn() ? TH('Taken from', 'DC location') : '') + TH('Value', 'Rs', 'right') + TH('Status') + '<th></th>';
     } else {
-      cols += W('92px') + (c.ss ? W('98px') + W('78px') : '') + W(ed ? '192px' : '120px');
-      th += TH('Balance DC qty', 'free to approve', 'right') + (c.ss ? TH('Store stock', 'closing + in transit', 'right') + TH('Store sale', 'this month', 'right') : '') + (ed ? TH('Approve', 'pcs') : TH('Status'));
+      cols += W('92px') + (c.ss ? W('98px') + W('78px') : '') + W(ed ? (priceOn() ? '226px' : '192px') : '120px');
+      th += TH('Balance DC qty', 'free to approve', 'right') + (c.ss ? TH('Store stock', 'closing + in transit', 'right') + TH('Store sale', 'this month', 'right') : '') + (ed ? TH('Approve', priceOn() ? 'qty &nbsp; &middot; &nbsp; price Rs' : 'pcs') : TH('Status'));
     }
     if (!c.so) cols = cols.replace(c.art ? W('230px') : W('104px'), '<col>');      // the article column (or the dates, when grouped by article) takes the spare room
     return `<colgroup>${cols}</colgroup><thead><tr>${th}</tr></thead>`;
@@ -611,7 +618,9 @@
       (c.art ? `<td class="art ${l.dup_count > 0 ? 'dup' : ''}"><div class="acode">${esc(l.article_code)}</div><div class="adesc">${esc(l.description || '(article details not on file)')}</div>${meta ? `<div class="ameta">${meta}</div>` : ''}${tags ? `<div class="atags">${tags}</div>` : ''}</td>` : '') +
       (c.so ? '' : `<td class="dates">${dates}${c.art || !tags ? '' : `<div class="atags">${tags}</div>`}</td>`) +
       `<td class="big right"><b>${inr(l.req_qty)}</b>${l.pack > 1 ? `<div class="small">packs of ${l.pack}</div>` : ''}</td>` +
-      `<td class="big right"><b>${inr(l.req_price)}</b><div class="small ${l.discount > 0.0005 && !l.price_missing ? 'warn' : ''}">${l.price_missing ? 'not given, MRP used' : l.discount > 0.0005 ? pct(l.discount) + ' below MRP' : 'at MRP'}</div></td>`;
+      (view === 'approved' && l.appr_price != null
+        ? `<td class="big right"><b class="${l.price_changed ? 'warnt' : ''}">${inr2(l.appr_price)}</b><div class="small">${l.price_changed ? `approved; store asked ${inr2(l.req_price)}` : 'as the store asked'}</div></td>`
+        : `<td class="big right"><b>${inr2(l.req_price)}</b><div class="small ${l.discount > 0.0005 && !l.price_missing ? 'warn' : ''}">${l.price_missing ? 'not given, MRP used' : l.discount > 0.0005 ? pct(l.discount) + ' below MRP' : 'at MRP'}</div>${l.approved && l.price_changed ? `<div class="small warn">approved at ${inr2(l.appr_price)}</div>` : ''}</td>`);
     const details = `<button class="btn link" data-act="sel" data-id="${l.id}" title="Stock by location, alternates, history${ed ? ', reject, cancel' : ''}">Details</button>`;
     const wrap = (cls, rest) => `<tbody class="ol pick ${S.o.sel === l.id ? 'sel' : ''} ${cls}" data-act="sel" data-id="${l.id}"><tr>${cells}${rest}</tr></tbody>`;
     if (view === 'approved') {
@@ -627,7 +636,7 @@
     const state = l.status === 'PENDING' && !note ? '' : `<div class="rowstate">${pill(l.status)}${l.approved ? ` <span class="small"><b class="good">${inr(l.approved)} approved</b>${l.balance ? `, ${inr(l.balance)} pending` : ''}</span>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div>`;
     const bal = `<td class="big right ${short ? 'badc' : ''}"><b>${inr(free)}</b>${short ? `<div class="small">short of ${inr(l.balance)}</div>` : ''}</td>`;
     const last = !ed ? `<td>${pill(l.status)}${l.approved ? `<div class="small"><b class="good">${inr(l.approved)} approved</b></div>` : ''}${note ? `<div class="small">${note}</div>` : ''}<div class="rowlinks">${details}</div></td>`
-      : `<td class="apcell">${state}${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" value="${dflt}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}"><button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
+      : `<td class="apcell">${state}${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" value="${dflt}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}">${priceOn() ? `<input class="qty rowp" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-id="${l.id}" data-asked="${l.req_price}" title="Price per piece to approve (the store asked Rs ${l.req_price})" aria-label="Price to approve for ${esc(l.article_code)}">` : ''}<button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
         : canAct ? '<div class="small bad">No balance at DC</div>' : ''}
         <div class="rowlinks">${details.replace('>Details<', canAct && !top && C.allAlternates(M, l.article_code).length ? '>See alternates<' : '>Details<')} <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker">Delete</button></div></td>`;
     return wrap('', bal + (c.ss ? ssCell(l) : '') + last);
@@ -643,23 +652,23 @@
       ${view === 'approved' ? '' : ssHtml(l)}${locsOn() && C.locText(l.locs) ? `<div class="small">Taken from ${esc(C.locText(l.locs))}</div>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div></div>`;
   }
   /* The heading of one order inside a store. */
-  function orderHead(L, view, ed) {
+  function orderHead(L, view, ed, idx, n) {
     const f = L[0], dels = uniqOf(L, (l) => l.del_date).sort(), late = L.some((l) => l.late), tight = L.some((l) => l.tight);
     const tel = (f.phone || '').replace(/\D/g, '');
     const who = f.poc_name || tel ? `<span>Booked by <b>${esc(f.poc_name || '')}</b>${tel ? ` <a href="tel:${esc(tel)}">${esc(f.phone)}</a>` : ''}</span>` : '';
     const value = L.reduce((t, l) => t + (l.status === 'REJECTED' ? 0 : l.ask_value), 0);
     return `<div class="ohead">${ticks(view) ? `<input type="checkbox" data-act="chkOrder" ${L.every((l) => sec(view).checked.has(l.id)) ? 'checked' : ''} title="Tick every line of this order here" aria-label="Tick every line of order ${esc(f.order_no)}">` : ''}
-        <span class="ono ${L.some((l) => l.dup_count > 0) ? 'bad' : ''}">Order ${esc(f.order_no)}</span><span>Booked ${when(f.order_date)}</span>
+        ${n > 1 ? `<span class="onum">Order ${idx + 1} of ${n}</span>` : ''}<span class="ono ${L.some((l) => l.dup_count > 0) ? 'bad' : ''}">Order ${esc(f.order_no)}</span><span>Booked ${when(f.order_date)}</span>
         ${dels.length ? `<span class="${late ? 'bad b' : tight ? 'warn b' : ''}">Delivery wanted ${when(dels[0])}${dels.length > 1 ? ' onwards' : ''}${f.allocate_by && dels.length === 1 ? ` <span class="small">(allocate by ${when(f.allocate_by)})</span>` : ''}</span>` : ''}
         ${who}<span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'article')} &middot; ${rupees(value)}</span></div>
       <div class="ometa"><span><i>MC</i> ${uniqOf(L, (l) => l.mc_name).map(esc).join(', ') || '-'}</span><span><i>MRP</i> ${uniqOf(L, (l) => l.mrp).sort((a, b) => a - b).map(inr).join(', ')}</span></div>`;
   }
-  function blockHtml(B, g, view, c, ed, first) {
-    const L = B.lines;
-    const head = g === GROUPS.store_order ? orderHead(L, view, ed)
+  function blockHtml(B, g, view, c, ed, first, idx, n) {
+    const L = B.lines, band = g === GROUPS.store_order ? ` oc${idx % 3}` : '';
+    const head = g === GROUPS.store_order ? orderHead(L, view, ed, idx, n)
       : g.h2 ? `<div class="ohead">${ticks(view) ? '<input type="checkbox" data-act="chkOrder" title="Tick every line under this heading" aria-label="Tick every line under this heading">' : ''}<span class="ono">${esc(g.h2(L))}</span><span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'line')}</span></div>` : '';
-    if (!S.wide) return `<div class="oblock">${head}${L.map((l) => lineCard(l, view)).join('')}</div>`;
-    return `<div class="oblock">${head}<table class="otable ${first ? '' : 'nohead'}">${tableHead(view, c, ed)}${L.map((l) => lineRow(l, view, c, ed)).join('')}</table></div>`;
+    if (!S.wide) return `<div class="oblock${band}">${head}${L.map((l) => lineCard(l, view)).join('')}</div>`;
+    return `<div class="oblock${band}">${head}<table class="otable ${first ? '' : 'nohead'}">${tableHead(view, c, ed)}${L.map((l) => lineRow(l, view, c, ed)).join('')}</table></div>`;
   }
   function oListHtml(view) {
     view = view || S.view;
@@ -686,7 +695,7 @@
       let head = '';
       if (g.h1) {
         const [big, name, small] = g.h1(L), nOrd = uniqOf(L, (l) => l.order_no).length, nSt = uniqOf(L, (l) => l.store_code).length;
-        const counts = [g.hide.includes('so') && g !== GROUPS.order ? `${nOrd} ${plural(nOrd, 'order')}` : g === GROUPS.order ? '' : `${nSt} ${plural(nSt, 'store')}`, `${L.length} ${plural(L.length, 'line')}`,
+        const counts = [g.hide.includes('so') && g !== GROUPS.order ? (nOrd > 1 ? `<b class="multi">${nOrd} orders</b>` : '1 order') : g === GROUPS.order ? '' : `${nSt} ${plural(nSt, 'store')}`, `${L.length} ${plural(L.length, 'line')}`,
           view === 'approved' ? `${inr(L.reduce((t, l) => t + l.approved, 0))} pcs approved` : `${inr(L.reduce((t, l) => t + l.balance, 0))} pcs pending`,
           rupees(L.reduce((t, l) => t + (view === 'approved' ? l.value : l.ask_value), 0))].filter(Boolean).join(' &middot; ');
         head = `<div class="shead" data-act="toggleGroup" data-key="${esc(G.key)}" title="${closed ? 'Show' : 'Hide'} the lines under this heading">
@@ -694,7 +703,7 @@
           <span class="scode">${esc(big)}</span>${name ? `<span class="sname">${esc(name)}</span>` : ''}${small ? `<span class="sloc">${esc(small)}</span>` : ''}<span class="grow"></span>
           <span class="ssum">${counts}</span><span class="chev">${closed ? '&#9656;' : '&#9662;'}</span></div>`;
       }
-      html += `<section class="sgroup ${closed ? 'closed' : ''}">${head}${closed ? '' : G.blocks.map((B, i) => blockHtml(B, g, view, c, ed, i === 0)).join('')}</section>`;
+      html += `<section class="sgroup ${closed ? 'closed' : ''}">${head}${closed ? '' : G.blocks.map((B, i) => blockHtml(B, g, view, c, ed, i === 0, i, G.blocks.length)).join('')}</section>`;
     }
     return html + (hiddenGroups ? `<button class="btn more" data-act="more">Show more (${inr(hiddenLines)} more ${plural(hiddenLines, 'line')})</button>` : '');
   }
@@ -835,6 +844,7 @@
       ${stockSum(p)}${p.dc ? locChips(p) : ''}
       ${shortNote}
       ${canAct ? `<div class="row wrap"><span>Approve qty</span><input class="qty" id="ap-qty" type="number" inputmode="numeric" min="0" max="${top}" value="${dflt || ''}" data-pack="${pack}" ${top ? '' : 'disabled'} aria-label="Quantity to approve">
+        ${priceOn() && top ? `<span>at Rs</span><input class="qty" id="ap-price" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-asked="${l.req_price}" aria-label="Price to approve" title="Price per piece to approve (the store asked Rs ${l.req_price})">` : ''}
         <button class="btn primary" data-act="approve" ${top ? '' : 'disabled'}>Approve</button><span class="small" id="ap-prev"></span></div>
         ${locsOn() && top ? '<div class="row wrap aploc"><span class="small grow" id="ap-loc"></span><button class="btn sm" data-act="apLocs" title="Take this approval from the DC locations you choose">Choose locations ...</button></div>' : ''}
         <div class="small">${top ? `${inr(l.open_qty)} pcs pending. Whatever is approved is rounded up to full packs of ${pack}.` : (free > 0 ? `Balance DC quantity is only ${inr(free)} pcs - less than one pack of ${pack}. Use an alternate below.` : 'No balance DC quantity - use an alternate below.')}</div>` : ''}</div>`);
@@ -921,7 +931,18 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
       return { qty: qi ? Math.round(+v.qty || 0) : o.qty, locs };
     });
   }
-  async function approveWithLocs(l, typedQty) {
+  /* The price typed next to the quantity: null = as the store asked. Refuses a price above MRP. */
+  function priceFrom(l, inp) {
+    if (!priceOn() || !inp) return { ok: true, price: null };
+    const v = String(inp.value).trim(), p = Math.round(+v * 100) / 100;
+    if (!v) return { ok: true, price: null };
+    if (!(p > 0)) return { ok: false, msg: 'The price must be more than zero.' };
+    const mrp = Number((artOf(l.article_code) || {}).mrp) || Number(l.mrp) || 0;
+    if (mrp && p > mrp) return { ok: false, msg: `Rs ${inr2(p)} is above the MRP of this article (Rs ${inr2(mrp)}).` };
+    return { ok: true, price: Math.abs(p - l.req_price) > 0.004 ? p : null };
+  }
+  const priceNote = (l, price) => (price != null ? ` at Rs ${inr2(price)} (store asked ${inr2(l.req_price)})` : '');
+  async function approveWithLocs(l, typedQty, price) {
     if (!l) return;
     const top = approvable(l);
     if (!top) return tell('Approve', 'Nothing can be approved on this line right now: there is no balance DC quantity for a full pack.');
@@ -929,7 +950,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
     const v = await locDialog({ title: 'Approve: choose the DC location', article: l.article_code, qty: q, pack: l.pack, maxQty: top });
     if (!v) return;
     const f = C.roundPack(v.qty, l.pack);
-    run(() => A.rpc('allocate', { p_line: l.id, p_article: l.article_code, p_qty: v.qty, p_locs: v.locs }), `Approved ${inr(f)} pcs of ${l.article_code} from ${C.locText(v.locs)}`);
+    run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: v.qty, p_locs: v.locs }, price != null ? { p_price: price } : {})), `Approved ${inr(f)} pcs of ${l.article_code}${priceNote(l, price)} from ${C.locText(v.locs)}`);
   }
   function rowPreview(i) {                           // under the Approve box of a row: what the typed quantity becomes
     const el = $('.rowprev', i.closest('td')); if (!el) return;
@@ -1509,7 +1530,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
   const r1 = (x) => (x == null ? null : Math.round(x * 1000) / 10);
   const ORDER_HEAD = ['Status', 'Site', 'Store Name', 'Order No', 'MC Code', 'MC Desc', 'Article Code', 'Article Desc', 'MRP', 'Qty Wanted', 'Book Date', 'Delivery Date', 'Price Wanted',
     'Booked By', 'Contact Number', 'Article ordered by store', 'State', 'City', 'Buyer', 'Category', 'In Diwali Range', 'Article Status', 'Price given by store', 'Discount %', 'Margin % after discount', 'Pk size',
-    'Approved qty (as entered)', 'Final Qty to Store', 'Approved from (DC location)', 'Order Value', 'Offered (awaiting store)', 'Dispatched Qty', 'Pending Qty',
+    'Approved qty (as entered)', 'Final Qty to Store', 'Price Approved', 'Approved from (DC location)', 'Order Value', 'Offered (awaiting store)', 'Dispatched Qty', 'Pending Qty',
     'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'Total DC Qty (stock report + inwards)', 'of which inwards since the report', 'Balance DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending PO', 'Store Closing Stock', 'Store In Transit (incl. CLA)', 'Store Total Stock', 'Store MTD Sale', 'Store Stock in Alternates', 'Alternates Held by Store',
       'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']);
@@ -1517,7 +1538,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     const M = S.M, mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), p = M.pos[l.article_code] || NOPOS, a = M.articles[l.article_code] || {};
     return [C.STATUS_LABEL[l.status], l.store_code, l.store_name, l.order_no, l.mc_code, l.mc_name, l.article_code, l.description, +l.mrp, l.req_qty, l.order_date, l.del_date || '', +l.req_price,
       l.poc_name, l.phone, l.orig_article ? l.orig_article + ' ' + l.orig_desc : '', l.state, l.city, l.buyer, l.category, l.in_master ? 'Yes' : 'No', l.art_status, l.price_missing ? 'No (MRP used)' : 'Yes',
-      r1(l.discount), r1(l.margin), l.pack, mine.reduce((t, x) => t + (x.entered_qty == null ? x.qty : x.entered_qty), 0), l.approved, C.locText(l.locs), l.value, l.offered, l.dispatched, l.balance,
+      r1(l.discount), r1(l.margin), l.pack, mine.reduce((t, x) => t + (x.entered_qty == null ? x.qty : x.entered_qty), 0), l.approved, l.appr_price, C.locText(l.locs), l.value, l.offered, l.dispatched, l.balance,
       l.status === 'REJECTED' ? (l.reject_reason || '') : (l.balance_closed && l.open_qty ? 'Pending qty closed' : (l.supplied && l.supplied !== l.article_code ? 'Given in ' + l.supplied : '')),
       l.dup_count ? `Entered ${Math.abs(l.dup_count)} times (qty ${l.dup_qty || ''}), taken once${l.dup_count < 0 ? ' - checked with the store' : ''}` : '', ex.approvers[l.id] || '', l.lead_time, l.dc, l.allocate_by || '', l.late ? 'Yes' : '',
       p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0),
@@ -1555,10 +1576,10 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     const M = S.M;
     return excelFile('Corporate_Orders', true, (sheet, ex, byLine) => {
       sheet('Order lines', ORDER_HEAD, M.lines.map((l) => orderRow(l, ex, byLine)));
-sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated Article', 'Type', 'Qty entered', 'Qty in full packs', 'From DC location', 'State', 'Created', 'By', 'Decided', 'Dispatched'],
+sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated Article', 'Type', 'Qty entered', 'Qty in full packs', 'Price approved', 'From DC location', 'State', 'Created', 'By', 'Decided', 'Dispatched'],
         ex.allocations.map((a) => { const l = M.byId[a.line_id] || {};
           return [l.order_no, l.line_item || '', l.store_code, l.orig_article || l.article_code, a.article_code, a.article_code === (l.orig_article || l.article_code) ? 'Ordered article' : 'Alternate',
-            a.entered_qty == null ? a.qty : a.entered_qty, a.qty, C.locText(a.locs), C.STATUS_LABEL[a.state], when(a.created_at), a.created_by, when(a.decided_at), when(a.dispatched_at)]; }));
+            a.entered_qty == null ? a.qty : a.entered_qty, a.qty, a.price != null ? +a.price : l.req_price, C.locText(a.locs), C.STATUS_LABEL[a.state], when(a.created_at), a.created_by, when(a.decided_at), when(a.dispatched_at)]; }));
       sheet('Stock position', STOCK_HEAD, Object.keys(M.pos).sort().map(stockRow));
       if (ex.inwards && ex.inwards.length) sheet('Inwards', ['Received', 'Article', 'Description', 'Qty', 'DC location', 'DC', 'GRN / document', 'File', 'Loaded by', 'Counted on top of the stock report'],
         ex.inwards.map((i) => [when(i.inward_at), i.article_code, (artOf(i.article_code) || {}).description || '', i.qty, C.LOC_NAME[i.loc] || i.loc, i.site_code, i.doc_no, i.source_file, i.created_by, i.counted ? 'Yes' : 'No (the stock report already has it)']));
@@ -1685,8 +1706,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     clearFilters: () => { Object.assign(sec(), { q: '', status: '', flag: '', store: '', mc: '', buyer: '', limit: 300 }); render(); },
     exportView: () => exportLines(S.view),
     exportShort: () => exportShortages(),
-    rowLocs: (el) => { const i = $(`.rowq[data-id="${el.dataset.id}"]`); approveWithLocs(S.M.byId[+el.dataset.id], i && i.value); },
-    apLocs: () => { const i = $('#ap-qty'); approveWithLocs(cur(), i && i.value); },
+    rowLocs: (el) => { const l = S.M.byId[+el.dataset.id], i = $(`.rowq[data-id="${el.dataset.id}"]`), pr = priceFrom(l, $(`.rowp[data-id="${el.dataset.id}"]`)); if (!pr.ok) return tell('Approve', pr.msg); approveWithLocs(l, i && i.value, pr.price); },
+    apLocs: () => { const l = cur(), i = $('#ap-qty'), pr = priceFrom(l, $('#ap-price')); if (!pr.ok) return tell('Approve', pr.msg); approveWithLocs(l, i && i.value, pr.price); },
     allocLocs: async (el) => {
       const d = S.o.detail, x = d && d.allocations.find((a) => a.id === +el.dataset.alloc);
       if (!x) return;
@@ -1700,9 +1721,12 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       const f = C.roundPack(q, l.pack);
       if (f > max) return tell('Approve', `${inr(f)} pcs${f !== q ? ` (${inr(q)} rounded up to full packs of ${l.pack})` : ''} is more than can be approved on this line now: ${inr(max)} pcs.`);
       /* The approval is sent with exactly the locations the row shows, so what is recorded is what was on screen. */
+      const pr = priceFrom(l, $(`.rowp[data-id="${el.dataset.id}"]`));
+      if (!pr.ok) return tell('Approve', pr.msg);
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
-      if (sp && sp.left > 0) return approveWithLocs(l, q);                      // part of it sits only in a location set aside: ask where to take it from
-      run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: q }, sp ? { p_locs: sp.use } : {})), `Approved ${inr(f)} pcs of ${l.article_code}` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : '') + (sp ? ` from ${C.locText(sp.use)}` : ''));
+      if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price);           // part of it sits only in a location set aside: ask where to take it from
+      run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: q }, sp ? { p_locs: sp.use } : {}, pr.price != null ? { p_price: pr.price } : {})),
+        `Approved ${inr(f)} pcs of ${l.article_code}` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : '') + priceNote(l, pr.price) + (sp ? ` from ${C.locText(sp.use)}` : ''));
     },
     delLine: async (el) => {
       const l = S.M.byId[+el.dataset.id]; if (!l) return;
@@ -1740,9 +1764,12 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       const l = cur(), i = $('#ap-qty'), q = Math.round(+i.value || 0), f = C.roundPack(q, l.pack);
       if (q <= 0) return tell('Approve', 'Enter the quantity to approve.');
       if (f > (+i.max || 0)) return tell('Approve', `${inr(f)} pcs (${inr(q)} rounded up to full packs of ${l.pack}) is more than can be approved on this line now: ${inr(+i.max || 0)} pcs.`);
+      const pr = priceFrom(l, $('#ap-price'));
+      if (!pr.ok) return tell('Approve', pr.msg);
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
-      if (sp && sp.left > 0) return approveWithLocs(l, q);
-      run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: q }, sp ? { p_locs: sp.use } : {})), `Approved ${inr(f)} pcs` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : '') + (sp ? ` from ${C.locText(sp.use)}` : ''));
+      if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price);
+      run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: q }, sp ? { p_locs: sp.use } : {}, pr.price != null ? { p_price: pr.price } : {})),
+        `Approved ${inr(f)} pcs` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : '') + priceNote(l, pr.price) + (sp ? ` from ${C.locText(sp.use)}` : ''));
     },
     approveAlts: async () => {
       const l = cur(), picks = altPicks();
@@ -1788,7 +1815,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       const v = await ask('Reject order line', `<div class="stack">
         <p class="small">Order ${esc(ref(l))}: ${inr(l.req_qty)} pcs of ${esc(l.article_code)} ${esc(l.description)}</p>
         ${held ? `<p class="note warn">${inr(held)} pcs approved or offered on this line will be released.</p>` : ''}
-        <label class="f">Reason<select name="reason">${reasonOptions(reorder ? 'Reorder in new article' : 'Not available')}</select></label>
+        <label class="f">Reason<select name="reason">${reasonOptions(reorder ? 'Reorder in new article' : 'Stock out')}</select></label>
         <label class="f">Remark (optional)<input type="text" name="remark"></label>
         <label class="row"><input type="checkbox" name="msg" ${reorder ? 'checked' : ''}> <span>Prepare a message asking the store to reorder in an alternate${alts.length ? ` (${alts.length} with stock will be listed)` : ' (none has stock right now)'}</span></label></div>`, 'Reject line', { danger: true, noFocus: true });
       if (!v || S.busy) return;
@@ -1820,7 +1847,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       if (!ids.length) return tell('Reject ticked', 'Tick one or more order lines first.');
       const v = await ask(`Reject ${ids.length} ticked ${plural(ids.length, 'line')}`, `<div class="stack">
         <p class="small">Anything approved or offered on these lines is released. Lines that are already dispatched are left alone.</p>
-        <label class="f">Reason<select name="reason">${reasonOptions('Not available')}</select></label>
+        <label class="f">Reason<select name="reason">${reasonOptions('Stock out')}</select></label>
         <label class="f">Remark (optional)<input type="text" name="remark"></label></div>`, 'Reject lines', { danger: true, noFocus: true });
       if (!v) return;
       run(async () => { const r = await A.rpc('reject_lines', { p_lines: ids, p_reason: v.reason + (v.remark.trim() ? ' - ' + v.remark.trim() : '') }); sec().checked.clear(); return r; },
@@ -1916,6 +1943,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.classList.contains('sq')) { const v = Math.max(0, Math.round(+t.value || 0)); if (v) S.s.qty[t.dataset.id] = v; else delete S.s.qty[t.dataset.id]; tally(); }
     else if (t.id === 'ap-qty' || t.classList.contains('altq')) packPreview();
     else if (t.classList.contains('rowq')) rowPreview(t);
+    else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
     else if (t.id === 'dl-disc') dealCalc('disc');
     else if (t.id === 'dl-price') dealCalc('price');
     else if (t.id === 'dl-qty' || t.id === 'dl-store') dealCalc();
