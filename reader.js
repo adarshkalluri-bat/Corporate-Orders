@@ -74,6 +74,69 @@
       return { name: s.name, peek: () => sheetRows(get(), strings, 40), all: () => { const r = sheetRows(get(), strings); xml = null; return r; } };
     });
   }
+  /* SAP "Excel" downloads that are really a web page: an HTML table, often wrapped as a web archive
+     (MIME, quoted-printable). These can be 150 MB, so the bytes are decoded in place and the text is read
+     in pieces; only the table rows are kept. Cells spanning two columns (code + name) become two columns. */
+  function looksHtml(u8) {
+    let head = ''; for (let i = 0; i < Math.min(u8.length, 4096); i++) head += String.fromCharCode(u8[i]);
+    return /^\s*(MIME-Version:|<!DOCTYPE html|<html|<table|<\?xml[^>]*>\s*<html)/i.test(head) || /X-Document-Type:\s*Worksheet/i.test(head);
+  }
+  function fromHtml(u8) {
+    let head = ''; for (let i = 0; i < Math.min(u8.length, 4096); i++) head += String.fromCharCode(u8[i]);
+    let start = 0, qp = false;
+    if (/^\s*MIME-Version:/i.test(head)) {                          // web archive: the first part holds the page
+      const b = /boundary="?([^"\r\n;]+)"?/i.exec(head), at = b ? head.indexOf('--' + b[1]) : -1;
+      if (at >= 0) {
+        const end = head.indexOf('\r\n\r\n', at) >= 0 ? head.indexOf('\r\n\r\n', at) + 4 : head.indexOf('\n\n', at) + 2;
+        qp = /quoted-printable/i.test(head.slice(at, end)); start = end;
+      }
+    }
+    let len = -1;
+    const decode = () => {                                           // quoted-printable -> bytes, written over the same buffer
+      if (len >= 0) return;
+      if (!qp) { len = u8.length; return; }
+      const hex = (c) => (c >= 48 && c <= 57 ? c - 48 : c >= 65 && c <= 70 ? c - 55 : c >= 97 && c <= 102 ? c - 87 : -1);
+      let w = start;
+      for (let r = start, n = u8.length; r < n; r++) {
+        const c = u8[r];
+        if (c !== 61) { u8[w++] = c; continue; }                     // '='
+        const a = u8[r + 1], b2 = u8[r + 2];
+        if (a === 13 && b2 === 10) { r += 2; continue; }             // soft line break
+        if (a === 10) { r += 1; continue; }
+        const h1 = hex(a), h2 = hex(b2);
+        if (h1 >= 0 && h2 >= 0) { u8[w++] = h1 * 16 + h2; r += 2; } else u8[w++] = c;
+      }
+      len = w;
+    };
+    const cellRe = /<t([dh])\b([^>]*)>([\s\S]*?)<\/t[dh]>/gi;
+    function rowsOf(limit) {
+      decode();
+      const dec = new TextDecoder('utf-8'), out = [], CH = 8 << 20;
+      let carry = '';
+      for (let pos = start; pos < len; pos += CH) {
+        carry += dec.decode(u8.subarray(pos, Math.min(len, pos + CH)), { stream: pos + CH < len });
+        const last = carry.toLowerCase().lastIndexOf('</tr>');
+        if (last < 0) continue;
+        const block = carry.slice(0, last + 5); carry = carry.slice(last + 5);
+        const rowRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi; let rm;
+        while ((rm = rowRe.exec(block))) {
+          const row = []; let cm, any = false;
+          cellRe.lastIndex = 0;
+          while ((cm = cellRe.exec(rm[1]))) {
+            const span = Math.max(1, Math.min(20, +((/colspan\s*=\s*"?(\d+)/i.exec(cm[2]) || [])[1] || 1)));
+            let v = unx(cm[3].replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+            if (v) any = true;
+            row.push(v === '' ? null : v);
+            for (let k = 1; k < span; k++) row.push(null);
+            if (span > 1 && v) row[row.length - span + 1] = v + ' (2)';          // a heading over code + name: the second column is "<heading> (2)"
+          }
+          if (any) { out.push(row); if (limit && out.length >= limit) return out; }
+        }
+      }
+      return out;
+    }
+    return [{ name: 'Sheet1', peek: () => rowsOf(40), all: () => rowsOf(0) }];
+  }
   async function fromOther(u8, loadSheetJS) {                     // .xls, .csv, tab text
     const X = await loadSheetJS();
     const wb = X.read(u8, { type: 'array', raw: true });
@@ -94,7 +157,7 @@
      u8: the file's bytes. kind: master | data | stores | stock | orders. */
   async function read(u8, kind, loadSheetJS) {
     const isZip = u8[0] === 0x50 && u8[1] === 0x4b;
-    const sheets = isZip ? fromZip(u8) : await fromOther(u8, loadSheetJS);
+    const sheets = isZip ? fromZip(u8) : looksHtml(u8) ? fromHtml(u8) : await fromOther(u8, loadSheetJS);
     if (!sheets.length) throw new Error('The file has no sheets that could be read.');
     let best = null;
     for (const s of sheets) {
@@ -105,5 +168,5 @@
     const rows2d = best.sheet.all();
     return { rows2d, sheet: best.sheet.name, sheets: sheets.map((s) => s.name), header: best.header, reportDate: reportDate(rows2d, best.header.row) };
   }
-  root.Reader = { read, sheetRows, sharedStrings };
+  root.Reader = { read, sheetRows, sharedStrings, fromHtml, looksHtml };
 })(typeof window !== 'undefined' ? window : globalThis);

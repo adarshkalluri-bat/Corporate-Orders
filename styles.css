@@ -256,3 +256,6 @@ table.twoline th { white-space: normal; line-height: 1.2; vertical-align: bottom
 .loads .m { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid #F3EFFB; font-size: 13.5px; }
 table.calc tr.plus td { color: #0F7A55; } table.calc tr.minus td { color: #8A4B0A; } table.calc tr.tot td { font-weight: 700; } table.calc tr.bal td { background: #F6F2FF; }
 .locpop label.f { display: flex; align-items: center; gap: 12px; } .locpop label.f input.qty { width: 110px; }
+/* ---- stock at the stores, templates ---- */
+.sstk { margin-top: 3px; color: #4A4370; line-height: 1.35; } .sstk b { font-weight: 700; color: var(--ink); } .sstk.full { color: var(--warn); } .sstk.full b { color: var(--warn); }
+.btn.ghost { background: transparent; border-style: dashed; }

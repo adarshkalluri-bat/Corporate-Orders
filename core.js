@@ -138,10 +138,25 @@
       p.dc = p.stock + p.inward; p.free = p.dc - p.reserved; p.n_stores = p._st.size; delete p._st;
       for (const k of LOC_KEYS) p.locFree[k] = (p.loc[k] || 0) + (Number(p.locIn[k]) || 0) - (Number(p.locRes[k]) || 0);
     }
+    /* Stock at the ordering store, for the ordered article and for its alternates of both kinds.
+       closing = closing stock, transit = in transit + CLA, total = both, mtd = sale this month. */
+    const sst = snap.store_stock || {}, hasSS = !!(snap.meta && snap.meta.sstock_batch);
+    const ssOf = (store, art) => { const v = (sst[store] || {})[art]; return v ? { closing: v[0], transit: v[1] + v[2], total: v[0] + v[1] + v[2], mtd: v[3] } : { closing: 0, transit: 0, total: 0, mtd: 0 }; };
+    for (const l of lines) {
+      if (!hasSS) { l.ss = null; continue; }
+      const own = ssOf(l.store_code, l.article_code), a = articles[l.article_code] || {};
+      const gs = (a.group_same || '').trim(), gd = (a.group_diff || '').trim(), seen = new Set([l.article_code]), alts = [];
+      const add = (c, kind) => { if (seen.has(c)) return; seen.add(c); const v = ssOf(l.store_code, c); if (v.total || v.mtd) alts.push(Object.assign({ code: c, kind }, v)); };
+      if (gs) (same[gs] || []).forEach((c) => add(c, 'same'));
+      if (gd) (diff[gd] || []).forEach((c) => add(c, 'diff'));
+      if (l.orig_article) add(l.orig_article, 'ordered');
+      const altTotal = alts.reduce((t, x) => t + Math.max(0, x.total), 0);
+      l.ss = { own, alts, altTotal, family: Math.max(0, own.total) + altTotal, familyMtd: own.mtd + alts.reduce((t, x) => t + x.mtd, 0) };
+    }
     const byId = {};
     for (const l of lines) byId[l.id] = l;
     const locOrder = String(snap.loc_order || DEFAULT_LOC_ORDER).split(',').filter((k) => LOC_NAME[k] && k !== 'oth');
-    return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [],
+    return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [], hasStoreStock: hasSS,
              oldestOffer: snap.oldest_offer, rev: snap.rev, counts: snap.counts || {}, schema: snap.schema || 1 };
   }
 
@@ -272,7 +287,12 @@
       'inbound delivery', 'reference'],
     in_date: ['grn date', 'posting date', 'pstng date', 'inward date', 'entry date', 'entered on', 'received date', 'received on', 'receipt date', 'gr date', 'document date', 'doc. date', 'date'],
     in_time: ['grn time', 'time of entry', 'entry time', 'posting time', 'received time', 'time'],
-    sloc: ['storage location', 'stor. loc.', 'stor loc', 'storage loc', 'sloc', 's.loc', 'stock location', 'location', 'sl']
+    sloc: ['storage location', 'stor. loc.', 'stor loc', 'storage loc', 'sloc', 's.loc', 'stock location', 'location', 'sl'],
+    // stock at the stores (store-wise stock report)
+    ss_cl: ['cl_stk_q', 'closing stock', 'closing stock qty', 'closing qty', 'cl stk qty', 'cl stk', 'store closing stock', 'closing'],
+    ss_it: ['intransit_q', 'intransit qty', 'in transit qty', 'intransit', 'in transit', 'git qty', 'git'],
+    ss_cla: ['cla_stk_q', 'cla stk qty', 'cla stock', 'cla qty', 'cla'],
+    ss_mtd: ['mtd_sale_q', 'mtd sale qty', 'mtd sales qty', 'mtd sale', 'mtd sales', 'mtd qty', 'mtd']
   };
   const SPECS = {
     master: { required: ['article_code'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'mrp', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'group_same', 'group_diff', 'status'] },
@@ -283,9 +303,11 @@
     /* Inwards: either one row per receipt (article, quantity, and if the file has them: GRN number, date, time, storage location, DC),
        or the layout of the DC stock report with the received quantity under each location. */
     inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
-      need: ['in_qty', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'], needNice: 'Inward qty' }
+      need: ['in_qty', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'], needNice: 'Inward qty' },
+    /* Stock at each store: closing stock, in transit and CLA, and the sale this month. Other sale columns are not used. */
+    storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd'] }
   };
-  const NICE = { article_code: 'Article', total: 'Total MSA qty', req_qty: 'Qty wanted', order_no: 'Order ID', store_code: 'Store Code', mrp: 'MRP', in_qty: 'Inward qty' };
+  const NICE = { article_code: 'Article', total: 'Total MSA qty', req_qty: 'Qty wanted', order_no: 'Order ID', store_code: 'Store Code', mrp: 'MRP', in_qty: 'Inward qty', ss_cl: 'CL_STK_Q (closing stock)' };
 
   function code(v) {                                 // text, no '.0', no leading zeros on pure numbers
     if (v == null) return '';
@@ -450,6 +472,18 @@
       }
       return Array.from(agg.values()).filter((r) => r.t !== 0 || r.v || r.n || r.h || r.p || r.b || r.e);
     },
+    /* Stock at the stores: one row per store and article, {s, a, c: closing, i: in transit, l: CLA, m: sale this month}. */
+    storestock: (rows) => {
+      const agg = new Map();
+      for (const r of rows) {
+        const a = code(r.article_code), st = code(r.store_code).toUpperCase();
+        if (!/^\d{6,}$/.test(a) || !st || st.length > 12) continue;
+        const k = st + '|' + a, q = { s: st, a, c: Math.round(num(r.ss_cl)), i: Math.round(num(r.ss_it)), l: Math.round(num(r.ss_cla)), m: Math.round(num(r.ss_mtd)) };
+        const cur = agg.get(k);
+        if (cur) { cur.c += q.c; cur.i += q.i; cur.l += q.l; cur.m += q.m; } else agg.set(k, q);
+      }
+      return Array.from(agg.values());
+    },
     /* Inwards. Each entry: {a: article, q: pcs, l: location key, s: DC code, d: GRN / document number,
        day: 'YYYY-MM-DD' or '', mins: time of day in minutes or null}. Totals rows and rows without an article number are skipped. */
     inward: (rows) => {
@@ -473,6 +507,45 @@
       }
       return out;
     }
+  };
+
+  /* ---------------- upload templates ----------------
+     For each upload: the headings exactly as the app reads them, one invented example row, and what goes in each column.
+     [heading, needed?, what to put, example] */
+  const TEMPLATES = {
+    master: { file: 'Template_1_Diwali_Article_Master', sheet: 'Master', cols: [
+      ['Material', 'Yes', 'Article code', '1005107'], ['Desc', '', 'Article description', 'Casserole 1500ml Red'], ['MC Code', '', 'Merchandise category code', 'TH101'],
+      ['MC Name', '', 'Merchandise category name', 'Casserole'], ['Category', '', 'Category', 'Thermoware'], ['Buyer', '', 'Buyer name', 'Riya'], ['MRP', '', 'MRP in rupees', 499],
+      ['VRP', '', 'VRP in rupees', 499], ['Cost', '', 'Cost per piece (without GST)', 285.14], ['GST%', '', 'GST as 18 or 0.18', 18], ['Packsize', '', 'Pieces in one pack (approvals are rounded up to this)', 12],
+      ['Vendor Code', '', 'Vendor code', 'V2101'], ['Vendor Name', '', 'Vendor name', 'Sunhot Thermoware'],
+      ['Same model alternatives', '', 'Same text for articles that are the same design in another colour or vendor', 'CASS1500'],
+      ['Different model alternatives', '', 'Same text for articles of another design at the same price point', 'GIFT499'], ['Article Status', '', 'Active or In-Active', 'Active']] },
+    data: { file: 'Template_3_Full_Article_Data', sheet: 'Data', cols: [
+      ['Material', 'Yes', 'Article code', '1005999'], ['Desc', '', 'Article description', 'Vacuum Flask 1L Steel'], ['MC Code', '', 'Merchandise category code', 'TH140'], ['MC Name', '', 'Merchandise category name', 'Bottles & Flasks'],
+      ['Cat', '', 'Category', 'Thermoware'], ['Buy', '', 'Buyer name', 'Riya'], ['Article Status', '', 'Active or In-Active', 'Active'], ['New MRP', 'Yes', 'MRP in rupees', 599],
+      ['New VRP', '', 'VRP in rupees', 599], ['New Cost', '', 'Cost per piece (without GST)', 320], ['GST%', '', 'GST as 18 or 0.18', 18], ['Pack Size', '', 'Pieces in one pack', 12],
+      ['Vendor Code', '', 'Vendor code', 'V2230'], ['Vendor Name', '', 'Vendor name', 'Coolsip Steel'], ['Store Stock', '', 'Pieces in all stores', 240], ['Intransit Stock', '', 'Pieces in transit', 48],
+      ['CM PPO Qty', '', 'Pending PO this month', 120], ['NM PPO Qty', '', 'Pending PO next month', 0]] },
+    stores: { file: 'Template_4_Stores', sheet: 'Stores', cols: [
+      ['Store Code', 'Yes', 'Site code', 'VM101'], ['Store Name', '', 'Store name', 'Gurugram Sector 14'], ['StoreEmails', '', 'Email address of the store', 'vm101.sm@example.com'],
+      ['State', '', 'State', 'Haryana'], ['City', '', 'City', 'Gurugram'], ['Lead Time', '', 'Days from allocation to delivery at the store', 3], ['DC/RDC', '', 'DC or RDC that serves the store', 'RDC-NORTH']] },
+    stock: { file: 'Template_5_DC_Stock', sheet: 'DC STOCK-GM', cols: [
+      ['DC', '', 'DC code', 'DH19'], ['ARTICLE', 'Yes', 'Article code', '1005107'], ['TOTAL MSA -QTY', 'Yes', 'Total MSA quantity (the DC stock)', 1000],
+      ['V01 & V02 -QTY', '', 'Quantity in V01 & V02', 640], ['NSO (0023) -QTY', '', 'Quantity in NSO (0023)', 60], ['HH RESERVED (0043) -QTY', '', 'Quantity in HH reserved (0043)', 300],
+      ['SPECIAL BUY (0041) -QTY', '', 'Quantity in Special buy (0041)', 0], ['BEST SELLER (0042) -QTY', '', 'Quantity in Best seller (0042)', 0], ['SEA STK -QTY', '', 'Sea stock', 0]] },
+    inward: { file: 'Template_6_Inwards', sheet: 'Inwards', cols: [
+      ['GRN No', '', 'GRN or material document number (a number already loaded is not counted twice)', '5000004411'], ['Posting Date', '', 'Date received (DD.MM.YYYY)', '12.10.2026'],
+      ['Time', '', 'Time received (HH:MM)', '14:35'], ['DC', '', 'DC code', 'DH19'], ['Storage Location', '', '0023 = NSO, 0043 = HH reserved, 0041 = Special buy, 0042 = Best seller; anything else V01 & V02', 'V01'],
+      ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'Article description', 'Casserole 1500ml Red'], ['Inward Qty', 'Yes', 'Pieces received', 600]] },
+    storestock: { file: 'Template_7_Store_Stock', sheet: 'Store stock', cols: [
+      ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'For reference only', 'Casserole 1500ml Red'], ['MRP', '', 'For reference only', 499],
+      ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30]] },
+    orders: { file: 'Template_8_Orders', sheet: 'Orders', cols: [
+      ['Site', 'Yes', 'Store (site) code', 'VM101'], ['Name', '', 'Store name', 'Gurugram Sector 14'], ['OrderNo', 'Yes', 'Order number', 'TW26000121'], ['MerchandiseCategory', '', 'For reference only (the MC code is taken from the article files)', 'TH101'],
+      ['MC Desc', '', 'MC name', 'Casserole'], ['ArticleCode', 'Yes', 'Article code', '1005107'], ['ArticleDesc', '', 'Article description', 'Casserole 1500ml Red'], ['MRP', '', 'MRP', 499],
+      ['Quantity Wanted', 'Yes', 'Pieces the store wants', 500], ['Book Date', '', 'Booking date (DD.MM.YYYY)', '05.10.2026'], ['DeliveryDate', '', 'Delivery date wanted (DD.MM.YYYY)', '14.10.2026'],
+      ['Price Wanted', '', 'Price per piece the store asks for (blank or 0 = MRP)', 439], ['Pak Size', '', 'Pieces in one pack', 12], ['Contact Number', '', 'Mobile number of the person who booked', '9000000201'],
+      ['Booked By', '', 'Name of the person who booked', 'Test Contact F']] }
   };
 
   /* ---------------- messages to the store ---------------- */
@@ -539,7 +612,7 @@
     return L.join('\r\n');
   }
 
-  root.Core = { STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
+  root.Core = { TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
     packOf, roundPack, floorPack, marginAt, discountOf, pct, addDays, today, dayDiff, inr, rupees, when, whenLong,
     norm, ALIASES, SPECS, code, num, dateStr, findHeader, readTable, shape, offerSubject, offerText, reorderSubject, reorderText, mailHtml,
     buildEml, esc, b64utf8 };

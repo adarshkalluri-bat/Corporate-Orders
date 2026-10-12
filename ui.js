@@ -17,9 +17,10 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 6;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 7;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
+  const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
   const artOf = (code) => (S.M && S.M.articles[code]) || S.extra[code] || null;
   const tick = () => new Promise((r) => setTimeout(r, 30));
   const ICON = {
@@ -320,7 +321,9 @@
     OUTSIDE: ['Not in the Diwali range', (l) => !l.in_master],
     INACTIVE: ['In-Active article', (l) => l.art_status === 'In-Active'],
     SAP: ['SAP quantity changed', (l) => l.sap_new_qty != null],
-    DUP: ['Duplicate article in the order', (l) => l.dup_count > 0]
+    DUP: ['Duplicate article in the order', (l) => l.dup_count > 0],
+    STOREFULL: ['Store already holds the qty wanted (incl. alternates)', (l) => !!l.ss && l.req_qty > 0 && l.ss.family >= l.req_qty],
+    STOREHAS: ['Store has stock of it or an alternate', (l) => !!l.ss && l.ss.family > 0]
   };
   const dupText = (l) => `entered ${l.dup_count} times in the SAP export (qty ${l.dup_qty || '?'})`;
   const dupBadge = (l) => (l.dup_count > 0 ? `<span class="badge bad" title="${esc('The same article is ' + dupText(l) + '. It is taken once.')}">Duplicate article</span>` : '');
@@ -356,6 +359,8 @@
       const ords = Array.from(new Set(lines.filter(FLAGS.DUP[1]).map((l) => l.order_no)));
       items.push(['bad', `Duplicate article in ${inr(ords.length)} ${plural(ords.length, 'order')}: <b>${ords.slice(0, 8).map(esc).join(', ')}</b>${ords.length > 8 ? ` and ${ords.length - 8} more` : ''}. The same article is entered more than once; each is taken once.`, go('Open', { flag: 'DUP' })]);
     }
+    const fullAtStore = lines.filter((l) => NEEDS.includes(l.status) && FLAGS.STOREFULL[1](l)).length;
+    if (fullAtStore) items.push(['warn', `${inr(fullAtStore)} pending ${plural(fullAtStore, 'line')}: the store already holds at least the quantity it wants, in the article or its alternates (closing stock + in transit)`, go('Open', { flag: 'STOREFULL' })]);
     if (cnt('SAP')) items.push(['warn', `${inr(cnt('SAP'))} ${plural(cnt('SAP'), 'line')}: quantity changed in SAP after import`, go('Review', { flag: 'SAP' })]);
     if (cnt('LATE')) items.push(['bad', `${inr(cnt('LATE'))} ${plural(cnt('LATE'), 'line')} can no longer reach the store by the date it asked for (lead time)`, go('Open', { flag: 'LATE' })]);
     if (cnt('SOON')) items.push(['warn', `${inr(cnt('SOON'))} ${plural(cnt('SOON'), 'line')} must be allocated today or tomorrow to arrive on time`, go('Open', { flag: 'SOON' })]);
@@ -548,9 +553,23 @@
     }
     return `<colgroup>${cols}</colgroup><thead><tr>${th}</tr></thead>`;
   }
+  /* Stock at the ordering store: the article itself, and what its alternates add. */
+  function ssHtml(l, compact) {
+    if (!l.ss) return '';
+    const o = l.ss.own, alt = l.ss.altTotal;
+    const bits = [`At store <b class="${o.total > 0 ? '' : 'muted'}">${inr(o.total)}</b>${o.transit ? ` <span class="muted">(${inr(o.closing)} + ${inr(o.transit)} in transit)</span>` : ''}`, `MTD sale <b>${inr(o.mtd)}</b>`];
+    if (alt > 0) bits.push(`alternates <b>${inr(alt)}</b>`);
+    return `<div class="small sstk ${l.req_qty > 0 && l.ss.family >= l.req_qty ? 'full' : ''}" title="${esc(ssTitle(l))}">${bits.join(compact ? ' &middot; ' : ' &middot; ')}</div>`;
+  }
+  function ssTitle(l) {
+    const o = l.ss.own, L = [`Stock at ${l.store_code}: closing ${o.closing}, in transit (incl. CLA) ${o.transit}, sale this month ${o.mtd}`];
+    l.ss.alts.forEach((x) => L.push(`${x.code} ${(S.M.articles[x.code] || {}).description || ''}: ${x.total} (closing ${x.closing}, in transit ${x.transit}), MTD sale ${x.mtd}`));
+    return L.join('\n');
+  }
   const lineTags = (l) => [dupBadge(l), l.orig_article ? `<span class="badge alt" title="${esc('The store ordered ' + l.orig_article + ' ' + l.orig_desc)}">In place of ${esc(l.orig_article)}</span>` : '',
     l.art_status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '',
-    l.late ? '<span class="badge bad" title="The allocate-by date has passed">Late</span>' : l.tight ? '<span class="badge warn">Allocate now</span>' : ''].filter(Boolean).join(' ');
+    l.late ? '<span class="badge bad" title="The allocate-by date has passed">Late</span>' : l.tight ? '<span class="badge warn">Allocate now</span>' : '',
+    l.ss && l.req_qty > 0 && l.ss.family >= l.req_qty && NEEDS.includes(l.status) ? `<span class="badge warn" title="${esc(ssTitle(l))}">Store holds ${inr(l.ss.family)}</span>` : ''].filter(Boolean).join(' ');
   /* Where an approval of f pcs would be taken from if nothing is chosen: the standing order of locations. */
   function fromHtml(article, f) {
     if (!locsOn() || !f) return '';
@@ -564,8 +583,8 @@
     const lead = (c.chk ? `<td><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : '') +
       (c.so ? `<td class="so"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}<div class="ordno">${esc(ref(l))}</div></td>` : '') + dates +
       (c.mc ? `<td class="mc">${esc(l.mc_name || '-')}</td>` : '') + (c.mrp ? `<td class="right num">${inr(l.mrp)}</td>` : '') +
-      (c.art ? `<td class="art">${c.mcInArt ? `<div class="mcname">${esc(l.mc_name || '-')}</div>` : ''}<span class="code">${esc(l.article_code)}</span> ${tags}<div class="desc">${esc(l.description || '(article details not on file)')}</div></td>` : '');
-    const qty = `<td class="right num"><b>${inr(l.req_qty)}</b><div class="small">pack of ${l.pack}</div>${c.art ? '' : (tags ? `<div>${tags}</div>` : '')}</td><td class="right num">${price}</td>`;
+      (c.art ? `<td class="art">${c.mcInArt ? `<div class="mcname">${esc(l.mc_name || '-')}</div>` : ''}<span class="code">${esc(l.article_code)}</span> ${tags}<div class="desc">${esc(l.description || '(article details not on file)')}</div>${view === 'approved' ? '' : ssHtml(l)}</td>` : '');
+    const qty = `<td class="right num"><b>${inr(l.req_qty)}</b><div class="small">pack of ${l.pack}</div>${c.art ? '' : (tags ? `<div>${tags}</div>` : '') + (view === 'approved' ? '' : ssHtml(l))}</td><td class="right num">${price}</td>`;
     const details = `<button class="btn link" data-act="sel" data-id="${l.id}" title="Stock by location, alternates, history${ed ? ', reject, cancel' : ''}">Details</button>`;
     if (view === 'approved') {
       const more = [l.dispatched ? `${inr(l.dispatched)} dispatched` : '', l.balance ? `${inr(l.balance)} still pending` : ''].filter(Boolean).join(', ');
@@ -593,7 +612,7 @@
       <div class="small"><b>${esc(l.store_code)}</b> ${esc(l.store_name)} &middot; ${esc(ref(l))} &middot; booked ${when(l.order_date)}${l.del_date ? ` &middot; <span class="${l.late ? 'bad' : l.tight ? 'warn' : ''}">delivery ${when(l.del_date)}</span>` : ''}</div>
       <div class="nums"><span>MRP <b>${inr(l.mrp)}</b></span><span>Price wanted <b>${inr(l.req_price)}</b>${l.discount > 0.0005 ? ` <span class="warn">-${pct(l.discount)}</span>` : ''}</span><span>Qty wanted <b>${inr(l.req_qty)}</b></span>
         <span>Approved <b class="${l.approved ? 'good' : ''}">${l.approved ? inr(l.approved) : '-'}</b></span>${view === 'approved' ? '' : `<span>Balance DC qty <b class="${short ? 'bad' : ''}">${inr(free)}</b></span>`}</div>
-      ${locsOn() && C.locText(l.locs) ? `<div class="small">Taken from ${esc(C.locText(l.locs))}</div>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div></div>`;
+      ${view === 'approved' ? '' : ssHtml(l)}${locsOn() && C.locText(l.locs) ? `<div class="small">Taken from ${esc(C.locText(l.locs))}</div>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div></div>`;
   }
   /* The heading of one order inside a store. */
   function orderHead(L, view, ed) {
@@ -750,6 +769,17 @@
       <div class="stats">${stat('Qty wanted', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered (alternate)', inr(l.offered), l.offered ? 'warn' : '')}${stat('Pending qty', inr(l.balance), l.balance ? 'bad' : '')}</div>
       ${deliveryNote(l)}</div>`);
     if (l.orig_article) out.push(`<div class="card"><div class="note info"><b>${esc(l.article_code)} is here in place of ${esc(l.orig_article)}</b> ${esc(l.orig_desc)}, which is what the store ordered. Cancelling the approval of the alternate brings the ordered article back.</div></div>`);
+    if (l.ss) {
+      const row = (code, kind, v, strong) => `<tr><td class="w"><b>${esc(code)}</b> <span class="small muted">${kind}</span><div class="small">${esc((artOf(code) || {}).description || '')}</div></td><td class="right">${inr(v.closing)}</td><td class="right">${inr(v.transit)}</td><td class="right b">${inr(v.total)}</td><td class="right">${inr(v.mtd)}</td></tr>`;
+      const KIND = { same: 'same design', diff: 'same price', ordered: 'ordered by store' };
+      const f = l.ss.family, full = l.req_qty > 0 && f >= l.req_qty;
+      out.push(`<div class="card stack"><div class="row"><h3 class="grow">Stock already at ${esc(l.store_code)} ${esc(l.store_name)}</h3><span class="small">${esc(S.M.meta.sstock_file || '')}${S.M.meta.sstock_loaded ? ', loaded ' + when(S.M.meta.sstock_loaded) : ''}</span></div>
+        <div class="tablewrap"><table class="tight"><thead><tr><th>Article</th><th class="right">Closing</th><th class="right" title="In transit + CLA">In transit</th><th class="right">Total</th><th class="right">MTD sale</th></tr></thead><tbody>
+          ${row(l.article_code, 'this line', l.ss.own, true)}${l.ss.alts.map((x) => row(x.code, KIND[x.kind] || '', x, false)).join('')}
+          ${l.ss.alts.length ? `<tr class="b"><td colspan="3">All alike articles at this store</td><td class="right">${inr(f)}</td><td class="right">${inr(l.ss.familyMtd)}</td></tr>` : ''}</tbody></table></div>
+        <div class="note ${full ? 'warn' : f > 0 ? 'info' : 'good'}">${full ? `The store already holds <b>${inr(f)} pcs</b> of this article and its alternates - at least the ${inr(l.req_qty)} it is asking for. Worth checking with the store before approving.`
+          : f > 0 ? `The store holds ${inr(f)} pcs of this article and its alternates, against ${inr(l.req_qty)} wanted.` : 'The store has no stock of this article or its alternates.'}</div></div>`);
+    }
     if (l.dup_count > 0) {
       out.push(`<div class="card stack"><div class="note bad"><b>Duplicate article in order ${esc(l.order_no)}.</b> ${esc(l.article_code)} is ${esc(dupText(l))}. It is taken once here, with ${inr(l.req_qty)} pcs. Check with the store what it really wants.</div>
         ${ed ? '<div class="row"><button class="btn sm" data-act="dupClear" title="Use once the store has confirmed, or corrected the order in SAP">Checked with the store - remove this mark</button></div>' : ''}</div>`);
@@ -947,14 +977,15 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
     const hasCust = waiting.some((l) => l.customer);
     if (S.wide) {
       body = `<div class="tablewrap"><table><thead><tr><th>Order</th><th>Booked</th><th>Deliver by</th><th>Store</th>${hasCust ? '<th>Customer</th>' : ''}<th class="right">Price wanted</th><th class="right">Disc.</th><th class="right">Qty wanted</th>
-        <th class="right">Approved</th><th class="right">Pending qty</th>${ed ? '<th class="right">Approve qty</th>' : ''}</tr></thead><tbody>
+        <th class="right">Approved</th><th class="right">Pending qty</th>${S.M.hasStoreStock ? '<th class="right" title="Closing stock + in transit at the store, in this article and its alternates">At store<br>(incl. alternates)</th><th class="right">MTD sale</th>' : ''}${ed ? '<th class="right">Approve qty</th>' : ''}</tr></thead><tbody>
         ${waiting.map((l) => `<tr><td>${esc(ref(l))}</td><td>${when(l.order_date)}</td><td>${delCell(l)}</td><td class="w"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}</td>${hasCust ? `<td>${esc(l.customer)}</td>` : ''}
           <td class="right">${inr(l.req_price)}</td><td class="right">${discCell(l)}</td><td class="right">${inr(l.req_qty)}</td><td class="right">${l.approved ? inr(l.approved) : '-'}</td><td class="right b">${inr(l.balance)}</td>
+          ${l.ss ? `<td class="right ${l.ss.family >= l.req_qty ? 'warn b' : ''}" title="${esc(ssTitle(l))}">${inr(l.ss.family)}</td><td class="right">${inr(l.ss.familyMtd)}</td>` : S.M.hasStoreStock ? '<td></td><td></td>' : ''}
           ${ed ? `<td class="right">${input(l)}</td>` : ''}</tr>`).join('')}</tbody></table></div>`;
     } else {
       body = waiting.map((l) => `<div class="ocard" style="cursor:default"><div class="grow"><div class="row"><b class="grow">${esc(l.store_code)} ${esc(l.store_name)}</b><span>Pending qty <b>${inr(l.balance)}</b></span></div>
         <div class="small">${esc(ref(l))} &middot; ${when(l.order_date)}${l.customer ? ' &middot; ' + esc(l.customer) : ''}${l.del_date ? ' &middot; wants ' + when(l.del_date) : ''}</div>
-        ${ed ? `<div class="row" style="margin-top:6px"><span class="grow small">Approve qty</span>${input(l)}</div>` : ''}</div></div>`).join('');
+        ${ssHtml(l)}${ed ? `<div class="row" style="margin-top:6px"><span class="grow small">Approve qty</span>${input(l)}</div>` : ''}</div></div>`).join('');
     }
     return `<div class="back"><button class="btn" data-act="shortUnsel">&#8249; Shortages</button></div>
       <div class="card stack"><div class="row top">${thumb(c, 'm', true)}<div class="grow"><div class="mcname">${esc(a.mc_name || '')} &nbsp;|&nbsp; MRP ${inr(a.mrp)}</div><h2>${esc(c)} &nbsp; ${esc(a.description || '')}</h2>
@@ -1075,6 +1106,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           : `<div class="note info">${M.meta.stock_asof ? 'Not in the latest DC stock report.' : 'No DC stock report is loaded.'}</div>`}
         ${inwards.length ? `<div class="small"><b>Inwards since the stock report:</b>${inwards.slice(0, 8).map((i) => `<br>${when(i.inward_at)} &middot; ${inr(i.qty)} pcs into ${C.LOC_NAME[i.loc] || i.loc}${i.doc_no ? ' &middot; GRN ' + esc(i.doc_no) : ''}${i.site_code ? ' &middot; ' + esc(i.site_code) : ''} <span class="muted">(${esc(i.source_file || '')})</span>`).join('')}${inwards.length > 8 ? `<br>... and ${inwards.length - 8} more` : ''}</div>` : ''}
         ${editor() && locsOn() && M.meta.stock_asof ? `<div><button class="btn sm" data-act="inwardHand" data-code="${esc(code)}" title="Stock of this article received at the DC after the stock report">Add an inward for this article ...</button></div>` : ''}
+        ${d && d.store_total && S.M.hasStoreStock ? `<div class="small"><b>In stores</b> (store stock report): ${inr(d.store_total.closing)} pcs closing stock, ${inr(d.store_total.intransit)} in transit, held by ${inr(d.store_total.stores)} ${plural(d.store_total.stores, 'store')}; ${inr(d.store_total.mtd_sale)} sold this month.</div>` : ''}
         <div class="small">${mp.pending ? `${inr(mp.pending)} pcs still wanted by ${mp.n_stores} ${plural(mp.n_stores, 'store')}. ` : ''}${a.store_stock || a.intransit ? `From the article data sheet: ${inr(a.store_stock || 0)} pcs in stores, ${inr(a.intransit || 0)} in transit${ppo ? `, pending PO ${inr(a.ppo_cm || 0)} this month and ${inr(a.ppo_nm || 0)} next` : ''}.` : ''}</div>
         ${strip('Same design (tap to open)', al.same)}${strip('Same price, different design (tap to open)', al.diff)}
         <h3>Deal check</h3>
@@ -1126,13 +1158,13 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     const step = (title, text, btns, status) => `<div class="card step"><div class="row wrap"><h2 class="grow">${title}</h2>${btns}</div><p class="small">${text}</p>${status ? `<div class="stepstatus">${status}</div>` : ''}</div>`;
     const b = (label, act, extra, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" ${extra || ''}>${label}</button>`;
     const left = [];
-    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
+    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
     if (ed) {
-      left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"'), last('Diwali article master')));
+      left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"') + b('Template', 'template', 'data-kind="master"', 'ghost'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
-      left.push(step('3 &nbsp;Full article data (second file)', 'The complete article sheet (DSR article-wise). Used for any article that is ordered but is not in the Diwali master, and for status, pending PO and store stock of all articles. It never overwrites what the Diwali master says.', b('Upload file ...', 'pick', 'data-kind="data"'), last('Full article data')));
-      left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files: upload each one, they are merged by store code.', b('Upload file ...', 'pick', 'data-kind="stores"'), last('Store list')));
-      left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, and the balance DC quantity is worked out again. For stock that arrives in between, use Inwards below instead of loading the whole report again.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary'), last('DC stock')));
+      left.push(step('3 &nbsp;Full article data (second file)', 'The complete article sheet (DSR article-wise). Used for any article that is ordered but is not in the Diwali master, and for status, pending PO and store stock of all articles. It never overwrites what the Diwali master says.', b('Upload file ...', 'pick', 'data-kind="data"') + b('Template', 'template', 'data-kind="data"', 'ghost'), last('Full article data')));
+      left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files: upload each one, they are merged by store code.', b('Upload file ...', 'pick', 'data-kind="stores"') + b('Template', 'template', 'data-kind="stores"', 'ghost'), last('Store list')));
+      left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, and the balance DC quantity is worked out again. For stock that arrives in between, use Inwards below instead of loading the whole report again.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary') + b('Template', 'template', 'data-kind="stock"', 'ghost'), last('DC stock')));
       if (locsOn()) {
         const loads = M.inwardLoads.filter((x) => x.counted > 0), inTot = inwardTotal(M), allIn = loads.reduce((t, x) => t + x.counted, 0);
         const st = !M.meta.stock_asof ? '<span class="small warn">Load the DC stock report first.</span>'
@@ -1141,11 +1173,16 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
             <div class="loads">${loads.map((x) => `<div class="m"><span class="grow">${when(x.at)} &middot; ${esc(x.file || '')} &middot; ${inr(x.entries)} ${plural(x.entries, 'entry', 'entries')} &middot; <b>${inr(x.counted)} pcs</b>${x.counted < x.qty ? ` <span class="small">(${inr(x.qty - x.counted)} pcs from before the report are not counted)</span>` : ''}<span class="small"> &middot; ${esc(x.by_name || '')}</span></span>
               <button class="btn sm danger" data-act="inwardRemove" data-batch="${x.batch}">Remove</button></div>`).join('')}</div>`;
         left.push(step('6 &nbsp;Inwards after the stock report', 'Stock received at the DC after the report above was downloaded. Upload the inward (GRN) list or type one in, and it is added to the DC stock straight away - the full stock report does not have to be loaded again. <b>Total DC qty = stock report + inwards. Balance DC qty = that minus what is approved.</b> When a newer stock report is loaded, the inwards it already contains stop being added by themselves.',
-          b('Upload inwards ...', 'pick', 'data-kind="inward"', 'primary') + b('Add one by hand ...', 'inwardHand'), st));
+          b('Upload inwards ...', 'pick', 'data-kind="inward"', 'primary') + b('Add one by hand ...', 'inwardHand') + b('Template', 'template', 'data-kind="inward"', 'ghost'), st));
         const aside = C.LOCATIONS.filter(([k]) => !M.locOrder.includes(k)).map(([, t]) => t);
         left.push(step('DC locations: which one is used first', `Every approval is taken from a DC location. When you approve without choosing, the stock is taken in this order: <b>${M.locOrder.map((k, i) => `${i + 1}. ${C.LOC_NAME[k]}`).join(' &nbsp; ')}</b>.${aside.length ? ` Only when you choose it: <b>${aside.map(esc).join(', ')}</b>.` : ''} On any approval you can choose the locations yourself (Pending orders &gt; Choose), or change them afterwards (Details &gt; Change locations).`, b('Change the order ...', 'locOrder')));
       }
-      left.push(step('7 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary'), last('Orders')));
+      if (ssOn()) {
+        const ssSt = M.meta.sstock_batch ? `<span class="small">Last loaded ${when(M.meta.sstock_loaded)} (${esc(M.meta.sstock_file || '')}): ${inr(M.counts.store_stock_rows || 0)} store-article rows</span>` : '<span class="small warn">Not loaded yet</span>';
+        left.push(step('7 &nbsp;Stock at the stores', 'The store-wise stock report (closing stock, in transit, CLA and sales by store and article - the SAP download as it comes, even the large web-page .xls). Shown on every order line: closing stock, in transit (in transit + CLA), the total, and the sale this month - for the ordered article and for its alternates, so you can see when a store already holds stock. Each upload replaces the previous one.',
+          b('Upload store stock ...', 'pick', 'data-kind="storestock"') + b('Template', 'template', 'data-kind="storestock"', 'ghost'), ssSt));
+      }
+      left.push(step('8 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary') + b('Template', 'template', 'data-kind="orders"', 'ghost'), last('Orders')));
     }
     left.push(step('Export everything', 'One Excel file with every order line (pending, approved, dispatched, rejected), every allocation, stock by location and the activity log. To export only the pending orders, the approved orders or the shortages, use the Export button on that screen.', b('Export to Excel', 'export')));
     if (M.counts.deleted) left.push(step('Deleted order lines', `${inr(M.counts.deleted)} order ${plural(M.counts.deleted, 'line')} deleted from the Orders screen. They stay out when the SAP export is uploaded again. ${ed ? 'You can bring any of them back.' : ''}`, b('Show deleted lines', 'showDeleted')));
@@ -1174,7 +1211,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
 
   /* ---------- reading files ---------- */
   const chunks = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
-  const TITLES = { master: 'Diwali article master', data: 'Full article data', stores: 'Stores', stock: 'DC stock report', orders: 'Orders', inward: 'Inwards' };
+  const TITLES = { master: 'Diwali article master', data: 'Full article data', stores: 'Stores', stock: 'DC stock report', orders: 'Orders', inward: 'Inwards', storestock: 'Stock at the stores' };
   const firstFew = (notes, n) => (notes.length ? '\n\n' + notes.slice(0, n).join('\n') + (notes.length > n ? `\n... and ${notes.length - n} more` : '') : '');
 
   async function importFile(kind, file, quiet) {
@@ -1222,6 +1259,23 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') + (gone ? `\nDeleted by you earlier (not added again): ${inr(gone)}` : '') +
           (dupOrders.length ? `\n\nDUPLICATE ARTICLE in ${dupOrders.length} ${plural(dupOrders.length, 'order')}: ${dupOrders.join(', ')}\nThe same article is entered more than once in the order. Each is taken once${S.M.schema >= 3 ? ' and marked on the Orders screen (filter: "Duplicate article in the order")' : ''}:` + firstFew(shaped.repeats, 15).replace(/^\n\n/, '\n') +
             (S.M.schema >= 3 ? '' : '\n(To keep these marked on the Orders screen, run the newest supabase-setup.sql once in Supabase. Your data stays as it is.)') : '') + firstFew(Array.from(new Set(notes)), 12);
+      } else if (kind === 'storestock') {
+        if (!ssOn()) throw new Error('Stock at the stores needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
+        prog.set('Reading the store stock ...'); await tick();
+        const shaped = C.shape.storestock(rows), parts = chunks(shaped, 5000);
+        if (!shaped.length) throw new Error('No store stock was found in this file.');
+        const batch = await A.rpc('sstock_begin');
+        for (let i = 0; i < parts.length; i++) {
+          prog.set(`Saving ${inr(Math.min((i + 1) * 5000, shaped.length))} of ${inr(shaped.length)} store-article rows ...`);
+          await A.rpc('sstock_chunk', { p_batch: batch, p_rows: parts[i] });
+        }
+        const r = await A.rpc('sstock_commit', { p_batch: batch, p_file: file.name });
+        const ordering = new Set(S.M.lines.map((l) => l.store_code)), inFile = new Set(shaped.map((x) => x.s));
+        const missing = Array.from(ordering).filter((x) => !inFile.has(x));
+        const has = (f) => rows.fields.includes(f);
+        msg = `${where}Rows read: ${inr(rows.length)}\nStores: ${inr(r.stores)}\nArticles: ${inr(r.articles)}\nStore-article rows saved: ${inr(r.rows)}\n\nUsed: closing stock (CL_STK_Q)${has('ss_it') ? ', in transit (INTRANSIT_Q)' : ''}${has('ss_cla') ? ' + CLA (CLA_STK_Q)' : ''}${has('ss_mtd') ? ', sale this month (MTD_SALE_Q)' : ''}. Other sale columns are not used.` +
+          (!has('ss_mtd') ? '\n(No MTD sale column was found in this file.)' : '') +
+          (missing.length ? `\n\nStores with orders that are not in this file (shown as no stock): ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? ' ...' : ''}` : '') + '\n\nThis replaces the store stock loaded before.';
       } else if (kind === 'inward') {
         msg = await importInward(rows, file, prog, quiet);
         if (msg === null) { prog.close(); return; }
@@ -1400,11 +1454,27 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       const files = [];
       for (const n of list) files.push(await get('images/' + n).then((f) => new File([f], n)));
       await importImages(files, true);
-      for (const [kind, name] of [['data', '2_Full_Article_Data.xlsx'], ['stores', '3_Store_Emails.xlsx'], ['stores', '4_Lead_Time.xlsx'], ['stock', '5_DC_Stock.xlsx'], ['orders', '6_Orders_Batch1.xlsx']]) {
+      for (const [kind, name] of [['data', '2_Full_Article_Data.xlsx'], ['stores', '3_Store_Emails.xlsx'], ['stores', '4_Lead_Time.xlsx'], ['stock', '5_DC_Stock.xlsx'], ['storestock', '9_Store_Stock.xls'], ['orders', '6_Orders_Batch1.xlsx']]) {
+        if (kind === 'storestock' && !ssOn()) continue;
         if ((await importFile(kind, await get(name), true)) === false) return;
       }
       await tell('Test data loaded', `${inr(S.M.counts.master)} articles in the Diwali range (${inr(S.M.counts.articles)} on file), ${inr(Object.keys(S.M.stores).length)} stores, ${inr(S.M.lines.length)} order lines.\n\nTo see duplicates being skipped, upload 7_Orders_Batch2.xlsx (in the testdata folder of the download) under Orders.\nTo see inwards being added to the DC stock, upload 8_Inwards_After_Stock.xlsx under Inwards.`);
     } catch (e) { await tell('Test data was not loaded', e.message); }
+  }
+  /* An Excel template for an upload: the headings exactly as the app reads them, an example row, and what goes in each column. */
+  async function downloadTemplate(kind) {
+    const t = C.TEMPLATES[kind]; if (!t) return;
+    try {
+      const X = await XL(), wb = X.utils.book_new();
+      const ws = X.utils.aoa_to_sheet([t.cols.map((c) => c[0]), t.cols.map((c) => c[3])]);
+      ws['!cols'] = t.cols.map((c) => ({ wch: Math.max(12, String(c[0]).length + 2, String(c[3]).length + 2) }));
+      X.utils.book_append_sheet(wb, ws, t.sheet);
+      const help = X.utils.aoa_to_sheet([['Column', 'Must be there?', 'What to put']].concat(t.cols.map((c) => [c[0], c[1] || 'No', c[2]])).concat([[], ['Keep the headings exactly as they are. Columns can be in any order; extra columns are ignored. Replace the example row with your data.']]));
+      help['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 90 }];
+      X.utils.book_append_sheet(wb, help, 'How to fill');
+      saveBlob(new Blob([X.write(wb, { type: 'array', bookType: 'xlsx' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), t.file + '.xlsx');
+      toast('Template downloaded');
+    } catch (e) { tell('Template', e.message); }
   }
   /* ---------- Excel files ---------- */
   const r1 = (x) => (x == null ? null : Math.round(x * 1000) / 10);
@@ -1412,7 +1482,8 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     'Booked By', 'Contact Number', 'Article ordered by store', 'State', 'City', 'Buyer', 'Category', 'In Diwali Range', 'Article Status', 'Price given by store', 'Discount %', 'Margin % after discount', 'Pk size',
     'Approved qty (as entered)', 'Final Qty to Store', 'Approved from (DC location)', 'Order Value', 'Offered (awaiting store)', 'Dispatched Qty', 'Pending Qty',
     'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'Total DC Qty (stock report + inwards)', 'of which inwards since the report', 'Balance DC Qty']
-    .concat(C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending PO', 'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']);
+    .concat(C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending PO', 'Store Closing Stock', 'Store In Transit (incl. CLA)', 'Store Total Stock', 'Store MTD Sale', 'Store Stock in Alternates', 'Alternates Held by Store',
+      'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']);
   function orderRow(l, ex, byLine) {
     const M = S.M, mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), p = M.pos[l.article_code] || NOPOS, a = M.articles[l.article_code] || {};
     return [C.STATUS_LABEL[l.status], l.store_code, l.store_name, l.order_no, l.mc_code, l.mc_name, l.article_code, l.description, +l.mrp, l.req_qty, l.order_date, l.del_date || '', +l.req_price,
@@ -1420,7 +1491,9 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       r1(l.discount), r1(l.margin), l.pack, mine.reduce((t, x) => t + (x.entered_qty == null ? x.qty : x.entered_qty), 0), l.approved, C.locText(l.locs), l.value, l.offered, l.dispatched, l.balance,
       l.status === 'REJECTED' ? (l.reject_reason || '') : (l.balance_closed && l.open_qty ? 'Pending qty closed' : (l.supplied && l.supplied !== l.article_code ? 'Given in ' + l.supplied : '')),
       l.dup_count ? `Entered ${Math.abs(l.dup_count)} times (qty ${l.dup_qty || ''}), taken once${l.dup_count < 0 ? ' - checked with the store' : ''}` : '', ex.approvers[l.id] || '', l.lead_time, l.dc, l.allocate_by || '', l.late ? 'Yes' : '',
-      p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0), l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
+      p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0),
+      l.ss ? l.ss.own.closing : '', l.ss ? l.ss.own.transit : '', l.ss ? l.ss.own.total : '', l.ss ? l.ss.own.mtd : '', l.ss ? l.ss.altTotal : '', l.ss ? l.ss.alts.filter((x) => x.total > 0).map((x) => `${x.code} (${x.total})`).join(', ') : '',
+      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
   }
   const STOCK_HEAD = ['MC Name', 'MRP', 'Article', 'Description', 'Buyer', 'Same design group', 'Same price group', 'Pack', 'Stock report qty (Total MSA)', 'Inwards since the report', 'Total DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => t + ' (report + inwards)'), ['Allocated to orders', 'Balance DC Qty'], C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO', 'Balance in same design', 'Balance in other designs']);
@@ -1769,7 +1842,8 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       if (!order.length) return tell('Not saved', 'Keep at least one location that is used automatically.');
       run(() => A.rpc('set_loc_order', { p_order: order.join(',') }), 'Order of locations saved');
     },
-    pick: (el) => { pending = { kind: el.dataset.kind }; const i = $('#file-in'); i.accept = '.xlsx,.xlsm,.xls,.csv,.txt'; i.value = ''; i.click(); },
+    template: (el) => downloadTemplate(el.dataset.kind),
+    pick: (el) => { pending = { kind: el.dataset.kind }; const i = $('#file-in'); i.accept = '.xlsx,.xlsm,.xls,.csv,.txt,.htm,.html,.mht,.mhtml'; i.value = ''; i.click(); },
     pickImages: () => { const i = $('#img-in'); i.value = ''; i.click(); },
     pickFolder: () => { const i = $('#dir-in'); i.value = ''; i.click(); },
     export: () => exportExcel(),
