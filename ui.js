@@ -534,27 +534,28 @@
   /* What can be approved on this line right now, in full packs (0 = nothing). */
   const approvable = (l) => Math.max(0, Math.min(C.roundPack(l.open_qty, l.pack), C.floorPack(C.freeOf(S.M, l.article_code), l.pack)));
   /* Which columns a list shows: the group heading already carries some of them. */
-  /* Which columns a list shows. Every order line is two rows: a full-width strip that names the product on one line
-     (article code, MC, description, MRP, pack), and the numbers underneath. The group heading already carries some of it. */
+  /* Which columns a list shows. One row per order line: the article (code in bold, description in small print under it),
+     then the numbers in large type, each in its own clearly named column. The group heading already carries some details. */
   function columnsFor(view, hide, ed) {
     const h = new Set(hide.split(' '));
-    return { chk: ed && view !== 'approved', so: !h.has('so'), strip: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
+    return { chk: ed && view !== 'approved', so: !h.has('so'), art: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
       ss: view !== 'approved' && !!S.M.hasStoreStock };
   }
   function tableHead(view, c, ed) {
-    const W = (w) => `<col style="width:${w}">`;
-    let cols = (c.chk ? W('40px') : '') + (c.so ? W('190px') : '') + W('122px') + W('92px') + W('112px');
-    let th = (c.chk ? '<th></th>' : '') + (c.so ? '<th>Store / order</th>' : '') + '<th>Booked / delivery</th><th class="right">Qty wanted</th><th class="right">Price wanted</th>';
+    const W = (w) => `<col style="width:${w}">`, TH = (t, sub, cls) => `<th class="${cls || ''}">${t}${sub ? `<span class="thsub">${sub}</span>` : ''}</th>`;
+    let cols = (c.chk ? W('40px') : '') + (c.so ? W('170px') : '') + (c.art ? '<col>' : '') + (c.so ? '' : W('104px')) + W('96px') + W('110px');
+    let th = (c.chk ? '<th></th>' : '') + (c.so ? TH('Store / order', 'booked, delivery') : '') + (c.art ? TH('Article') : '') + (c.so ? '' : TH('Booked', 'delivery')) +
+      TH('Qty wanted', 'pcs', 'right') + TH('Price wanted', 'Rs per pc', 'right');
     if (view === 'approved') {
-      cols += W('112px') + (locsOn() ? W('190px') : '') + W('112px') + '<col>' + W(ed && locsOn() ? '124px' : '84px');
-      th += `<th class="right">Approved qty</th>${locsOn() ? '<th>Taken from (DC location)</th>' : ''}<th class="right">Value (Rs)</th><th>Status</th><th></th>`;
+      cols += W('110px') + (locsOn() ? W('170px') : '') + W('116px') + W('124px') + W(ed && locsOn() ? '120px' : '84px');
+      th += TH('Approved', 'pcs', 'right') + (locsOn() ? TH('Taken from', 'DC location') : '') + TH('Value', 'Rs', 'right') + TH('Status') + '<th></th>';
     } else {
-      cols += W('100px') + (c.ss ? W('170px') : '') + '<col>' + W(ed ? '200px' : '84px');
-      th += `<th class="right">Balance DC qty</th>${c.ss ? '<th>At this store<br><span class="thsub">closing + in transit</span></th>' : ''}<th>Status</th><th>${ed ? 'Approve qty' : ''}</th>`;
+      cols += W('104px') + (c.ss ? W('112px') + W('92px') : '') + W(ed ? '214px' : '130px');
+      th += TH('Balance DC qty', 'free to approve', 'right') + (c.ss ? TH('Store stock', 'closing + in transit', 'right') + TH('Store sale', 'this month', 'right') : '') + (ed ? TH('Approve', 'pcs') : TH('Status'));
     }
+    if (!c.art && !c.so) cols = cols.replace(W('104px'), '<col>');                // grouped by article: let the date column take the spare room
     return `<colgroup>${cols}</colgroup><thead><tr>${th}</tr></thead>`;
   }
-  const colCount = (view, c) => (c.chk ? 1 : 0) + (c.so ? 1 : 0) + 3 + (view === 'approved' ? 3 + (locsOn() ? 1 : 0) + 1 : 2 + (c.ss ? 1 : 0) + 1);
   /* Stock at the ordering store: the article itself, and what its alternates add. */
   function ssHtml(l, compact) {
     if (!l.ss) return '';
@@ -564,10 +565,11 @@
     return `<div class="small sstk ${l.req_qty > 0 && l.ss.family >= l.req_qty ? 'full' : ''}" title="${esc(ssTitle(l))}">${bits.join(compact ? ' &middot; ' : ' &middot; ')}</div>`;
   }
   function ssCell(l) {
-    if (!l.ss) return '<td></td>';
-    const o = l.ss.own, full = l.req_qty > 0 && l.ss.family >= l.req_qty;
-    return `<td class="sscell ${full ? 'full' : ''}" title="${esc(ssTitle(l))}"><div><b class="${o.total > 0 ? '' : 'muted'}">${inr(o.total)}</b>${o.transit ? ` <span class="small">(${inr(o.closing)} + ${inr(o.transit)} in transit)</span>` : ''}</div>
-      <div class="small">MTD sale <b>${inr(o.mtd)}</b></div>${l.ss.altTotal > 0 ? `<div class="small">alternates <b>${inr(l.ss.altTotal)}</b></div>` : ''}</td>`;
+    if (!l.ss) return '<td></td><td></td>';
+    const o = l.ss.own, full = l.req_qty > 0 && l.ss.family >= l.req_qty, alt = l.ss.altTotal;
+    return `<td class="big right ${full ? 'warnc' : ''}" title="${esc(ssTitle(l))}"><b class="${o.total > 0 ? '' : 'zero'}">${inr(o.total)}</b>
+        ${o.transit ? `<div class="small">${inr(o.transit)} in transit</div>` : ''}${alt > 0 ? `<div class="small ${full ? 'warn b' : ''}">+ ${inr(alt)} in alternates</div>` : ''}</td>
+      <td class="big right"><b class="${(o.mtd || l.ss.familyMtd) ? '' : 'zero'}">${inr(o.mtd)}</b>${l.ss.familyMtd > o.mtd ? `<div class="small">+ ${inr(l.ss.familyMtd - o.mtd)} alternates</div>` : ''}</td>`;
   }
   function ssTitle(l) {
     const o = l.ss.own, L = [`Stock at ${l.store_code}: closing ${o.closing}, in transit (incl. CLA) ${o.transit}, sale this month ${o.mtd}`];
@@ -586,33 +588,33 @@
   }
   function lineRow(l, view, c, ed) {
     const M = S.M, o = sec(view), free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l), tags = lineTags(l);
-    const price = `<b>${inr(l.req_price)}</b>${l.price_missing ? '<div class="small">not given,<br>MRP used</div>' : l.discount > 0.0005 ? `<div class="small warn nowrap">${pct(l.discount)} below MRP</div>` : ''}`;
-    const chk = c.chk ? `<td class="chk" ${c.strip ? 'rowspan="2"' : ''}><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : '';
-    /* the product, on one line */
-    const strip = !c.strip ? '' : `<tr class="prod">${chk}<td colspan="${colCount(view, c) - (c.chk ? 1 : 0)}" class="prod ${l.dup_count > 0 ? 'dup' : ''}"><div class="pline">
-      <span class="pcode">${esc(l.article_code)}</span>${c.mcIn ? `<span class="pmc">${esc(l.mc_name || 'MC not known')}</span>` : ''}<span class="pdesc">${esc(l.description || '(article details not on file)')}</span>
-      ${c.mrpIn ? `<span class="pmrp">MRP <b>${inr(l.mrp)}</b></span>` : ''}<span class="ppack">pack of ${l.pack}</span>${tags ? `<span class="ptags">${tags}</span>` : ''}</div></td></tr>`;
-    const lead = (c.strip ? '' : chk) + (c.so ? `<td class="so"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}<div class="ordno">${esc(ref(l))}</div></td>` : '') +
-      `<td class="dates"><div><i>Booked</i> ${when(l.order_date) || '-'}</div><div class="${l.late ? 'bad b' : l.tight ? 'warn b' : ''}"><i>Delivery</i> ${l.del_date ? when(l.del_date) : '-'}</div></td>` +
-      `<td class="right num"><b>${inr(l.req_qty)}</b>${c.strip ? '' : `<div class="small">pack of ${l.pack}</div>${tags ? `<div>${tags}</div>` : ''}`}</td><td class="right num">${price}</td>`;
+    const dates = `<div class="dt"><i>Booked</i> ${when(l.order_date) || '-'}</div><div class="dt ${l.late ? 'bad b' : l.tight ? 'warn b' : ''}"><i>Delivery</i> ${l.del_date ? when(l.del_date) : '-'}</div>`;
+    const meta = [c.mcIn ? esc(l.mc_name || '') : '', c.mrpIn ? 'MRP ' + inr(l.mrp) : ''].filter(Boolean).join(' &middot; ');
+    const cells = (c.chk ? `<td class="chk"><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : '') +
+      (c.so ? `<td class="so"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}<div class="ordno">${esc(ref(l))}</div>${dates}</td>` : '') +
+      (c.art ? `<td class="art ${l.dup_count > 0 ? 'dup' : ''}"><div class="acode">${esc(l.article_code)}</div><div class="adesc">${esc(l.description || '(article details not on file)')}</div>${meta ? `<div class="ameta">${meta}</div>` : ''}${tags ? `<div class="atags">${tags}</div>` : ''}</td>` : '') +
+      (c.so ? '' : `<td class="dates">${dates}${c.art || !tags ? '' : `<div class="atags">${tags}</div>`}</td>`) +
+      `<td class="big right"><b>${inr(l.req_qty)}</b>${l.pack > 1 ? `<div class="small">packs of ${l.pack}</div>` : ''}</td>` +
+      `<td class="big right"><b>${inr(l.req_price)}</b><div class="small ${l.discount > 0.0005 && !l.price_missing ? 'warn' : ''}">${l.price_missing ? 'not given, MRP used' : l.discount > 0.0005 ? pct(l.discount) + ' below MRP' : 'at MRP'}</div></td>`;
     const details = `<button class="btn link" data-act="sel" data-id="${l.id}" title="Stock by location, alternates, history${ed ? ', reject, cancel' : ''}">Details</button>`;
-    const wrap = (cls, nums) => `<tbody class="ol pick ${S.o.sel === l.id ? 'sel' : ''} ${cls}" data-act="sel" data-id="${l.id}">${strip}<tr class="nums">${nums}</tr></tbody>`;
+    const wrap = (cls, rest) => `<tbody class="ol pick ${S.o.sel === l.id ? 'sel' : ''} ${cls}" data-act="sel" data-id="${l.id}"><tr>${cells}${rest}</tr></tbody>`;
     if (view === 'approved') {
       const more = [l.dispatched ? `${inr(l.dispatched)} dispatched` : '', l.balance ? `${inr(l.balance)} still pending` : ''].filter(Boolean).join(', ');
-      return wrap(l.status === 'REJECTED' ? 'rej' : '', `${lead}
-        <td class="right num"><b class="${l.approved ? 'good' : 'muted'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
+      return wrap(l.status === 'REJECTED' ? 'rej' : '', `<td class="big right"><b class="${l.approved ? 'good' : 'zero'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
         ${locsOn() ? `<td class="from">${esc(C.locText(l.locs)) || '<span class="muted">-</span>'}</td>` : ''}
-        <td class="right num">${l.approved ? inr(l.value) : '-'}</td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
+        <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
         <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() ? '>Details / change<' : '>Details<')}</div></td>`);
     }
     const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack);
     const dflt = top ? (need <= top ? l.open_qty : top) : 0, f = C.roundPack(dflt, l.pack);
-    const prev = !dflt ? '' : need > top ? `<span class="warn">only ${inr(top)} of ${inr(l.open_qty)} can be given</span>` : l.pack > 1 ? `= <b>${inr(f)} pcs</b> (${inr(f / l.pack)} ${plural(f / l.pack, 'pack')})` : '';
-    const done = l.approved ? `<div class="small"><b class="good">${inr(l.approved)} approved</b>${l.balance ? `, ${inr(l.balance)} pending` : ''}</div>` : '';
-    const last = !ed ? `<td class="acts">${details}</td>` : `<td class="apcell">${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" value="${dflt}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}"><button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
-        : canAct ? '<span class="small bad">No balance at DC</span>' : ''}
+    const prev = !dflt ? '' : need > top ? `<span class="warn">only ${inr(top)} of ${inr(l.open_qty)} can be given</span>` : f !== dflt ? `rounded up to <b>${inr(f)} pcs</b> (${inr(f / l.pack)} ${plural(f / l.pack, 'pack')})` : '';
+    const state = l.status === 'PENDING' && !note ? '' : `<div class="rowstate">${pill(l.status)}${l.approved ? ` <span class="small"><b class="good">${inr(l.approved)} approved</b>${l.balance ? `, ${inr(l.balance)} pending` : ''}</span>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div>`;
+    const bal = `<td class="big right ${short ? 'badc' : ''}"><b>${inr(free)}</b>${short ? `<div class="small">short of ${inr(l.balance)}</div>` : ''}</td>`;
+    const last = !ed ? `<td>${pill(l.status)}${l.approved ? `<div class="small"><b class="good">${inr(l.approved)} approved</b></div>` : ''}${note ? `<div class="small">${note}</div>` : ''}<div class="rowlinks">${details}</div></td>`
+      : `<td class="apcell">${state}${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" value="${dflt}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}"><button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
+        : canAct ? '<div class="small bad">No balance at DC</div>' : ''}
         <div class="rowlinks">${details.replace('>Details<', canAct && !top && C.allAlternates(M, l.article_code).length ? '>See alternates<' : '>Details<')} <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker">Delete</button></div></td>`;
-    return wrap('', `${lead}<td class="right num ${short ? 'bad b' : ''}">${inr(free)}</td>${c.ss ? ssCell(l) : ''}<td>${pill(l.status)}${done}${note ? `<div class="small">${note}</div>` : ''}</td>${last}`);
+    return wrap('', bal + (c.ss ? ssCell(l) : '') + last);
   }
   function lineCard(l, view) {                       // the same line on a phone
     const free = C.freeOf(S.M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l), tags = lineTags(l);
@@ -915,7 +917,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
   function rowPreview(i) {                           // under the Approve box of a row: what the typed quantity becomes
     const el = $('.rowprev', i.closest('td')); if (!el) return;
     const q = Math.round(+i.value || 0), pk = +i.dataset.pack || 1, f = C.roundPack(q, pk), max = +i.max || 0;
-    el.innerHTML = !q ? '' : f > max ? `<span class="bad">at most ${inr(max)}</span>` : pk > 1 ? `= <b>${inr(f)} pcs</b> (${inr(f / pk)} ${plural(f / pk, 'pack')})` : '';
+    el.innerHTML = !q ? '' : f > max ? `<span class="bad">at most ${inr(max)}</span>` : f !== q ? `rounded up to <b>${inr(f)} pcs</b> (${inr(f / pk)} ${plural(f / pk, 'pack')})` : '';
     const fr = $('.rowfrom', i.closest('td')), l = S.M.byId[+i.dataset.id];
     if (fr && l) fr.innerHTML = q && f <= max ? fromHtml(l.article_code, f) : '';
   }

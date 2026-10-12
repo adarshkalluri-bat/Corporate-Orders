@@ -275,3 +275,21 @@ tbody.ol.sel td { background: var(--select); } tbody.ol.pick { cursor: pointer; 
 .otable tbody.rej td { color: #9A95B5; }
 .otable td.sscell { font-size: 14px; line-height: 1.35; } .otable td.sscell.full, .otable td.sscell.full b { color: var(--warn); }
 .thsub { font-weight: 400; color: var(--muted); }
+/* ---- order lines: plain rows, numbers first ---- */
+.otable th { font-size: 12.5px; color: #3E3863; font-weight: 700; vertical-align: bottom; }
+.otable th .thsub { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+.otable tbody.ol > tr > td { padding: 12px 8px; vertical-align: top; border-bottom: 1px solid #ECE6F8; }
+.otable tbody.ol:nth-of-type(even) > tr > td { background: #FCFBFF; }
+.otable td.big { white-space: nowrap; } .otable td.big > b { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink); line-height: 1.15; }
+.otable td.big .small { font-size: 11.5px; white-space: normal; margin-top: 2px; }
+.otable td.big b.zero { color: #B6B0CF; font-weight: 600; }
+.otable td.badc > b, .otable td.badc .small { color: var(--bad); } .otable td.warnc > b { color: var(--warn); }
+.otable td.art .acode { font-size: 15.5px; font-weight: 800; letter-spacing: .2px; }
+.otable td.art .adesc { font-size: 12px; color: #6E6890; margin-top: 2px; line-height: 1.3; overflow-wrap: anywhere; }
+.otable td.art .ameta { font-size: 11.5px; color: #3B2A8F; font-weight: 600; margin-top: 2px; }
+.otable td.art .atags, .otable td.dates .atags { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+.otable td.art.dup { box-shadow: inset 4px 0 0 var(--bad); }
+.otable td.dates .dt, .otable td.so .dt { font-size: 12.5px; white-space: nowrap; } .otable .dt i { font-style: normal; display: inline-block; width: 50px; font-size: 11px; color: var(--muted); }
+.otable td.so .dt { margin-top: 2px; }
+.otable .rowstate { margin-bottom: 6px; } .otable td.chk { padding-top: 14px; }
+.otable .rowprev:empty { display: none; } .otable .apcell .rowloc { margin-top: 3px; }
