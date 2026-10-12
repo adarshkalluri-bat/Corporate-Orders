@@ -18,7 +18,7 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 8;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 9;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -393,7 +393,7 @@
       if (age > 12) items.push(['warn', `DC stock report is ${Math.round(age)} hours old`, editor() ? go('Upload new', { view: 'data' }) : '']);
     }
     const parts = [['Approved', sum(live, (l) => l.approved), '#7FDDB5'], ['Pending, not yet approved', sum(live, (l) => l.balance), '#C9C2EA'],
-      ['Will not be supplied', sum(live.filter((l) => l.balance_closed), (l) => l.open_qty), '#FFC98A'], ['Rejected', sum(by.REJECTED, (l) => l.req_qty), '#FF9DBB']];
+      ['Rejected', sum(by.REJECTED, (l) => l.req_qty), '#FF9DBB']];
     const reqAll = sum(lines, (l) => l.req_qty);
     /* discount and margin */
     const mrow = (name, m) => `<tr><td>${name}</td><td class="right">${inr(m.mrpV)}</td><td class="right b">${inr(m.val)}</td>
@@ -556,6 +556,15 @@
   }
   /* What can be approved on this line right now, in full packs (0 = nothing). */
   const approvable = (l) => Math.max(0, Math.min(C.roundPack(l.open_qty, l.pack), C.floorPack(C.freeOf(S.M, l.article_code), l.pack)));
+  /* The most that can be approved on a line: whatever the DC has, in full packs - even more than the store wants
+     (the app warns first). Before database version 9 the limit was the quantity the store wants. */
+  const canGive = (l) => Math.max(0, S.M.schema >= 9 ? C.floorPack(C.freeOf(S.M, l.article_code), l.pack) : approvable(l));
+  /* Asks before approving more than the store wants. f = the quantity in full packs. Resolves true to go ahead. */
+  async function overOk(l, f) {
+    const want = C.roundPack(l.open_qty, l.pack);
+    if (f <= want) return true;
+    return confirmBox('More than the store wants', `${l.store_code} ${l.store_name}, order ${l.order_no}\n${l.article_code} ${l.description}\n\nThe store wants ${inr(l.open_qty)} pcs${l.approved ? ` more (${inr(l.approved)} already approved)` : ''}.\nYou are approving ${inr(f)} pcs - ${inr(f - l.open_qty)} pcs more than wanted.\n\nApprove ${inr(f)} pcs anyway?`, `Approve ${inr(f)} pcs`);
+  }
   /* Which columns a list shows: the group heading already carries some of them. */
   /* Which columns a list shows. One row per order line: the article (code in bold, description in small print under it),
      then the numbers in large type, each in its own clearly named column. The group heading already carries some details. */
@@ -630,13 +639,13 @@
         <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
         <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() ? '>Details / change<' : '>Details<')}</div></td>`);
     }
-    const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack);
+    const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack), maxQ = canAct ? canGive(l) : 0;
     const dflt = top ? (need <= top ? l.open_qty : top) : 0, f = C.roundPack(dflt, l.pack);
     const prev = !dflt ? '' : need > top ? `<span class="warn">only ${inr(top)} of ${inr(l.open_qty)} can be given</span>` : f !== dflt ? `rounded up to <b>${inr(f)} pcs</b> (${inr(f / l.pack)} ${plural(f / l.pack, 'pack')})` : '';
     const state = l.status === 'PENDING' && !note ? '' : `<div class="rowstate">${pill(l.status)}${l.approved ? ` <span class="small"><b class="good">${inr(l.approved)} approved</b>${l.balance ? `, ${inr(l.balance)} pending` : ''}</span>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div>`;
     const bal = `<td class="big right ${short ? 'badc' : ''}"><b>${inr(free)}</b>${short ? `<div class="small">short of ${inr(l.balance)}</div>` : ''}</td>`;
     const last = !ed ? `<td>${pill(l.status)}${l.approved ? `<div class="small"><b class="good">${inr(l.approved)} approved</b></div>` : ''}${note ? `<div class="small">${note}</div>` : ''}<div class="rowlinks">${details}</div></td>`
-      : `<td class="apcell">${state}${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" value="${dflt}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}">${priceOn() ? `<input class="qty rowp" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-id="${l.id}" data-asked="${l.req_price}" title="Price per piece to approve (the store asked Rs ${l.req_price})" aria-label="Price to approve for ${esc(l.article_code)}">` : ''}<button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
+      : `<td class="apcell">${state}${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${maxQ}" value="${dflt}" data-want="${l.open_qty}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}">${priceOn() ? `<input class="qty rowp" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-id="${l.id}" data-asked="${l.req_price}" title="Price per piece to approve (the store asked Rs ${l.req_price})" aria-label="Price to approve for ${esc(l.article_code)}">` : ''}<button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
         : canAct ? '<div class="small bad">No balance at DC</div>' : ''}
         <div class="rowlinks">${details.replace('>Details<', canAct && !top && C.allAlternates(M, l.article_code).length ? '>See alternates<' : '>Details<')} <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker">Delete</button></div></td>`;
     return wrap('', bal + (c.ss ? ssCell(l) : '') + last);
@@ -714,7 +723,7 @@
     const keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);          // a chosen filter stays in its list even when it matches nothing now
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
     const bulk = !ed || !S.wide || view === 'approved' ? '' : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
-        <button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>`;
+        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
     const detail = `<div id="odetail" class="detail ${S.o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${S.o.sel ? '' : 'hidden'}>${S.o.sel ? oDetailHtml() : ''}</div>`;
@@ -843,7 +852,7 @@
       <div class="stats">${stat('Total DC qty', inr(p.dc))}${stat('Allocated to orders', inr(p.reserved))}${stat('Balance DC qty', inr(free), free >= pack ? 'good' : 'bad')}${stat('Pending PO', ppo ? inr(ppo) : '-')}</div>
       ${stockSum(p)}${p.dc ? locChips(p) : ''}
       ${shortNote}
-      ${canAct ? `<div class="row wrap"><span>Approve qty</span><input class="qty" id="ap-qty" type="number" inputmode="numeric" min="0" max="${top}" value="${dflt || ''}" data-pack="${pack}" ${top ? '' : 'disabled'} aria-label="Quantity to approve">
+      ${canAct ? `<div class="row wrap"><span>Approve qty</span><input class="qty" id="ap-qty" type="number" inputmode="numeric" min="0" max="${canGive(l)}" value="${dflt || ''}" data-want="${l.open_qty}" data-pack="${pack}" ${top ? '' : 'disabled'} aria-label="Quantity to approve">
         ${priceOn() && top ? `<span>at Rs</span><input class="qty" id="ap-price" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-asked="${l.req_price}" aria-label="Price to approve" title="Price per piece to approve (the store asked Rs ${l.req_price})">` : ''}
         <button class="btn primary" data-act="approve" ${top ? '' : 'disabled'}>Approve</button><span class="small" id="ap-prev"></span></div>
         ${locsOn() && top ? '<div class="row wrap aploc"><span class="small grow" id="ap-loc"></span><button class="btn sm" data-act="apLocs" title="Take this approval from the DC locations you choose">Choose locations ...</button></div>' : ''}
@@ -865,7 +874,7 @@
     const acts = [];
     if (ed) {
 if (l.approved_open > 0) acts.push('<button class="btn link" data-act="dispatch" title="Not needed day to day: when you load a newer DC stock report you are asked whether the approved stock has left the DC. Use this only to record one line by hand.">Mark dispatched by hand</button>');
-      if (l.status === 'PARTIAL') acts.push('<button class="btn" data-act="closeBal" title="The pending quantity will not be supplied">Close pending qty</button>');
+      if (l.status === 'PARTIAL') acts.push('<button class="btn" data-act="closeBal" title="The store gets only what is approved; the rest is no longer pending">Close pending qty</button>');
       if (l.status === 'REJECTED') acts.push('<button class="btn" data-act="reopen">Reopen</button>');
       else if (l.dispatched === 0) acts.push('<button class="btn danger" data-act="reject">Reject line ...</button>');
       if (l.balance_closed) acts.push('<button class="btn" data-act="reopen">Reopen pending qty</button>');
@@ -916,7 +925,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
       const w = want(), typed = qi ? Math.round(+qi.value || 0) : w, sum = boxes.reduce((t, i) => t + Math.max(0, Math.round(+i.value || 0)), 0);
       const over = boxes.find((i) => Math.round(+i.value || 0) > +i.max), tooMany = o.maxQty && w > o.maxQty;
       const head = qi && w !== typed && w ? `${inr(typed)} rounded up to full packs = <b>${inr(w)} pcs</b>. ` : '';
-      $('[data-tally]', d).innerHTML = !w ? 'Enter the quantity.' : tooMany ? `<span class="bad">${head}At most ${inr(o.maxQty)} pcs can be approved on this line now.</span>`
+      $('[data-tally]', d).innerHTML = !w ? 'Enter the quantity.' : tooMany ? `<span class="bad">${head}At most ${inr(o.maxQty)} pcs can be approved: that is the balance DC quantity.</span>`
         : over ? `<span class="bad">${C.LOC_NAME[over.dataset.k]} has only ${inr(+over.max)} pcs.</span>`
         : sum === w ? `${head}<span class="good">All <b>${inr(w)} pcs</b> placed.</span>`
         : sum < w ? `${head}<span class="bad"><b>${inr(sum)}</b> of ${inr(w)} pcs placed - ${inr(w - sum)} more to place.</span>` : `${head}<span class="bad"><b>${inr(sum)}</b> placed, that is ${inr(sum - w)} more than the ${inr(w)} pcs.</span>`;
@@ -942,20 +951,23 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
     return { ok: true, price: Math.abs(p - l.req_price) > 0.004 ? p : null };
   }
   const priceNote = (l, price) => (price != null ? ` at Rs ${inr2(price)} (store asked ${inr2(l.req_price)})` : '');
-  async function approveWithLocs(l, typedQty, price) {
+  async function approveWithLocs(l, typedQty, price, warned) {
     if (!l) return;
-    const top = approvable(l);
+    const top = canGive(l);
     if (!top) return tell('Approve', 'Nothing can be approved on this line right now: there is no balance DC quantity for a full pack.');
     const q = Math.min(Math.max(1, Math.round(+typedQty || 0) || l.open_qty), top);
     const v = await locDialog({ title: 'Approve: choose the DC location', article: l.article_code, qty: q, pack: l.pack, maxQty: top });
     if (!v) return;
     const f = C.roundPack(v.qty, l.pack);
+    if (!(warned && f <= C.roundPack(q, l.pack)) && !(await overOk(l, f))) return;
     run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: v.qty, p_locs: v.locs }, price != null ? { p_price: price } : {})), `Approved ${inr(f)} pcs of ${l.article_code}${priceNote(l, price)} from ${C.locText(v.locs)}`);
   }
   function rowPreview(i) {                           // under the Approve box of a row: what the typed quantity becomes
     const el = $('.rowprev', i.closest('td')); if (!el) return;
     const q = Math.round(+i.value || 0), pk = +i.dataset.pack || 1, f = C.roundPack(q, pk), max = +i.max || 0;
-    el.innerHTML = !q ? '' : f > max ? `<span class="bad">at most ${inr(max)}</span>` : f !== q ? `rounded up to <b>${inr(f)} pcs</b> (${inr(f / pk)} ${plural(f / pk, 'pack')})` : '';
+    const want = +i.dataset.want || 0, over = f > C.roundPack(want, pk) ? f - want : 0;
+    el.innerHTML = !q ? '' : f > max ? `<span class="bad">at most ${inr(max)} (the DC balance)</span>`
+      : (f !== q ? `rounded up to <b>${inr(f)} pcs</b> (${inr(f / pk)} ${plural(f / pk, 'pack')})` : '') + (over ? `${f !== q ? '<br>' : ''}<span class="warn b">${inr(over)} more than the store wants</span>` : '');
     const fr = $('.rowfrom', i.closest('td')), l = S.M.byId[+i.dataset.id];
     if (fr && l) fr.innerHTML = q && f <= max ? fromHtml(l.article_code, f) : '';
   }
@@ -964,8 +976,9 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm"
     const i = $('#ap-qty'), el = $('#ap-prev');
     if (i && el) {
       const q = Math.round(+i.value || 0), pk = +i.dataset.pack || 1, f = C.roundPack(q, pk), max = +i.max || 0;
-      el.innerHTML = !q ? '' : f > max ? `<span class="bad">${inr(f)} pcs is more than can be approved (${inr(max)})</span>`
-        : pk > 1 ? `= <b>${inr(f)} pcs</b> to the store (${inr(f / pk)} ${plural(f / pk, 'pack')} of ${pk})` : '';
+      const want = +i.dataset.want || 0, over = f > C.roundPack(want, pk) ? f - want : 0;
+      el.innerHTML = !q ? '' : f > max ? `<span class="bad">${inr(f)} pcs is more than the DC balance allows (${inr(max)})</span>`
+        : (pk > 1 ? `= <b>${inr(f)} pcs</b> to the store (${inr(f / pk)} ${plural(f / pk, 'pack')} of ${pk})` : '') + (over ? ` <span class="warn b">${inr(over)} more than the store wants</span>` : '');
       const lo = $('#ap-loc'), l = cur();
       if (lo && l) lo.innerHTML = q && f <= max ? 'Taken ' + fromHtml(l.article_code, f) : '';
     }
@@ -1714,17 +1727,18 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       const v = await locDialog({ title: 'Change where this is taken from', article: x.article_code, qty: x.qty, pack: 1, maxQty: 0, current: x.locs || {}, okLabel: 'Save' });
       if (v) run(() => A.rpc('set_alloc_locs', { p_alloc: x.id, p_locs: v.locs }), `Now taken from ${C.locText(v.locs)}`);
     },
-    rowApprove: (el) => {
+    rowApprove: async (el) => {
       const l = S.M.byId[+el.dataset.id], i = $(`.rowq[data-id="${el.dataset.id}"]`), q = Math.round(+(i && i.value) || 0), max = +(i && i.max) || 0;
       if (!l || !i) return;
       if (q <= 0) { i.focus(); return tell('Approve', 'Type the quantity to approve in the box first.'); }
       const f = C.roundPack(q, l.pack);
-      if (f > max) return tell('Approve', `${inr(f)} pcs${f !== q ? ` (${inr(q)} rounded up to full packs of ${l.pack})` : ''} is more than can be approved on this line now: ${inr(max)} pcs.`);
+      if (f > max) return tell('Approve', `${inr(f)} pcs${f !== q ? ` (${inr(q)} rounded up to full packs of ${l.pack})` : ''} is more than the balance DC quantity allows: ${inr(max)} pcs.`);
       /* The approval is sent with exactly the locations the row shows, so what is recorded is what was on screen. */
       const pr = priceFrom(l, $(`.rowp[data-id="${el.dataset.id}"]`));
       if (!pr.ok) return tell('Approve', pr.msg);
+      if (!(await overOk(l, f))) return;
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
-      if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price);           // part of it sits only in a location set aside: ask where to take it from
+      if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price, true);     // part of it sits only in a location set aside: ask where to take it from
       run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: q }, sp ? { p_locs: sp.use } : {}, pr.price != null ? { p_price: pr.price } : {})),
         `Approved ${inr(f)} pcs of ${l.article_code}` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : '') + priceNote(l, pr.price) + (sp ? ` from ${C.locText(sp.use)}` : ''));
     },
@@ -1760,14 +1774,15 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       });
     },
     more: () => { sec().limit += 300; setHtml('olist', oListHtml()); hydrate(); },
-    approve: () => {
+    approve: async () => {
       const l = cur(), i = $('#ap-qty'), q = Math.round(+i.value || 0), f = C.roundPack(q, l.pack);
       if (q <= 0) return tell('Approve', 'Enter the quantity to approve.');
-      if (f > (+i.max || 0)) return tell('Approve', `${inr(f)} pcs (${inr(q)} rounded up to full packs of ${l.pack}) is more than can be approved on this line now: ${inr(+i.max || 0)} pcs.`);
+      if (f > (+i.max || 0)) return tell('Approve', `${inr(f)} pcs (${inr(q)} rounded up to full packs of ${l.pack}) is more than the balance DC quantity allows: ${inr(+i.max || 0)} pcs.`);
       const pr = priceFrom(l, $('#ap-price'));
       if (!pr.ok) return tell('Approve', pr.msg);
+      if (!(await overOk(l, f))) return;
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
-      if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price);
+      if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price, true);
       run(() => A.rpc('allocate', Object.assign({ p_line: l.id, p_article: l.article_code, p_qty: q }, sp ? { p_locs: sp.use } : {}, pr.price != null ? { p_price: pr.price } : {})),
         `Approved ${inr(f)} pcs` + (f !== q ? ` (${inr(q)} rounded up to full packs)` : '') + priceNote(l, pr.price) + (sp ? ` from ${C.locText(sp.use)}` : ''));
     },
@@ -1804,6 +1819,18 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     undo: (el) => run(() => A.rpc('undo_alloc', { p_alloc: +el.dataset.alloc }), 'Undone'),
 dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use this only if the stock on this line has left the DC and you do not want to wait for the next DC stock report.\n\nUntil a newer stock report is loaded, the quantity is still taken off the current one, exactly as now.', 'Mark dispatched')) run(() => A.rpc('dispatch_lines', { p_lines: [S.o.sel] }), 'Marked dispatched'); },
     closeBal: () => run(() => A.rpc('close_balance', { p_line: S.o.sel }), 'Pending quantity closed'),
+    bulkClose: async () => {
+      const ids = Array.from(sec().checked).map((id) => S.M.byId[id]).filter(Boolean);
+      const L = ids.filter((l) => l.status === 'PARTIAL');
+      if (!ids.length) return tell('Close pending qty', 'Tick one or more order lines first. Tip: choose "Partly approved" in the status list, then "Tick all shown".');
+      if (!L.length) return tell('Close pending qty', 'None of the ticked lines is partly approved. Only a line with some quantity approved can have its pending quantity closed.');
+      const left = L.reduce((t, l) => t + l.balance, 0);
+      if (!(await confirmBox(`Close the pending quantity on ${L.length} ${plural(L.length, 'line')}?`,
+        L.slice(0, 12).map((l) => `${l.store_code}  ${l.order_no}  ${l.article_code}: gets ${inr(l.approved)} of ${inr(l.req_qty)} (${inr(l.balance)} closed)`).join('\n') + (L.length > 12 ? `\n... and ${L.length - 12} more` : '') +
+        `\n\nEach store gets only what is approved. ${inr(left)} pcs in all are no longer pending.` + (ids.length > L.length ? `\n${ids.length - L.length} ticked ${plural(ids.length - L.length, 'line is', 'lines are')} not partly approved and ${ids.length - L.length === 1 ? 'is' : 'are'} left alone.` : '') +
+        '\n\nYou can reopen any of them from Details.', 'Close pending qty'))) return;
+      run(async () => { let n = 0; for (const l of L) { await A.rpc('close_balance', { p_line: l.id }); n++; } sec().checked.clear(); return n; }, (n) => `Pending quantity closed on ${n} ${plural(n, 'line')}`);
+    },
     reopen: () => run(() => A.rpc('reopen_line', { p_line: S.o.sel }), 'Reopened'),
     sapAccept: () => run(() => A.rpc('sap_accept', { p_line: S.o.sel })),
     sapDismiss: () => run(() => A.rpc('sap_dismiss', { p_line: S.o.sel })),
