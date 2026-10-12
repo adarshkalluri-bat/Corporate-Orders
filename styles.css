@@ -259,3 +259,19 @@ table.calc tr.plus td { color: #0F7A55; } table.calc tr.minus td { color: #8A4B0
 /* ---- stock at the stores, templates ---- */
 .sstk { margin-top: 3px; color: #4A4370; line-height: 1.35; } .sstk b { font-weight: 700; color: var(--ink); } .sstk.full { color: var(--warn); } .sstk.full b { color: var(--warn); }
 .btn.ghost { background: transparent; border-style: dashed; }
+/* ---- one order line = the product on one line, the numbers underneath ---- */
+.otable tbody.ol { border-bottom: 1px solid #E6DFF7; } .otable tbody.ol:last-child { border-bottom: none; }
+.otable tbody.ol td { border-bottom: none; }
+.otable tr.prod td.prod { padding: 10px 8px 0; overflow: hidden; }
+.otable td.chk { vertical-align: top; padding-top: 12px; }
+.pline { display: flex; align-items: baseline; gap: 6px 14px; white-space: nowrap; min-width: 0; font-size: 14.5px; }
+.pline > span { flex: none; } .pline .pdesc { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.pline .pcode { font-weight: 800; letter-spacing: .2px; } .pline .pmc { font-weight: 700; color: #3B2A8F; font-size: 13.5px; }
+.pline .pmrp, .pline .ppack { color: var(--muted); font-size: 13px; } .pline .pmrp b { color: var(--ink); }
+.pline .ptags { display: inline-flex; gap: 4px; }
+.otable td.prod.dup { box-shadow: inset 4px 0 0 var(--bad); }
+.otable tr.nums td { padding-top: 6px; }
+tbody.ol.sel td { background: var(--select); } tbody.ol.pick { cursor: pointer; } tbody.ol.pick:hover td { background: #FAF7FF; } tbody.ol.sel:hover td { background: var(--select); }
+.otable tbody.rej td { color: #9A95B5; }
+.otable td.sscell { font-size: 14px; line-height: 1.35; } .otable td.sscell.full, .otable td.sscell.full b { color: var(--warn); }
+.thsub { font-weight: 400; color: var(--muted); }

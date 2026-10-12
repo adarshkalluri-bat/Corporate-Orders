@@ -534,25 +534,27 @@
   /* What can be approved on this line right now, in full packs (0 = nothing). */
   const approvable = (l) => Math.max(0, Math.min(C.roundPack(l.open_qty, l.pack), C.floorPack(C.freeOf(S.M, l.article_code), l.pack)));
   /* Which columns a list shows: the group heading already carries some of them. */
+  /* Which columns a list shows. Every order line is two rows: a full-width strip that names the product on one line
+     (article code, MC, description, MRP, pack), and the numbers underneath. The group heading already carries some of it. */
   function columnsFor(view, hide, ed) {
-    const roomy = window.innerWidth >= 1500, h = new Set(hide.split(' '));
-    const c = { chk: ed && view !== 'approved', so: !h.has('so'), mc: !h.has('mc') && (h.has('so') || roomy), mcInArt: false, mrp: !h.has('mrp'), art: !h.has('art') };
-    c.mcInArt = !h.has('mc') && !c.mc && c.art;
-    return c;
+    const h = new Set(hide.split(' '));
+    return { chk: ed && view !== 'approved', so: !h.has('so'), strip: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
+      ss: view !== 'approved' && !!S.M.hasStoreStock };
   }
   function tableHead(view, c, ed) {
-    const W = (w) => `<col style="width:${w}">`, auto = c.art ? 'art' : 'so';
-    let cols = (c.chk ? W('44px') : '') + (c.so ? (auto === 'so' ? '<col>' : W('150px')) : '') + W('118px') + (c.mc ? W('124px') : '') + (c.mrp ? W('62px') : '') + (c.art ? '<col>' : '');
-    let th = (c.chk ? '<th></th>' : '') + (c.so ? '<th>Store / order</th>' : '') + '<th>Booked / delivery</th>' + (c.mc ? '<th>MC</th>' : '') + (c.mrp ? '<th class="right">MRP</th>' : '') + (c.art ? '<th>Article</th>' : '');
+    const W = (w) => `<col style="width:${w}">`;
+    let cols = (c.chk ? W('40px') : '') + (c.so ? W('190px') : '') + W('122px') + W('92px') + W('112px');
+    let th = (c.chk ? '<th></th>' : '') + (c.so ? '<th>Store / order</th>' : '') + '<th>Booked / delivery</th><th class="right">Qty wanted</th><th class="right">Price wanted</th>';
     if (view === 'approved') {
-      cols += W('78px') + W('98px') + W('104px') + (locsOn() ? W('158px') : '') + W('98px') + W('118px') + W(ed && locsOn() ? '124px' : '84px');
-      th += `<th class="right">Qty wanted</th><th class="right">Price wanted</th><th class="right">Approved qty</th>${locsOn() ? '<th>Taken from (DC location)</th>' : ''}<th class="right">Value (Rs)</th><th>Status</th><th></th>`;
+      cols += W('112px') + (locsOn() ? W('190px') : '') + W('112px') + '<col>' + W(ed && locsOn() ? '124px' : '84px');
+      th += `<th class="right">Approved qty</th>${locsOn() ? '<th>Taken from (DC location)</th>' : ''}<th class="right">Value (Rs)</th><th>Status</th><th></th>`;
     } else {
-      cols += W('78px') + W('110px') + W('84px') + W('124px') + W(ed ? '178px' : '84px');
-      th += `<th class="right">Qty wanted</th><th class="right">Price wanted</th><th class="right">Balance DC qty</th><th>Status</th><th>${ed ? 'Approve qty' : ''}</th>`;
+      cols += W('100px') + (c.ss ? W('170px') : '') + '<col>' + W(ed ? '200px' : '84px');
+      th += `<th class="right">Balance DC qty</th>${c.ss ? '<th>At this store<br><span class="thsub">closing + in transit</span></th>' : ''}<th>Status</th><th>${ed ? 'Approve qty' : ''}</th>`;
     }
     return `<colgroup>${cols}</colgroup><thead><tr>${th}</tr></thead>`;
   }
+  const colCount = (view, c) => (c.chk ? 1 : 0) + (c.so ? 1 : 0) + 3 + (view === 'approved' ? 3 + (locsOn() ? 1 : 0) + 1 : 2 + (c.ss ? 1 : 0) + 1);
   /* Stock at the ordering store: the article itself, and what its alternates add. */
   function ssHtml(l, compact) {
     if (!l.ss) return '';
@@ -560,6 +562,12 @@
     const bits = [`At store <b class="${o.total > 0 ? '' : 'muted'}">${inr(o.total)}</b>${o.transit ? ` <span class="muted">(${inr(o.closing)} + ${inr(o.transit)} in transit)</span>` : ''}`, `MTD sale <b>${inr(o.mtd)}</b>`];
     if (alt > 0) bits.push(`alternates <b>${inr(alt)}</b>`);
     return `<div class="small sstk ${l.req_qty > 0 && l.ss.family >= l.req_qty ? 'full' : ''}" title="${esc(ssTitle(l))}">${bits.join(compact ? ' &middot; ' : ' &middot; ')}</div>`;
+  }
+  function ssCell(l) {
+    if (!l.ss) return '<td></td>';
+    const o = l.ss.own, full = l.req_qty > 0 && l.ss.family >= l.req_qty;
+    return `<td class="sscell ${full ? 'full' : ''}" title="${esc(ssTitle(l))}"><div><b class="${o.total > 0 ? '' : 'muted'}">${inr(o.total)}</b>${o.transit ? ` <span class="small">(${inr(o.closing)} + ${inr(o.transit)} in transit)</span>` : ''}</div>
+      <div class="small">MTD sale <b>${inr(o.mtd)}</b></div>${l.ss.altTotal > 0 ? `<div class="small">alternates <b>${inr(l.ss.altTotal)}</b></div>` : ''}</td>`;
   }
   function ssTitle(l) {
     const o = l.ss.own, L = [`Stock at ${l.store_code}: closing ${o.closing}, in transit (incl. CLA) ${o.transit}, sale this month ${o.mtd}`];
@@ -579,20 +587,23 @@
   function lineRow(l, view, c, ed) {
     const M = S.M, o = sec(view), free = C.freeOf(M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l), tags = lineTags(l);
     const price = `<b>${inr(l.req_price)}</b>${l.price_missing ? '<div class="small">not given,<br>MRP used</div>' : l.discount > 0.0005 ? `<div class="small warn nowrap">${pct(l.discount)} below MRP</div>` : ''}`;
-    const dates = `<td class="dates"><div><i>Booked</i> ${when(l.order_date) || '-'}</div><div class="${l.late ? 'bad b' : l.tight ? 'warn b' : ''}"><i>Delivery</i> ${l.del_date ? when(l.del_date) : '-'}</div></td>`;
-    const lead = (c.chk ? `<td><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : '') +
-      (c.so ? `<td class="so"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}<div class="ordno">${esc(ref(l))}</div></td>` : '') + dates +
-      (c.mc ? `<td class="mc">${esc(l.mc_name || '-')}</td>` : '') + (c.mrp ? `<td class="right num">${inr(l.mrp)}</td>` : '') +
-      (c.art ? `<td class="art">${c.mcInArt ? `<div class="mcname">${esc(l.mc_name || '-')}</div>` : ''}<span class="code">${esc(l.article_code)}</span> ${tags}<div class="desc">${esc(l.description || '(article details not on file)')}</div>${view === 'approved' ? '' : ssHtml(l)}</td>` : '');
-    const qty = `<td class="right num"><b>${inr(l.req_qty)}</b><div class="small">pack of ${l.pack}</div>${c.art ? '' : (tags ? `<div>${tags}</div>` : '') + (view === 'approved' ? '' : ssHtml(l))}</td><td class="right num">${price}</td>`;
+    const chk = c.chk ? `<td class="chk" ${c.strip ? 'rowspan="2"' : ''}><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : '';
+    /* the product, on one line */
+    const strip = !c.strip ? '' : `<tr class="prod">${chk}<td colspan="${colCount(view, c) - (c.chk ? 1 : 0)}" class="prod ${l.dup_count > 0 ? 'dup' : ''}"><div class="pline">
+      <span class="pcode">${esc(l.article_code)}</span>${c.mcIn ? `<span class="pmc">${esc(l.mc_name || 'MC not known')}</span>` : ''}<span class="pdesc">${esc(l.description || '(article details not on file)')}</span>
+      ${c.mrpIn ? `<span class="pmrp">MRP <b>${inr(l.mrp)}</b></span>` : ''}<span class="ppack">pack of ${l.pack}</span>${tags ? `<span class="ptags">${tags}</span>` : ''}</div></td></tr>`;
+    const lead = (c.strip ? '' : chk) + (c.so ? `<td class="so"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}<div class="ordno">${esc(ref(l))}</div></td>` : '') +
+      `<td class="dates"><div><i>Booked</i> ${when(l.order_date) || '-'}</div><div class="${l.late ? 'bad b' : l.tight ? 'warn b' : ''}"><i>Delivery</i> ${l.del_date ? when(l.del_date) : '-'}</div></td>` +
+      `<td class="right num"><b>${inr(l.req_qty)}</b>${c.strip ? '' : `<div class="small">pack of ${l.pack}</div>${tags ? `<div>${tags}</div>` : ''}`}</td><td class="right num">${price}</td>`;
     const details = `<button class="btn link" data-act="sel" data-id="${l.id}" title="Stock by location, alternates, history${ed ? ', reject, cancel' : ''}">Details</button>`;
+    const wrap = (cls, nums) => `<tbody class="ol pick ${S.o.sel === l.id ? 'sel' : ''} ${cls}" data-act="sel" data-id="${l.id}">${strip}<tr class="nums">${nums}</tr></tbody>`;
     if (view === 'approved') {
       const more = [l.dispatched ? `${inr(l.dispatched)} dispatched` : '', l.balance ? `${inr(l.balance)} still pending` : ''].filter(Boolean).join(', ');
-      return `<tr class="pick ${S.o.sel === l.id ? 'sel' : ''} ${l.status === 'REJECTED' ? 'rej' : ''}" data-act="sel" data-id="${l.id}">${lead}${qty}
+      return wrap(l.status === 'REJECTED' ? 'rej' : '', `${lead}
         <td class="right num"><b class="${l.approved ? 'good' : 'muted'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
         ${locsOn() ? `<td class="from">${esc(C.locText(l.locs)) || '<span class="muted">-</span>'}</td>` : ''}
         <td class="right num">${l.approved ? inr(l.value) : '-'}</td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
-        <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() ? '>Details / change<' : '>Details<')}</div></td></tr>`;
+        <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() ? '>Details / change<' : '>Details<')}</div></td>`);
     }
     const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack);
     const dflt = top ? (need <= top ? l.open_qty : top) : 0, f = C.roundPack(dflt, l.pack);
@@ -601,8 +612,7 @@
     const last = !ed ? `<td class="acts">${details}</td>` : `<td class="apcell">${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${top}" value="${dflt}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}"><button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
         : canAct ? '<span class="small bad">No balance at DC</span>' : ''}
         <div class="rowlinks">${details.replace('>Details<', canAct && !top && C.allAlternates(M, l.article_code).length ? '>See alternates<' : '>Details<')} <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker">Delete</button></div></td>`;
-    return `<tr class="pick ${S.o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">${lead.replace('<td class="mc">', `<td class="mc ${l.dup_count > 0 ? 'dup' : ''}">`)}${qty}
-      <td class="right num ${short ? 'bad b' : ''}">${inr(free)}</td><td>${pill(l.status)}${done}${note ? `<div class="small">${note}</div>` : ''}</td>${last}</tr>`;
+    return wrap('', `${lead}<td class="right num ${short ? 'bad b' : ''}">${inr(free)}</td>${c.ss ? ssCell(l) : ''}<td>${pill(l.status)}${done}${note ? `<div class="small">${note}</div>` : ''}</td>${last}`);
   }
   function lineCard(l, view) {                       // the same line on a phone
     const free = C.freeOf(S.M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l), tags = lineTags(l);
@@ -631,7 +641,7 @@
     const head = g === GROUPS.store_order ? orderHead(L, view, ed)
       : g.h2 ? `<div class="ohead">${ticks(view) ? '<input type="checkbox" data-act="chkOrder" title="Tick every line under this heading" aria-label="Tick every line under this heading">' : ''}<span class="ono">${esc(g.h2(L))}</span><span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'line')}</span></div>` : '';
     if (!S.wide) return `<div class="oblock">${head}${L.map((l) => lineCard(l, view)).join('')}</div>`;
-    return `<div class="oblock">${head}<table class="otable ${first ? '' : 'nohead'}">${tableHead(view, c, ed)}<tbody>${L.map((l) => lineRow(l, view, c, ed)).join('')}</tbody></table></div>`;
+    return `<div class="oblock">${head}<table class="otable ${first ? '' : 'nohead'}">${tableHead(view, c, ed)}${L.map((l) => lineRow(l, view, c, ed)).join('')}</table></div>`;
   }
   function oListHtml(view) {
     view = view || S.view;
