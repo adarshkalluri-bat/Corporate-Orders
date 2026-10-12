@@ -11,8 +11,8 @@
   const S = {
     me: null, M: null, view: 'dashboard', wide: wideMQ.matches, lastSync: null, online: true, stale: false, busy: false,
     /* o = the Pending orders screen, a = the Approved orders screen. The line open in the side panel (o.sel) is shared. */
-    o: { q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
-    a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
+    o: { q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
+    a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
     s: { only: true, q: '', art: null, qty: {} },
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
@@ -513,7 +513,21 @@
     none: { label: 'No grouping (one list)', hide: '', k1: () => '' }
   };
   const rowOrder = (a, b) => a.store_code.localeCompare(b.store_code) || a.order_no.localeCompare(b.order_no) || (a.mc_name || '').localeCompare(b.mc_name || '') || a.mrp - b.mrp || a.description.localeCompare(b.description);
-  function buildGroups(rows, g) {
+  /* Sort orders for the lists. Within each group the lines follow it, and the groups themselves come in the order of their first line. */
+  const cmpStr = (f) => (a, b) => String(f(a) || '').localeCompare(String(f(b) || ''), undefined, { numeric: true });
+  const cmpDate = (f, desc) => (a, b) => { const x = f(a) || '', y = f(b) || ''; return !x !== !y ? (x ? -1 : 1) : (desc ? y.localeCompare(x) : x.localeCompare(y)); };   // lines without a date go last
+  const SORTS = {
+    '': ['Store, then order (usual)', null],
+    booked: ['Booking date - oldest first', cmpDate((l) => l.order_date)], booked_new: ['Booking date - newest first', cmpDate((l) => l.order_date, true)],
+    delivery: ['Delivery date - soonest first', cmpDate((l) => l.del_date)], allocate: ['Allocate-by date - soonest first', cmpDate((l) => l.allocate_by)],
+    article: ['Article code', cmpStr((l) => l.article_code)], mc: ['MC name', cmpStr((l) => l.mc_name)],
+    mrp: ['MRP - low to high', (a, b) => a.mrp - b.mrp], mrp_high: ['MRP - high to low', (a, b) => b.mrp - a.mrp],
+    store: ['Store code', cmpStr((l) => l.store_code)], order: ['Order number', cmpStr((l) => l.order_no)],
+    qty: ['Qty wanted - largest first', (a, b) => b.req_qty - a.req_qty], value: ['Order value - largest first', (a, b) => b.ask_value - a.ask_value],
+    short: ['Most short at the DC first', (a, b) => (Math.max(0, b.balance - Math.max(0, C.freeOf(S.M, b.article_code)))) - (Math.max(0, a.balance - Math.max(0, C.freeOf(S.M, a.article_code))))]
+  };
+  const sortCmp = (o) => { const f = (SORTS[o.sort] || SORTS[''])[1]; return f ? (a, b) => f(a, b) || rowOrder(a, b) : null; };
+  function buildGroups(rows, g, cmp) {
     const top = new Map();
     for (const l of rows) {
       const k = g.k1(l); let G = top.get(k);
@@ -526,9 +540,11 @@
     const list = Array.from(top.values()).sort((a, b) => a.key.localeCompare(b.key));
     for (const G of list) {
       G.blocks = Array.from(G.blocks.values());
-      for (const B of G.blocks) B.lines.sort(rowOrder);
-      G.blocks.sort(g.k2 === GROUPS.store_order.k2 ? (a, b) => (a.lines[0].order_date || '').localeCompare(b.lines[0].order_date || '') || a.key.localeCompare(b.key) : (a, b) => a.key.localeCompare(b.key));
+      for (const B of G.blocks) B.lines.sort(cmp || rowOrder);
+      if (cmp) { G.blocks.sort((a, b) => cmp(a.lines[0], b.lines[0])); G.lines = G.blocks.reduce((t, B) => t.concat(B.lines), []); }
+      else G.blocks.sort(g.k2 === GROUPS.store_order.k2 ? (a, b) => (a.lines[0].order_date || '').localeCompare(b.lines[0].order_date || '') || a.key.localeCompare(b.key) : (a, b) => a.key.localeCompare(b.key));
     }
+    if (cmp) list.sort((a, b) => cmp(a.lines[0], b.lines[0]));
     return list;
   }
   /* What can be approved on this line right now, in full packs (0 = nothing). */
@@ -543,17 +559,17 @@
   }
   function tableHead(view, c, ed) {
     const W = (w) => `<col style="width:${w}">`, TH = (t, sub, cls) => `<th class="${cls || ''}">${t}${sub ? `<span class="thsub">${sub}</span>` : ''}</th>`;
-    let cols = (c.chk ? W('40px') : '') + (c.so ? W('170px') : '') + (c.art ? '<col>' : '') + (c.so ? '' : W('104px')) + W('96px') + W('110px');
+    let cols = (c.chk ? W('36px') : '') + (c.so ? '<col>' : '') + (c.art ? W(c.so ? '190px' : '230px') : '') + (c.so ? '' : W('104px')) + W('84px') + W('94px');
     let th = (c.chk ? '<th></th>' : '') + (c.so ? TH('Store / order', 'booked, delivery') : '') + (c.art ? TH('Article') : '') + (c.so ? '' : TH('Booked', 'delivery')) +
       TH('Qty wanted', 'pcs', 'right') + TH('Price wanted', 'Rs per pc', 'right');
     if (view === 'approved') {
       cols += W('110px') + (locsOn() ? W('170px') : '') + W('116px') + W('124px') + W(ed && locsOn() ? '120px' : '84px');
       th += TH('Approved', 'pcs', 'right') + (locsOn() ? TH('Taken from', 'DC location') : '') + TH('Value', 'Rs', 'right') + TH('Status') + '<th></th>';
     } else {
-      cols += W('104px') + (c.ss ? W('112px') + W('92px') : '') + W(ed ? '214px' : '130px');
+      cols += W('92px') + (c.ss ? W('98px') + W('78px') : '') + W(ed ? '192px' : '120px');
       th += TH('Balance DC qty', 'free to approve', 'right') + (c.ss ? TH('Store stock', 'closing + in transit', 'right') + TH('Store sale', 'this month', 'right') : '') + (ed ? TH('Approve', 'pcs') : TH('Status'));
     }
-    if (!c.art && !c.so) cols = cols.replace(W('104px'), '<col>');                // grouped by article: let the date column take the spare room
+    if (!c.so) cols = cols.replace(c.art ? W('230px') : W('104px'), '<col>');      // the article column (or the dates, when grouped by article) takes the spare room
     return `<colgroup>${cols}</colgroup><thead><tr>${th}</tr></thead>`;
   }
   /* Stock at the ordering store: the article itself, and what its alternates add. */
@@ -661,7 +677,7 @@
         : view === 'approved' ? { todo: 'No approved lines here.', done: 'Nothing is dispatched yet. Lines move here when a newer DC stock report is loaded and you say the approved stock has left the DC.', rej: 'Nothing is rejected.' }[S.a.seg]
         : M.lines.length ? 'Nothing is pending. Every order line is approved, dispatched or rejected.' : 'No orders loaded yet.'}</div>`;
     }
-    const groups = buildGroups(rows, g), c = columnsFor(view, g.hide, ed);
+    const groups = buildGroups(rows, g, sortCmp(o)), c = columnsFor(view, g.hide, ed);
     let shown = 0, hiddenGroups = 0, hiddenLines = 0, html = '';
     for (const G of groups) {
       if (shown >= o.limit) { hiddenGroups++; hiddenLines += G.lines.length; continue; }
@@ -695,9 +711,10 @@
     const detail = `<div id="odetail" class="detail ${S.o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${S.o.sel ? '' : 'hidden'}>${S.o.sel ? oDetailHtml() : ''}</div>`;
     return `<div class="head"><h1>${view === 'approved' ? 'Approved orders' : 'Pending orders'}</h1><span class="sub" id="osum"></span></div>
       ${seg}
-      <div class="toolbar seven">
-        <input type="search" id="oq" class="wide" placeholder="Search store, order, article, MC, who booked ..." value="${esc(o.q)}" aria-label="Search orders">
-        <select id="ogroup" aria-label="Group by" title="How the lines are grouped">${Object.keys(GROUPS).map((k) => opt(k, 'Group by: ' + GROUPS[k].label, o.group)).join('')}</select>
+      <div class="toolbar eight">
+        <input type="search" id="oq" class="wide search" placeholder="Search store, order, article, MC, who booked ..." value="${esc(o.q)}" aria-label="Search orders">
+        <select id="ogroup" class="gsel" aria-label="Group by" title="How the lines are grouped">${Object.keys(GROUPS).map((k) => opt(k, 'Group by: ' + GROUPS[k].label, o.group)).join('')}</select>
+        <select id="osort" class="gsel" aria-label="Sort by" title="The order of the lines (and of the groups)">${Object.keys(SORTS).map((k) => opt(k, 'Sort by: ' + SORTS[k][0], o.sort)).join('')}</select>
         ${view === 'approved' ? '' : `<select id="ostatus" aria-label="Status">${opt('', 'All pending', o.status)}${NEEDS.map((s) => opt(s, C.STATUS_LABEL[s], o.status)).join('')}</select>`}
         <select id="oflag" aria-label="Flag">${opt('', 'Any flag', o.flag)}${Object.keys(FLAGS).map((k) => opt(k, FLAGS[k][0], o.flag)).join('')}</select>
         <select id="ostore" aria-label="Store">${opt('', 'All stores', o.store)}${keep(stores, o.store).map((s) => opt(s, s + '  ' + ((M.stores[s] || {}).store_name || ''), o.store)).join('')}</select>
@@ -1551,7 +1568,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
   }
   /* The lines listed on the Pending orders or Approved orders screen right now, in one go. */
   function exportLines(view) {
-    const rows = ordersFiltered(view).slice().sort(rowOrder), filtered = activeFilters(view).length > 0;
+    const rows = ordersFiltered(view).slice().sort(sortCmp(sec(view)) || rowOrder), filtered = activeFilters(view).length > 0;
     const what = view === 'approved' ? SEGS[S.a.seg][0] : 'Pending orders';
     if (!rows.length) return tell('Export', 'There are no lines to export here.');
     return excelFile(view === 'approved' ? { todo: 'Approved_Orders', done: 'Dispatched', rej: 'Rejected' }[S.a.seg] : 'Pending_Orders', true, (sheet, ex, byLine) => {
@@ -1910,6 +1927,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'ostore') { sec().store = t.value; relist(); }
     else if (t.id === 'omc') { sec().mc = t.value; relist(); }
     else if (t.id === 'obuyer') { sec().buyer = t.value; relist(); }
+    else if (t.id === 'osort') { const st = sec(); st.sort = t.value; st.limit = 300; render(); }
     else if (t.id === 'ogroup') { const st = sec(); st.group = t.value; st.collapsed = false; st.toggled.clear(); st.limit = 300; render(); }
     else if (t.id === 'ccat') { S.c.cat = t.value; setHtml('cgrid', cGridHtml()); hydrate(); }
     else if (t.id === 'cscope') { S.c.scope = t.value; S.c.cat = ''; render(); }

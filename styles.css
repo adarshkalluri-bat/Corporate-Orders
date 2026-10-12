@@ -293,3 +293,9 @@ tbody.ol.sel td { background: var(--select); } tbody.ol.pick { cursor: pointer; 
 .otable td.so .dt { margin-top: 2px; }
 .otable .rowstate { margin-bottom: 6px; } .otable td.chk { padding-top: 14px; }
 .otable .rowprev:empty { display: none; } .otable .apcell .rowloc { margin-top: 3px; }
+/* the article code is never broken; below a sensible width the list scrolls sideways instead of squeezing */
+.otable { min-width: 980px; } .otable td.art .acode { white-space: nowrap; } .oblock { overflow-x: auto; }
+.otable td.art { min-width: 200px; } .otable td.so { overflow-wrap: anywhere; }
+.toolbar.eight { grid-template-columns: 1fr 1fr; }
+@media (min-width: 960px) { .toolbar.eight { grid-template-columns: repeat(10, minmax(0, 1fr)); } .toolbar.eight > * { grid-column: span 2; } .toolbar.eight > .search { grid-column: span 4; } .toolbar.eight > .gsel { grid-column: span 3; } }
+.otable td.so b, .otable td.so .ordno { white-space: nowrap; } .otable td.so { overflow-wrap: normal; word-break: normal; }
