@@ -18,7 +18,7 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 9;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 10;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1167,7 +1167,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           ${inTot ? sumRow('+ Inwards since the report', inTot, (k) => inBy[k] || 0, 'plus') : ''}
           ${lf ? sumRow('&minus; Allocated to orders', reserved, (k) => rep(k) + (inBy[k] || 0) - (lf[k] || 0), 'minus') + sumRow('= Balance DC qty', free, (k) => lf[k] || 0, 'tot bal') : ''}</tbody></table></div>`
           : `<div class="note info">${M.meta.stock_asof ? 'Not in the latest DC stock report.' : 'No DC stock report is loaded.'}</div>`}
-        ${inwards.length ? `<div class="small"><b>Inwards since the stock report:</b>${inwards.slice(0, 8).map((i) => `<br>${when(i.inward_at)} &middot; ${inr(i.qty)} pcs into ${C.LOC_NAME[i.loc] || i.loc}${i.doc_no ? ' &middot; GRN ' + esc(i.doc_no) : ''}${i.site_code ? ' &middot; ' + esc(i.site_code) : ''} <span class="muted">(${esc(i.source_file || '')})</span>`).join('')}${inwards.length > 8 ? `<br>... and ${inwards.length - 8} more` : ''}</div>` : ''}
+        ${inwards.length ? `<div class="small"><b>Inwards since the stock report:</b>${inwards.slice(0, 8).map((i) => `<br>${when(i.inward_at)} &middot; ${inr(i.qty)} pcs into ${C.LOC_NAME[i.loc] || i.loc}${i.mc_name ? ' &middot; ' + esc(i.mc_name) : ''}${i.doc_no ? ' &middot; GRN ' + esc(i.doc_no) : ''}${i.site_code ? ' &middot; ' + esc(i.site_code) : ''} <span class="muted">(${esc(i.source_file || '')})</span>`).join('')}${inwards.length > 8 ? `<br>... and ${inwards.length - 8} more` : ''}</div>` : ''}
         ${editor() && locsOn() && M.meta.stock_asof ? `<div><button class="btn sm" data-act="inwardHand" data-code="${esc(code)}" title="Stock of this article received at the DC after the stock report">Add an inward for this article ...</button></div>` : ''}
         ${d && d.store_total && S.M.hasStoreStock ? `<div class="small"><b>In stores</b> (store stock report): ${inr(d.store_total.closing)} pcs closing stock, ${inr(d.store_total.intransit)} in transit, held by ${inr(d.store_total.stores)} ${plural(d.store_total.stores, 'store')}; ${inr(d.store_total.mtd_sale)} sold this month.</div>` : ''}
         <div class="small">${mp.pending ? `${inr(mp.pending)} pcs still wanted by ${mp.n_stores} ${plural(mp.n_stores, 'store')}. ` : ''}${a.store_stock || a.intransit ? `From the article data sheet: ${inr(a.store_stock || 0)} pcs in stores, ${inr(a.intransit || 0)} in transit${ppo ? `, pending PO ${inr(a.ppo_cm || 0)} this month and ${inr(a.ppo_nm || 0)} next` : ''}.` : ''}</div>
@@ -1433,8 +1433,8 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     }
     const local = (day, mins) => new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10), Math.floor(mins / 60), mins % 60).toISOString();
     const justAfter = new Date(asof.getTime() + 60000).toISOString();
-    const send = after.map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, t: e.mins == null ? local(e.day, 12 * 60) : local(e.day, e.mins) }))
-      .concat(addUnsure ? unsure.map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, t: justAfter })) : []);
+    const send = after.map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, m: e.m, n: e.n, t: e.mins == null ? local(e.day, 12 * 60) : local(e.day, e.mins) }))
+      .concat(addUnsure ? unsure.map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, m: e.m, n: e.n, t: justAfter })) : []);
     const left = before.length + (addUnsure ? 0 : unsure.length);
     if (!send.length && !replace) return `Nothing was added.\n\nEntries in the file: ${inr(all.length)}\nLeft out (the stock report already has them): ${inr(left)}`;
     let added = 0, skipped = 0, pcs = 0, batch = null, replaced = 0;
@@ -1445,7 +1445,14 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       batch = r.batch; added += r.added; skipped += r.skipped; pcs += r.qty; replaced += r.replaced || 0;
     }
     const known = send.filter((e) => !M.articles[e.a]), unknownArts = new Set(known.map((e) => e.a)).size;
-    return `Entries in the file: ${inr(all.length)}\nAdded to the DC stock: ${inr(added)} ${plural(added, 'entry', 'entries')}, ${inr(pcs)} pcs` +
+    /* what matters for the orders: the articles of the Diwali range or on an order, by MC */
+    const mine = send.filter((e) => M.articles[e.a]), byMc = {};
+    mine.forEach((e) => { const k = e.m || (M.articles[e.a] || {}).mc_name || '(MC not given)'; byMc[k] = (byMc[k] || 0) + e.q; });
+    const mcList = Object.entries(byMc).sort((x, y) => y[1] - x[1]);
+    const notGr = (all.skipped || []).length;
+    return `Entries in the file: ${inr(all.length + notGr)}\nAdded to the DC stock: ${inr(added)} ${plural(added, 'entry', 'entries')}, ${inr(pcs)} pcs` +
+      (notGr ? `\nNot goods receipts (movement type other than 101, or a minus quantity), not added: ${inr(notGr)}` : '') +
+      (mine.length ? `\n\nArticles of the Diwali range or on orders: ${inr(new Set(mine.map((e) => e.a)).size)}, ${inr(mine.reduce((t, e) => t + e.q, 0))} pcs. By MC:\n` + mcList.slice(0, 12).map(([k, q]) => `  ${k}: ${inr(q)} pcs`).join('\n') + (mcList.length > 12 ? `\n  ... and ${mcList.length - 12} more MCs` : '') : '') +
       (skipped ? `\nAlready loaded earlier, same GRN number (skipped): ${inr(skipped)}` : '') + (left ? `\nLeft out, the stock report already has them: ${inr(left)}` : '') +
       (replaced ? `\nEarlier inward entries replaced by this file: ${inr(replaced)}` : '') +
       (unknownArts ? `\n\n${inr(unknownArts)} ${plural(unknownArts, 'article')} in the file ${unknownArts === 1 ? 'is' : 'are'} not in the Diwali range or on any order. They are stored, and show up once such an article is ordered.` : '') +
@@ -1594,8 +1601,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
           return [l.order_no, l.line_item || '', l.store_code, l.orig_article || l.article_code, a.article_code, a.article_code === (l.orig_article || l.article_code) ? 'Ordered article' : 'Alternate',
             a.entered_qty == null ? a.qty : a.entered_qty, a.qty, a.price != null ? +a.price : l.req_price, C.locText(a.locs), C.STATUS_LABEL[a.state], when(a.created_at), a.created_by, when(a.decided_at), when(a.dispatched_at)]; }));
       sheet('Stock position', STOCK_HEAD, Object.keys(M.pos).sort().map(stockRow));
-      if (ex.inwards && ex.inwards.length) sheet('Inwards', ['Received', 'Article', 'Description', 'Qty', 'DC location', 'DC', 'GRN / document', 'File', 'Loaded by', 'Counted on top of the stock report'],
-        ex.inwards.map((i) => [when(i.inward_at), i.article_code, (artOf(i.article_code) || {}).description || '', i.qty, C.LOC_NAME[i.loc] || i.loc, i.site_code, i.doc_no, i.source_file, i.created_by, i.counted ? 'Yes' : 'No (the stock report already has it)']));
+      if (ex.inwards && ex.inwards.length) sheet('Inwards', ['Received', 'Article', 'Description', 'MC', 'Qty', 'DC location', 'DC', 'GRN / document', 'File', 'Loaded by', 'Counted on top of the stock report'],
+        ex.inwards.map((i) => [when(i.inward_at), i.article_code, i.description || (artOf(i.article_code) || {}).description || '', i.mc_name || (artOf(i.article_code) || {}).mc_name || '', i.qty, C.LOC_NAME[i.loc] || i.loc, i.site_code, i.doc_no, i.source_file, i.created_by, i.counted ? 'Yes' : 'No (the stock report already has it)']));
       sheet('Activity log', ['When', 'User', 'Order No', 'Line', 'Action', 'Detail'], ex.events.map((e) => [when(e.ts), e.user_name, e.order_no, String(e.line_no || '').includes('~') ? '' : e.line_no, e.action, e.detail]));
       return `Exported ${inr(M.lines.length)} order lines`;
     });

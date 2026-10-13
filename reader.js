@@ -137,6 +137,30 @@
     }
     return [{ name: 'Sheet1', peek: () => rowsOf(40), all: () => rowsOf(0) }];
   }
+  /* SAP "unconverted" / spreadsheet text downloads: tab-separated text (sometimes UTF-16), headings not on the first line,
+     numbers right-aligned with spaces and commas. Each line becomes a row, each tab a column. */
+  function looksTabText(u8) {
+    if (u8[0] === 0xFF && u8[1] === 0xFE) return true;
+    let tabs = 0, bin = 0;
+    for (let i = 0; i < Math.min(u8.length, 4096); i++) { const c = u8[i]; if (c === 9) tabs++; else if (c === 0 || (c < 9)) bin++; }
+    return tabs >= 3 && bin === 0;
+  }
+  function fromTabText(u8) {
+    const utf16 = u8[0] === 0xFF && u8[1] === 0xFE;
+    const text = new TextDecoder(utf16 ? 'utf-16le' : 'utf-8').decode(utf16 ? u8.subarray(2) : u8);
+    const rowsOf = (limit) => {
+      const out = [];
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.trim()) continue;
+        const row = line.split('\t').map((c) => { const v = c.trim(); return v === '' ? null : v; });
+        if (!row.some((c) => c != null)) continue;
+        out.push(row);
+        if (limit && out.length >= limit) break;
+      }
+      return out;
+    };
+    return [{ name: 'Text', peek: () => rowsOf(40), all: () => rowsOf(0) }];
+  }
   async function fromOther(u8, loadSheetJS) {                     // .xls, .csv, tab text
     const X = await loadSheetJS();
     const wb = X.read(u8, { type: 'array', raw: true });
@@ -157,7 +181,7 @@
      u8: the file's bytes. kind: master | data | stores | stock | orders. */
   async function read(u8, kind, loadSheetJS) {
     const isZip = u8[0] === 0x50 && u8[1] === 0x4b;
-    const sheets = isZip ? fromZip(u8) : looksHtml(u8) ? fromHtml(u8) : await fromOther(u8, loadSheetJS);
+    const sheets = isZip ? fromZip(u8) : looksHtml(u8) ? fromHtml(u8) : looksTabText(u8) ? fromTabText(u8) : await fromOther(u8, loadSheetJS);
     if (!sheets.length) throw new Error('The file has no sheets that could be read.');
     let best = null;
     for (const s of sheets) {

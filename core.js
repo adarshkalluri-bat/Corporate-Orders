@@ -245,7 +245,7 @@
     article_code: ['material', 'art code', 'article code', 'article', 'article no', 'article number', 'material number', 'sku'],
     description: ['desc', 'description', 'short text', 'article description', 'material description', 'article desc', 'article name'],
     mc_code: ['mc code', 'merchandise category', 'mdse cat.', 'mdse cat', 'merchandise category code'],
-    mc_name: ['mc name', 'mc desc', 'mc description', 'mc', 'nc name', 'merchandise category name', 'merchandise category desc'],
+    mc_name: ['mc name', 'mc desc', 'mc description', 'mc', 'nc name', 'merchandise category name', 'merchandise category desc', 'merch cat.desc.', 'merch cat desc'],
     category: ['category', 'cat'],
     buyer: ['buyer', 'buy'],
     mrp: ['new mrp', 'mrp', 'old mrp'],
@@ -272,7 +272,7 @@
     lead_time: ['lead time (allocation to store delivery)', 'lead time', 'transit time', 'intransit time', 'in transit time'],
     dc: ['dc/rdc', 'rdc', 'dc'],
     // DC stock
-    site_code: ['dc', 'dc code', 'site', 'site code', 'plant', 'location code'],
+    site_code: ['dc', 'dc code', 'site', 'site code', 'plant', 'plnt', 'location code'],
     total: ['total msa -qty', 'total msa qty', 'total msa stock qty', 'total dc qty', 'msa stock (dc)', 'total qty', 'unrestricted stock', 'unrestricted', 'stock qty', 'stock'],
     v0102: ['v01 & v02 -qty', 'v01 & v02 qty', 'v01 v02 qty'],
     v01: ['v01 -qty', 'v01 qty', 'v01'],
@@ -284,7 +284,8 @@
     sea: ['sea stk -qty', 'sea stk qty', 'sea stock qty'],
     // inwards (GRN) received at the DC after the stock report
     in_qty: ['inward qty', 'inward quantity', 'inwards qty', 'grn qty', 'grn quantity', 'received qty', 'received quantity', 'receipt qty', 'gr qty', 'gr quantity',
-      'qty in une', 'quantity in une', 'qty in unit of entry', 'quantity', 'qty'],
+      'quantity', 'qty'],             // pieces; SAP's "Quantity in UnE" is in packs and is not used
+    mvt: ['mvt', 'movement type', 'mvmt type', 'mvmt'],
     doc_no: ['grn no', 'grn number', 'grn', 'material document', 'mat. doc.', 'mat doc', 'material doc', 'material doc.', 'document number', 'document no', 'doc no',
       'inbound delivery', 'reference'],
     in_date: ['grn date', 'posting date', 'pstng date', 'inward date', 'entry date', 'entered on', 'received date', 'received on', 'receipt date', 'gr date', 'document date', 'doc. date', 'date'],
@@ -304,7 +305,7 @@
     orders: { required: ['order_no', 'store_code', 'article_code', 'req_qty'], optional: ['line_no', 'order_date', 'del_date', 'customer', 'phone', 'poc_name', 'description', 'mc_name', 'mrp', 'req_price', 'pack_size', 'store_name'] },
     /* Inwards: either one row per receipt (article, quantity, and if the file has them: GRN number, date, time, storage location, DC),
        or the layout of the DC stock report with the received quantity under each location. */
-    inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
+    inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'mc_name', 'mvt', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
       need: ['in_qty', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'], needNice: 'Inward qty' },
     /* Stock at each store: closing stock, in transit and CLA, and the sale this month. Other sale columns are not used. */
     storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd'] }
@@ -321,8 +322,9 @@
   function num(v, dflt) {
     if (v == null || v === '') return dflt === undefined ? 0 : dflt;
     if (typeof v === 'number') return v;
-    const n = parseFloat(String(v).replace(/[^\d.\-]/g, ''));
-    return isNaN(n) ? (dflt === undefined ? 0 : dflt) : n;
+    const t = String(v).trim(), neg = /^[\d,.\s]+-$/.test(t);             // SAP writes minus at the end: "1,602-"
+    const n = parseFloat(t.replace(/[^\d.\-]/g, '').replace(/-$/, ''));
+    return isNaN(n) ? (dflt === undefined ? 0 : dflt) : (neg ? -Math.abs(n) : n);
   }
   const numOrNull = (v) => { const n = num(v, null); return n == null ? null : n; };
   function dateStr(v) {                              // anything SAP / Excel gives -> 'YYYY-MM-DD'
@@ -490,10 +492,13 @@
        day: 'YYYY-MM-DD' or '', mins: time of day in minutes or null}. Totals rows and rows without an article number are skipped. */
     inward: (rows) => {
       const out = [];
+      out.skipped = [];                                                  // rows that are not a goods receipt (movement type other than 101, or a minus quantity)
       for (const r of rows) {
         const a = code(r.article_code);
         if (!/^\d{6,}$/.test(a)) continue;
-        const base = { a, s: code(r.site_code), d: code(r.doc_no), day: dateStr(r.in_date), mins: minutesOf(r.in_time) };
+        const mvt = code(r.mvt);
+        if ((mvt && mvt !== '101') || num(r.in_qty) < 0) { out.skipped.push({ a, mvt, q: Math.round(num(r.in_qty)), d: code(r.doc_no) }); continue; }
+        const base = { a, s: code(r.site_code), d: code(r.doc_no), m: txt(r.mc_name), n: txt(r.description), day: dateStr(r.in_date), mins: minutesOf(r.in_time) };
         if (!/^\d{4}-\d{2}-\d{2}$/.test(base.day)) base.day = '';
         if (base.mins == null) base.mins = minutesOf(r.in_date);        // a date cell that carries the time as well
         const byLoc = { v: Math.round(num(r.v0102) + num(r.v01) + num(r.v02)), nso: Math.round(num(r.nso)), hh: Math.round(num(r.hh)), spl: Math.round(num(r.spl)), best: Math.round(num(r.best)), sea: Math.round(num(r.sea)) };
@@ -536,9 +541,11 @@
       ['V01 & V02 -QTY', '', 'Quantity in V01 & V02', 640], ['NSO (0023) -QTY', '', 'Quantity in NSO (0023)', 60], ['HH RESERVED (0043) -QTY', '', 'Quantity in HH reserved (0043)', 300],
       ['SPECIAL BUY (0041) -QTY', '', 'Quantity in Special buy (0041)', 0], ['BEST SELLER (0042) -QTY', '', 'Quantity in Best seller (0042)', 0], ['SEA STK -QTY', '', 'Sea stock', 0]] },
     inward: { file: 'Template_6_Inwards', sheet: 'Inwards', cols: [
-      ['GRN No', '', 'GRN or material document number (a number already loaded is not counted twice)', '5000004411'], ['Posting Date', '', 'Date received (DD.MM.YYYY)', '12.10.2026'],
-      ['Time', '', 'Time received (HH:MM)', '14:35'], ['DC', '', 'DC code', 'DH19'], ['Storage Location', '', '0023 = NSO, 0043 = HH reserved, 0041 = Special buy, 0042 = Best seller; anything else V01 & V02', 'V01'],
-      ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'Article description', 'Casserole 1500ml Red'], ['Inward Qty', 'Yes', 'Pieces received', 600]] },
+      ['Material', 'Yes', 'Article code', '1212013789'], ['Material Description', '', 'Article description', '99-HF-BWL-CRYSTAL-200M-6P-UG-10-26'],
+      ['Quantity', 'Yes', 'Pieces received (SAP "Quantity", not "Quantity in UnE", which is in packs)', 8100], ['Merch Cat.Desc.', '', 'MC name', 'HH_C_G_BOWL'],
+      ['Plnt', '', 'DC code', 'DH29'], ['SLoc', '', '0023 = NSO, 0043 = HH reserved, 0041 = Special buy, 0042 = Best seller; anything else V01 & V02', '0010'],
+      ['MvT', '', 'Movement type: only 101 (goods receipt) is added', '101'], ['Mat. Doc.', '', 'Material document (a document already loaded is not counted twice)', '5025408701'],
+      ['Pstng Date', '', 'Posting date (DD.MM.YYYY)', '13.10.2026']] },
     storestock: { file: 'Template_7_Store_Stock', sheet: 'Store stock', cols: [
       ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'For reference only', 'Casserole 1500ml Red'], ['MRP', '', 'For reference only', 499],
       ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30]] },
