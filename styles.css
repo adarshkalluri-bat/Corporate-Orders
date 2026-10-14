@@ -373,3 +373,12 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 .sttable tr.stg > td { background: #F3EEFF; border-top: 2px solid #D9CCFB; cursor: pointer; font-size: 14px; }
 .sttable tr.stg:hover > td { background: #EAE2FF; } .sttable tr.stg .chev { display: inline-block; width: 12px; color: var(--muted); }
 .sttable tr.stg .sname { color: #4A4370; } .tile.pick { cursor: pointer; } .tile.pick:hover { filter: brightness(.98); }
+
+/* ---------- check a label ---------- */
+.side .labelbtn { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; margin: -2px 0 12px; }
+.labelbtn svg, .iconbtn svg { width: 18px; height: 18px; flex: none; }
+.iconbtn { border: 1px solid #CDBEF7; background: #fff; color: var(--accent-deep); border-radius: 10px; width: 38px; height: 34px; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.labelpop .lblhead { gap: 14px; } .lblimg { width: 96px; max-height: 128px; object-fit: cover; border-radius: 10px; border: 1px solid var(--line); flex: none; background: #fff; }
+.lblart { display: flex; gap: 12px; align-items: flex-start; margin-top: 4px; } .lblart .acode { font-size: 17px; }
+.lblsay { background: var(--lilac); border-radius: 12px; padding: 10px 14px; display: grid; gap: 4px; font-size: 14.5px; line-height: 1.45; margin: 10px 0; }
+@media (max-width: 600px) { .lblimg { width: 64px; max-height: 86px; } }

@@ -44,6 +44,7 @@
     approved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>',
     data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
     sales: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><rect x="5" y="11" width="3" height="7" rx="1"/><rect x="10.5" y="7" width="3" height="11" rx="1"/><rect x="16" y="4" width="3" height="14" rx="1"/></svg>',
+    label: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
     queries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.2v.3"/></svg>',
     lastyear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/><path d="m4 17 5-3 4 1 7-4" stroke-dasharray="2 3"/></svg>'
   };
@@ -211,6 +212,7 @@
   }
   async function boot() {
     if (!A.ready || !R || !window.fflate) return screenConfig();
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => { /* sharing to the app just will not be offered */ });
     const { data } = await A.sb.auth.getSession();
     if (!data.session) return screenLogin();
     enter();
@@ -226,6 +228,7 @@
       }
       await reload();
       startPolling();
+      labelFromShare();
     } catch (e) {
       if (e.oldDb) return screenOldDb();
       if (/sign-in has expired|sign in/i.test(e.message)) { await A.sb.auth.signOut().catch(() => {}); return screenLogin(e.message); }
@@ -298,11 +301,12 @@
         <div class="brand">Allocation Desk</div><div class="brandsub">CORPORATE ORDERS</div>
         ${role ? `<div style="margin-bottom:10px">${role}</div>` : ''}
         <input type="search" id="find" placeholder="Find any article ..." aria-label="Find article">
+        <button class="btn sm labelbtn" data-act="label" title="Choose a photo of an article label (for example one a store sent on WhatsApp); the app reads the article code and shows its stock and orders">${ICON.label} Check a label</button>
         ${NAV.map(([k, t]) => `<button class="nav ${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${NAV_LONG[k] || t}</button>`).join('')}
         <div class="foot">${stockLine(M)}<br>${inr(M.lines.length)} order lines<br>
           ${esc(S.me.name || S.me.email)} (${editor() ? 'editor' : 'viewer'})<br><span data-sync data-act="refresh" style="cursor:pointer">${esc(syncText())}</span></div>
       </aside>
-      <div class="topbar"><span class="brand">Allocation Desk</span>${role}<span class="grow"></span><span class="sync" data-sync data-act="refresh">${esc(syncText())}</span></div>
+      <div class="topbar"><span class="brand">Allocation Desk</span>${role}<span class="grow"></span><button class="iconbtn" data-act="label" title="Check a label" aria-label="Check a label">${ICON.label}</button><span class="sync" data-sync data-act="refresh">${esc(syncText())}</span></div>
       <main data-keep="main">${views[S.view]()}</main>
       <nav class="tabs">${NAV.map(([k, t]) => `<button class="${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${t}</button>`).join('')}</nav>
     </div>`;
@@ -464,6 +468,160 @@
   const l0 = (k) => (k === '(buyer not set)' ? '-' : k);
 
 
+
+
+  /* ================= Check a label =================
+     A photo of an article label (forwarded from a store on WhatsApp) is read on this phone or laptop - the photo goes
+     nowhere - and the article code on it is looked up: one card with the DC position, the stores waiting, the stores'
+     own stock and sale, alternates, last year and queries. Ways in: Share from WhatsApp to the installed app, the
+     "Check a label" button (choose the photo), or paste / drop an image on a laptop. */
+  let ocrWorker = null, labelPop = null;
+  async function ocrReady(say) {
+    if (!window.Tesseract) { say('Loading the label reader (first time only) ...'); await loadScript('vendor/ocr/tesseract.min.js'); }
+    if (!ocrWorker) {
+      say('Starting the label reader ...');
+      const base = new URL('vendor/ocr/', location.href).href;
+      ocrWorker = await window.Tesseract.createWorker('eng', 1, { workerPath: base + 'worker.min.js', corePath: base, langPath: base.replace(/\/$/, ''), gzip: true });
+    }
+    return ocrWorker;
+  }
+  /* the photo, made grey and big enough for small print */
+  async function labelCanvas(blob) {
+    const url = URL.createObjectURL(blob);
+    try {
+      const img = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = () => rej(new Error('This file could not be opened as a picture.')); i.src = url; });
+      const big = Math.max(img.naturalWidth, img.naturalHeight), k = big < 1600 ? Math.min(2.5, 1600 / big) : big > 3000 ? 3000 / big : 1;
+      const c = document.createElement('canvas'); c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      const g = c.getContext('2d'); g.filter = 'grayscale(1) contrast(1.25)'; g.drawImage(img, 0, 0, c.width, c.height);
+      return c;
+    } finally { setTimeout(() => URL.revokeObjectURL(url), 30000); }
+  }
+  /* every number on the label that could be an article code, in the order they appear (barcodes and dates left out) */
+  function labelCandidates(text) {
+    const out = [];
+    for (const raw of String(text || '').split(/[^0-9A-Za-z|]+/)) {
+      if (raw.length < 6 || raw.length > 14) continue;
+      const digits = (raw.match(/\d/g) || []).length;
+      if (digits < raw.length - 2) continue;                                                // a word, not a number
+      const n = raw.replace(/[Oo]/g, '0').replace(/[Il|]/g, '1').replace(/S/g, '5').replace(/B/g, '8').replace(/Z/g, '2');
+      if (!/^\d{6,10}$/.test(n) || /^890\d+/.test(n) && n.length > 10) continue;
+      if (!out.includes(n)) out.push(n);
+    }
+    return out;
+  }
+  /* which of them are articles on file: the everyday data first, then a look-up on the server */
+  async function labelResolve(cands) {
+    const found = [];
+    for (const c of cands) if (S.M.articles[c]) found.push(c);
+    for (const c of cands.filter((x) => !found.includes(x)).slice(0, 8)) {
+      try { const r = await A.rpc('article_search', { p_q: c, p_limit: 10 }); const hit = (r || []).find((x) => x.article_code === c); if (hit) { S.extra[c] = S.extra[c] || hit; found.push(c); } } catch (e) { /* not found */ }
+    }
+    if (found.length) return { found };
+    const near = [];                                                                          // one digit misread
+    for (const c of cands) for (const code of Object.keys(S.M.articles)) {
+      if (code.length !== c.length) continue;
+      let d = 0; for (let i = 0; i < c.length && d < 2; i++) if (c[i] !== code[i]) d++;
+      if (d === 1 && !near.includes(code)) near.push(code);
+    }
+    return { found, near: near.slice(0, 6) };
+  }
+  function labelStart() { const i = $('#label-in'); i.value = ''; i.click(); }
+  async function checkLabel(blob, from) {
+    if (!S.M) return;
+    if (labelPop) labelPop.close();
+    const pv = URL.createObjectURL(blob);
+    labelPop = pop(`<div class="row top"><img class="lblimg" src="${pv}" alt="The label"><div class="grow stack"><h2 style="margin:0">Check a label</h2>
+      <div class="row"><div class="spinner"></div><span class="muted" id="lbl-say">Reading the label ...</span></div></div></div>`, 'big labelpop');
+    const me = labelPop, say = (t) => { const e = $('#lbl-say', me); if (e) e.textContent = t; };
+    me.addEventListener('click', (e) => { if (e.target === me) me.close(); });
+    let cands = [], res = { found: [] };
+    try {
+      const w = await ocrReady(say), canvas = await labelCanvas(blob);
+      /* labels are laid out in different ways: read it as a page first, then as one block, then as loose words */
+      for (const [i, psm] of ['3', '6', '11'].entries()) {
+        say(i ? 'Reading it another way ...' : 'Reading the label ...');
+        await w.setParameters({ tessedit_pageseg_mode: psm });
+        const { data } = await w.recognize(canvas);
+        const more = labelCandidates(data.text).filter((c) => !cands.includes(c));
+        cands = cands.concat(more);
+        if (!more.length) continue;
+        say('Looking up the article ...');
+        res = await labelResolve(cands);
+        if (res.found.length || !me.isConnected) break;
+      }
+    } catch (e) { if (!me.isConnected) return; $('.pop', me).innerHTML = labelShell(pv, `<div class="note bad">${esc(e.message || String(e))}</div>${labelTypeBox()}`); return; }
+    if (!me.isConnected) return;
+    me.dataset.found = res.found.join(',');
+    if (!res.found.length) {
+      $('.pop', me).innerHTML = labelShell(pv, `<div class="note warn">No article code from the article files could be read on this picture${cands.length ? ` (numbers read: ${cands.slice(0, 6).map(esc).join(', ')})` : ''}.</div>
+        ${res.near && res.near.length ? `<div>Did you mean: ${res.near.map((c) => `<button class="btn sm" data-act="labelShow" data-code="${c}">${c}</button>`).join(' ')}</div>` : ''}${labelTypeBox()}`);
+      return;
+    }
+    labelShow(res.found[0], pv);
+    void from;
+  }
+  const labelShell = (pv, inner) => `<div class="row top lblhead"><img class="lblimg" src="${pv}" alt="The label"><div class="grow stack"><div class="row"><h2 class="grow" style="margin:0">Check a label</h2><button class="btn sm" data-act="closePop">Close</button></div>${inner}</div></div>`;
+  const labelTypeBox = () => `<form class="row wrap" id="lbl-type"><label class="f grow">Or type the article code<input name="code" inputmode="numeric" autocomplete="off" placeholder="e.g. 1210009817"></label><button class="btn primary">Show</button></form>`;
+  async function labelShow(code, pv) {
+    const me = labelPop; if (!me || !me.isConnected) return;
+    pv = pv || ($('.lblimg', me) || {}).src || '';
+    const found = (me.dataset.found || '').split(',').filter(Boolean);
+    $('.pop', me).innerHTML = labelShell(pv, `<div class="row"><div class="spinner"></div><span class="muted">Getting ${esc(code)} ...</span></div>`);
+    let d = null;
+    try { d = await A.rpc('article_detail', { p_article: code }); } catch (e) { d = null; }
+    if (qOn() && !S.qy.list) await qLoad(true).catch(() => {});
+    if (!me.isConnected) return;
+    $('.pop', me).innerHTML = labelShell(pv, (found.length > 1 ? `<div class="row wrap"><span class="small">Article codes on this picture:</span>${found.map((c) => `<button class="btn sm ${c === code ? 'primary' : ''}" data-act="labelShow" data-code="${c}">${c}</button>`).join('')}</div>` : '') + labelCardHtml(code, d));
+    hydrate();
+  }
+  function labelCardHtml(code, d) {
+    const M = S.M, a = (d && d.article) || M.articles[code] || S.extra[code];
+    if (!a) return `<div class="note warn">Article ${esc(code)} is not in the article files.</div>${labelTypeBox()}`;
+    const sites = (d && d.sites) || [], inw = (d && d.inwards) || [];
+    const report = sites.reduce((t, s) => t + (s.total || 0), 0), inTot = inw.reduce((t, i) => t + i.qty, 0), dc = report + inTot, reserved = d ? d.reserved : 0, free = dc - reserved;
+    const ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0), pack = C.packOf(a);
+    const lines = M.lines.filter((l) => l.article_code === code);
+    const waiting = lines.filter((l) => l.balance > 0).sort((x, y) => (x.order_date || '').localeCompare(y.order_date || ''));
+    const pend = waiting.reduce((t, l) => t + l.balance, 0), short = Math.max(0, pend - Math.max(free, 0));
+    const appr = lines.filter((l) => l.approved > 0), apprQty = appr.reduce((t, l) => t + l.approved, 0);
+    const stores = (arr) => new Set(arr.map((l) => l.store_code)).size;
+    const al = M.articles[code] ? C.alternates(M, code) : { same: [], diff: [] };
+    const altFree = (arr) => arr.map((x) => [x, Math.max(0, C.freeOf(M, x.article_code))]).filter(([, f]) => f > 0).sort((x, y) => y[1] - x[1]);
+    const sameF = altFree(al.same), diffF = altFree(al.diff), sumF = (arr) => arr.reduce((t, [, f]) => t + f, 0);
+    const ly = d && d.ly && d.ly.lines ? d.ly : null, qs = (S.qy.list || []).filter((q) => q.article_code === code);
+    const asof = M.meta.stock_asof ? when(M.meta.stock_asof) : '';
+    /* the summary, in plain words */
+    const say = [];
+    say.push(!M.meta.stock_asof ? 'No DC stock report is loaded yet.'
+      : `<b>Balance DC qty ${inr(free)} pcs</b>${dc ? ` (DC has ${inr(dc)}${reserved ? `, ${inr(reserved)} already allocated to orders` : ''})` : ' - none at the DC'}.`);
+    if (waiting.length) say.push(`<b>${inr(stores(waiting))} ${plural(stores(waiting), 'store')} waiting</b> for ${inr(pend)} pcs${short ? ` - <span class="bad b">short by ${inr(short)}</span>` : M.meta.stock_asof ? ' - <span class="good b">the DC can cover it</span>' : ''}.`);
+    else say.push('No store is waiting for this article.');
+    if (apprQty) say.push(`${inr(apprQty)} pcs approved so far for ${inr(stores(appr))} ${plural(stores(appr), 'store')}.`);
+    if (ppo) say.push(`Pending PO ${inr(ppo)} pcs - not in the DC stock until it arrives.`);
+    if (sameF.length || diffF.length) say.push(`Alternates with balance: ${sameF.length ? `same design ${inr(sumF(sameF))} pcs` : ''}${sameF.length && diffF.length ? ', ' : ''}${diffF.length ? `same price, other design ${inr(sumF(diffF))} pcs` : ''}.`);
+    else if (short) say.push('No alternate has balance at the DC.');
+    if (ly) say.push(`Last year: ${inr(ly.lines)} order ${plural(ly.lines, 'line')} from ${inr(ly.stores)} ${plural(ly.stores, 'store')}, ${inr(ly.wq)} pcs wanted, ${inr(ly.fq)} approved.`);
+    if (qs.length) say.push(`${inr(qs.length)} ${plural(qs.length, 'query', 'queries')} logged for this article (${inr(qs.reduce((t, q) => t + q.qty, 0))} pcs).`);
+    const ssCell = (l) => (l.ss ? `<td class="right">${inr(l.ss.own.closing)}</td><td class="right">${inr(l.ss.own.transit)}</td><td class="right">${inr(l.ss.own.mtd)}</td>` : '<td></td><td></td><td></td>');
+    const wait = waiting.length ? `<h3>Stores waiting</h3><div class="tablewrap"><table class="tight"><thead><tr><th>Store</th><th>Order</th><th class="right">Qty<br>wanted</th><th class="right">Pending<br>qty</th><th>Deliver by</th>${M.hasStoreStock ? '<th class="right">Store<br>closing</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th>' : ''}</tr></thead><tbody>
+      ${waiting.slice(0, 30).map((l) => `<tr><td><b>${esc(l.store_code)}</b> <span class="small">${esc(l.store_name)}</span></td><td class="small">${esc(ref(l))}</td><td class="right">${inr(l.req_qty)}</td><td class="right b">${inr(l.balance)}</td><td class="small">${delCell(l)}</td>${M.hasStoreStock ? ssCell(l) : ''}</tr>`).join('')}</tbody></table></div>${waiting.length > 30 ? `<p class="small">... and ${waiting.length - 30} more.</p>` : ''}` : '';
+    const alts = sameF.length || diffF.length ? `<h3>Alternates with balance</h3><div class="small">${sameF.concat(diffF).slice(0, 6).map(([x, f]) => `<span class="nowrap"><b>${esc(x.article_code)}</b> ${esc(x.description || '')}: <b class="good">${inr(f)}</b></span>`).join(' &nbsp;|&nbsp; ')}</div>` : '';
+    const qList = qs.length ? `<h3>Queries logged</h3><div class="small">${qs.slice(0, 5).map((q) => `${when(q.created_at)} &middot; <b>${esc(q.store_code)}</b> ${esc(q.store_name || '')} &middot; ${inr(q.qty)} pcs at Rs ${inr2(Number(q.price))} &middot; ${esc(q.by_name || '')}`).join('<br>')}</div>` : '';
+    return `<div class="lblart">${thumb(code, 's')}<div class="grow"><div class="mcname">${esc(a.mc_name || '')}${a.mrp != null ? ' &nbsp;|&nbsp; MRP ' + inr2(Number(a.mrp)) : ''}</div><div><b class="acode">${esc(code)}</b> ${esc(a.description || '')}</div>
+        <div class="small">Pack of ${pack}${a.status === 'In-Active' ? ' &middot; <span class="bad">In-Active</span>' : ''}${a.in_master ? '' : ' &middot; not in the Diwali range'}${asof ? ` &middot; DC stock as of ${asof}` : ''}</div></div></div>
+      <div class="lblsay">${say.map((x) => `<div>${x}</div>`).join('')}</div>
+      <div class="stats five">${stat('Total DC qty', inr(dc))}${stat('Allocated', inr(reserved))}${stat('Balance DC qty', inr(free), free > 0 ? 'good' : 'bad')}${stat('Pending qty', inr(pend), short ? 'bad' : '')}${stat('Pending PO', ppo ? inr(ppo) : '-')}</div>
+      ${wait}${alts}${qList}
+      <div class="row wrap" style="margin-top:12px"><button class="btn" data-act="labelOpenArt" data-code="${esc(code)}">Open article</button>${waiting.length ? `<button class="btn" data-act="labelOrders" data-code="${esc(code)}">See the pending orders</button>` : ''}${qOn() ? `<button class="btn primary" data-act="labelQuery" data-code="${esc(code)}">Log a query</button>` : ''}</div>`;
+  }
+  /* a photo shared to the installed app arrives through sw.js */
+  async function labelFromShare() {
+    if (!/[?&]shared=1/.test(location.search)) return;
+    history.replaceState(null, '', location.pathname);
+    let blob = null;
+    try { const box = await caches.open('allocdesk-shared'), r = await box.match('shared-image'); if (r) { blob = await r.blob(); await box.delete('shared-image'); } } catch (e) { blob = null; }
+    if (blob && blob.size) checkLabel(blob, 'share'); else tell('Check a label', 'No picture came through. Share the photo itself (not a link or a message), or use Check a label and choose it.');
+  }
 
   /* ================= Sell-through: approved qty against the store's stock and MTD sale =================
      One row per store + article that has an approved (or dispatched) quantity. Closing stock, in transit (in transit + CLA)
@@ -2345,6 +2503,11 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     lyMc: (el) => { const k = el.dataset.mc; if (S.ly.all) { S.ly.all = false; S.ly.open = new Set(lyByMc(C.season(S.M, S.M.lyDaily), lyCut(C.season(S.M, S.M.lyDaily))).map((g) => g.key)); } if (S.ly.open.has(k)) S.ly.open.delete(k); else S.ly.open.add(k); render(); },
     lyAll: () => { S.ly.all = !S.ly.all; S.ly.open.clear(); render(); },
     lyFind: () => lyFind(),
+    label: () => labelStart(),
+    labelShow: (el) => labelShow(el.dataset.code),
+    labelOpenArt: (el) => { if (labelPop) labelPop.close(); openArticle(el.dataset.code); },
+    labelOrders: (el) => { if (labelPop) labelPop.close(); ACT.go({ dataset: { view: 'orders', q: el.dataset.code } }); },
+    labelQuery: (el) => { if (labelPop) labelPop.close(); S.qy.form = Object.assign(QBLANK(), { art: el.dataset.code }); S.view = 'queries'; render(); const i = $('#qf-store'); if (i) i.focus(); },
     qSubmit: () => qSubmit(),
     stMore: () => { S.st.limit += 500; setHtml('stlist', stTableHtml()); },
     stToggle: (el) => { const k = el.dataset.key, t = S.st.toggled; if (t.has(k)) t.delete(k); else t.add(k); setHtml('stlist', stTableHtml()); },
@@ -2684,8 +2847,10 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
         catch (err) { prog.close(); tell('Picture was not uploaded', err.message); }
       } else importFile(p.kind, t.files[0]);
     } else if ((t.id === 'img-in' || t.id === 'dir-in') && t.files.length) importImages(t.files);
+    else if (t.id === 'label-in' && t.files[0]) checkLabel(t.files[0], 'pick');
   });
   document.addEventListener('submit', async (e) => {
+    if (e.target.id === 'lbl-type') { e.preventDefault(); const c = C.code(e.target.code.value); if (c) labelShow(c); return; }
     if (e.target.id !== 'addmember') return;
     e.preventDefault();
     const f = e.target, email = f.email.value.trim().toLowerCase(), name = f.name.value.trim(), role = f.role.value, b = $('button', f);
@@ -2721,6 +2886,18 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       const o = $('#modal').lastElementChild, c = o && $('[data-cancel],[data-done],[data-act=closePop]', o);
       if (c) c.click(); else if (!o && LISTS.includes(S.view) && S.o.sel) ACT.unsel();
     }
+  });
+  /* on a laptop: paste a copied picture (for example from WhatsApp Web), or drop an image file on the app */
+  const imgOf = (items) => Array.from(items || []).map((x) => (x.getAsFile ? (x.kind === 'file' ? x.getAsFile() : null) : x)).find((f) => f && /^image\//.test(f.type));
+  document.addEventListener('paste', (e) => {
+    if (!S.M || $('#modal').children.length) return;
+    const el = document.activeElement; if (el && /INPUT|TEXTAREA|SELECT/.test(el.tagName)) return;
+    const f = imgOf(e.clipboardData && e.clipboardData.items); if (f) { e.preventDefault(); checkLabel(f, 'paste'); }
+  });
+  document.addEventListener('dragover', (e) => { if (S.M && e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault(); });
+  document.addEventListener('drop', (e) => {
+    if (!S.M || !e.dataTransfer) return;
+    const f = imgOf(e.dataTransfer.files); if (f) { e.preventDefault(); checkLabel(f, 'drop'); }
   });
   wideMQ.addEventListener('change', (e) => { S.wide = e.matches; if (S.M) render(); });
   window.addEventListener('error', (e) => { if (S.M && e.message) toast('Something went wrong: ' + e.message); });
