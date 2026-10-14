@@ -359,3 +359,17 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
   .qgrid4 { grid-template-columns: repeat(3, minmax(0, 160px)) minmax(0, 1fr); }
 }
 .slist tr[data-act=shortSel] { scroll-margin-top: 96px; }
+
+/* ---------- sell-through ---------- */
+.tiles.st4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sttools { gap: 10px; align-items: flex-end; } label.f.inline select { min-width: 150px; }
+.sttable td.big { font-size: 15px; } .sttable tr.tot td { background: var(--lilac); font-weight: 700; }
+.sttable td.artcell { white-space: normal; min-width: 180px; }
+.stbar { display: inline-block; vertical-align: middle; width: 60px; height: 8px; border-radius: 4px; background: #EEE8FB; margin-right: 8px; overflow: hidden; }
+.stbar i { display: block; height: 100%; background: #14855F; border-radius: 4px; }
+@media (min-width: 960px) { .tiles.st4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+/* nine screens: the phone tab bar scrolls sideways */
+.tabs { overflow-x: auto; scrollbar-width: none; } .tabs::-webkit-scrollbar { display: none; } .tabs button { min-width: 62px; flex: 1 0 auto; }
+.sttable tr.stg > td { background: #F3EEFF; border-top: 2px solid #D9CCFB; cursor: pointer; font-size: 14px; }
+.sttable tr.stg:hover > td { background: #EAE2FF; } .sttable tr.stg .chev { display: inline-block; width: 12px; color: var(--muted); }
+.sttable tr.stg .sname { color: #4A4370; } .tile.pick { cursor: pointer; } .tile.pick:hover { filter: brightness(.98); }

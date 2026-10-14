@@ -18,6 +18,7 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
     ly: { basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
+    st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
@@ -42,11 +43,12 @@
     catalogue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m4 18 5-4 3 2 4-4 4 4"/></svg>',
     approved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>',
     data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
+    sales: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><rect x="5" y="11" width="3" height="7" rx="1"/><rect x="10.5" y="7" width="3" height="11" rx="1"/><rect x="16" y="4" width="3" height="14" rx="1"/></svg>',
     queries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.2v.3"/></svg>',
     lastyear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/><path d="m4 17 5-3 4 1 7-4" stroke-dasharray="2 3"/></svg>'
   };
-  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
-  const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders', lastyear: 'This year vs last year' };
+  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['sales', 'Sell-through'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
+  const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders', lastyear: 'This year vs last year', sales: 'Sell-through' };
 
   /* ================= small building blocks ================= */
   const pill = (st, text) => `<span class="pill ${st}">${esc(text || C.STATUS_LABEL[st] || st)}</span>`;
@@ -289,7 +291,7 @@
     const keep = {};
     $$('[data-keep]').forEach((e) => { keep[e.dataset.keep] = e.scrollTop; });
     const y = window.scrollY, M = S.M;
-    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
+    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, sales: vSellThrough, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
     const role = editor() ? '' : '<span class="pill view">VIEW ONLY</span>';
     app.innerHTML = `<div class="shell">
       <aside class="side">
@@ -461,6 +463,145 @@
   }
   const l0 = (k) => (k === '(buyer not set)' ? '-' : k);
 
+
+
+  /* ================= Sell-through: approved qty against the store's stock and MTD sale =================
+     One row per store + article that has an approved (or dispatched) quantity. Closing stock, in transit (in transit + CLA)
+     and MTD sale come from the store stock report (Data > 7). An approved alternate counts under its own article. */
+  const stPct = (r) => (r.appr > 0 ? r.mtd / r.appr : null);
+  function stRows() {
+    const M = S.M, map = new Map();
+    for (const l of M.lines) {
+      if (!(l.approved > 0)) continue;
+      const k = l.store_code + '|' + l.article_code;
+      let r = map.get(k);
+      if (!r) {
+        const a = M.articles[l.article_code] || {}, st = M.stores[l.store_code] || {}, own = l.ss ? l.ss.own : { closing: 0, transit: 0, mtd: 0 };
+        r = { store: l.store_code, sname: l.store_name || st.store_name || '', state: st.state || '', mc: l.mc_name || a.mc_name || '', art: l.article_code, desc: l.description || a.description || '',
+          mrp: Number(l.mrp) || Number(a.mrp) || 0, appr: 0, value: 0, orders: new Set(), closing: own.closing, transit: own.transit, mtd: own.mtd, buyer: a.buyer || '' };
+        map.set(k, r);
+      }
+      r.appr += l.approved; r.value += Number(l.value) || 0; r.orders.add(l.order_no);
+    }
+    return Array.from(map.values());
+  }
+  const ST_SORTS = { pct: 'Sold % (lowest first)', pct_high: 'Sold % (highest first)', appr: 'Approved qty (most first)', mtd: 'MTD sale (most first)', closing: 'Closing stock (most first)',
+    store: 'Store code', mc: 'MC name', article: 'Article code', mrp: 'MRP (high to low)' };
+  /* Group by: [label, key of a row, the heading: [big, name, small]] */
+  const ST_GROUPS = {
+    none: ['No grouping', null],
+    store: ['Store', (r) => r.store, (r) => [r.store, r.sname, r.state]],
+    state: ['State', (r) => r.state || '(state not on file)', (r) => [r.state || '(state not on file)', '', '']],
+    mc: ['MC', (r) => r.mc.toUpperCase() || '(MC NOT GIVEN)', (r) => [r.mc || '(MC not given)', '', '']],
+    mc_mrp: ['MC, then MRP', (r) => (r.mc.toUpperCase() || '(MC NOT GIVEN)') + '|' + r.mrp, (r) => [r.mc || '(MC not given)', 'MRP ' + inr2(r.mrp), '']],
+    article: ['Article', (r) => r.art, (r) => [r.art, r.desc, r.mc]],
+    buyer: ['Buyer', (r) => r.buyer || '(buyer not set)', (r) => [r.buyer || '(buyer not set)', '', '']]
+  };
+  const ST_STATUS = { nosale: ['No sale yet', (r) => r.mtd <= 0], slow: ['Slow (sold under 50%)', (r) => r.mtd > 0 && stPct(r) < 0.5],
+    selling: ['Selling (50% to 99%)', (r) => stPct(r) >= 0.5 && stPct(r) < 1], sold: ['Sold all (100% or more)', (r) => stPct(r) >= 1] };
+  const stSum = (rows) => rows.reduce((t, r) => { t.appr += r.appr; t.value += r.value; t.closing += r.closing; t.transit += r.transit; t.mtd += r.mtd; return t; },
+    { appr: 0, value: 0, closing: 0, transit: 0, mtd: 0, store: '', mc: '', art: '', mrp: 0 });
+  const ST_CMP = { pct: (a, b) => (stPct(a) ?? 9) - (stPct(b) ?? 9) || b.appr - a.appr, pct_high: (a, b) => (stPct(b) ?? -1) - (stPct(a) ?? -1) || b.appr - a.appr,
+    appr: (a, b) => b.appr - a.appr, mtd: (a, b) => b.mtd - a.mtd, closing: (a, b) => b.closing - a.closing, store: (a, b) => a.store.localeCompare(b.store) || a.art.localeCompare(b.art),
+    mc: (a, b) => a.mc.localeCompare(b.mc) || a.mrp - b.mrp || a.art.localeCompare(b.art), article: (a, b) => a.art.localeCompare(b.art) || a.store.localeCompare(b.store), mrp: (a, b) => b.mrp - a.mrp || a.art.localeCompare(b.art) };
+  /* the rows that pass the search and the filters (store + article level), sorted */
+  function stFiltered() {
+    const T = S.st, words = T.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return stRows().filter((r) => (!words.length || words.every((w) => [r.store, r.sname, r.state, r.mc, r.art, r.desc, r.buyer].join(' ').toLowerCase().includes(w)))
+      && (!T.status || ST_STATUS[T.status][1](r)) && (!T.store || r.store === T.store) && (!T.mc || r.mc === T.mc) && (!T.state || (r.state || '-') === T.state) && (!T.buyer || (r.buyer || '-') === T.buyer))
+      .sort(ST_CMP[T.sort] || ST_CMP.pct);
+  }
+  function stActive() {
+    const T = S.st, out = [];
+    if (T.q.trim()) out.push(['q', 'Search: ' + T.q.trim()]);
+    if (T.status) out.push(['status', ST_STATUS[T.status][0]]);
+    if (T.store) out.push(['store', 'Store: ' + T.store + ' ' + ((S.M.stores[T.store] || {}).store_name || '')]);
+    if (T.state) out.push(['state', 'State: ' + (T.state === '-' ? '(not on file)' : T.state)]);
+    if (T.mc) out.push(['mc', 'MC: ' + T.mc]);
+    if (T.buyer) out.push(['buyer', 'Buyer: ' + (T.buyer === '-' ? '(not set)' : T.buyer)]);
+    return out;
+  }
+  const stChips = () => { const f = stActive();
+    return f.length ? `<span class="small">Filters on:</span>${f.map(([k, t]) => `<button class="fchip" data-act="stClear" data-key="${k}" title="Remove this filter">${esc(t)} <b>&#10005;</b></button>`).join('')}
+      <button class="btn link" data-act="stClearAll">Clear all filters</button>` : ''; };
+  const stBadge = (r) => { const p = stPct(r);
+    return r.mtd <= 0 ? '<span class="pill REJECTED">No sale yet</span>' : p >= 1 ? '<span class="pill APPROVED">Sold all</span>' : p >= 0.5 ? '<span class="pill PARTIAL">Selling</span>' : '<span class="pill AWAITING">Slow</span>'; };
+  const stPctCell = (r) => { const p = stPct(r); return `<td class="right nowrap"><div class="stbar"><i style="width:${Math.min(100, Math.round((p || 0) * 100))}%"></i></div><b>${p == null ? '-' : Math.round(p * 100) + '%'}</b></td>`; };
+  function stTableHtml() {
+    const T = S.st, rows = stFiltered(), G = ST_GROUPS[T.group] || ST_GROUPS.none;
+    if (!rows.length) return `<div class="empty card">${stRows().length ? 'Nothing matches these filters. <button class="btn sm" data-act="stClearAll">Clear all filters</button>' : 'Nothing is approved yet.'}</div>`;
+    const tot = stSum(rows), nums = (x) => `<td class="right b big">${inr(x.appr)}</td><td class="right">${inr(x.closing)}</td><td class="right">${inr(x.transit)}</td><td class="right b big">${inr(x.mtd)}</td>${stPctCell(x)}`;
+    const row = (r) => `<tr><td><b>${esc(r.store)}</b> <span class="small">${esc(r.sname)}</span>${r.state ? `<div class="small muted">${esc(r.state)}</div>` : ''}</td><td class="small">${esc(r.mc)}</td>
+      <td class="artcell"><b class="nowrap pick" data-act="art" data-code="${esc(r.art)}">${esc(r.art)}</b><div class="small">${esc(r.desc)}</div></td><td class="right">${inr2(r.mrp)}</td>${nums(r)}<td>${stBadge(r)}</td></tr>`;
+    let body = '', shown = 0, hidden = 0;
+    if (!G[1]) {
+      const part = rows.slice(0, T.limit); shown = part.length; hidden = rows.length - shown; body = part.map(row).join('');
+    } else {
+      const m = new Map();
+      for (const r of rows) { const k = G[1](r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+      const groups = Array.from(m, ([key, rs]) => Object.assign(stSum(rs), { key, rs, head: G[2](rs[0]), store: rs[0].store, mc: rs[0].mc, art: rs[0].art, mrp: rs[0].mrp }));
+      const byTotal = ['pct', 'pct_high', 'appr', 'mtd', 'closing', 'mrp'].includes(T.sort);
+      groups.sort((a, b) => (byTotal ? (ST_CMP[T.sort])(a, b) : 0) || a.key.localeCompare(b.key));
+      for (const g of groups) {
+        if (shown >= T.limit) { hidden += g.rs.length; continue; }
+        const closed = T.collapsed !== T.toggled.has(g.key), [big, name, small] = g.head;
+        const nSt = new Set(g.rs.map((r) => r.store)).size, nArt = new Set(g.rs.map((r) => r.art)).size;
+        const counts = [T.group === 'store' ? '' : `${nSt} ${plural(nSt, 'store')}`, T.group === 'article' ? '' : `${nArt} ${plural(nArt, 'article')}`].filter(Boolean).join(' &middot; ');
+        body += `<tr class="stg ${closed ? 'closed' : ''}" data-act="stToggle" data-key="${esc(g.key)}" title="${closed ? 'Show' : 'Hide'} the lines under this heading"><td colspan="4"><span class="chev">${closed ? '&#9656;' : '&#9662;'}</span> <b>${esc(big)}</b>${name ? ` <span class="sname">${esc(name)}</span>` : ''}${small ? ` <span class="small muted">${esc(small)}</span>` : ''} <span class="small muted">&middot; ${counts}</span></td>${nums(g)}<td></td></tr>`;
+        if (!closed) { body += g.rs.map(row).join(''); shown += g.rs.length; }
+      }
+    }
+    return `<div class="tablewrap"><table class="tight sttable"><thead><tr><th>Store</th><th>MC</th><th>Article</th><th class="right">MRP</th><th class="right">Approved<br>order qty</th><th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th><th class="right">Sold<br>(MTD sale / approved)</th><th></th></tr></thead><tbody>
+      <tr class="tot"><td colspan="4"><b>Total</b> <span class="small">${inr(rows.length)} store-article ${plural(rows.length, 'line')}, ${inr(new Set(rows.map((r) => r.store)).size)} stores</span></td>${nums(tot)}<td></td></tr>${body}</tbody></table></div>
+      ${hidden ? `<div class="row" style="margin-top:8px"><span class="small grow">${inr(hidden)} more ${plural(hidden, 'line')} not shown.</span><button class="btn sm" data-act="stMore">Show more</button></div>` : ''}`;
+  }
+  function vSellThrough() {
+    const M = S.M, T = S.st;
+    const head = `<div class="head"><h1>Sell-through</h1><span class="sub">Approved order qty at each store against the store's stock and its sale this month (MTD)</span></div>`;
+    if (!M.hasStoreStock) return head + `<div class="card stack"><h2>The store stock report is not loaded</h2><p>This screen uses the closing stock, in transit and MTD sale from the store stock report. ${editor() ? 'Upload it under Data, step 7.' : 'Ask the editor to upload it (Data, step 7).'}</p>${editor() ? '<div><button class="btn primary" data-act="nav" data-view="data">Open Data</button></div>' : ''}</div>`;
+    const all = stRows();
+    if (!all.length) return head + '<div class="card"><div class="empty">Nothing is approved yet. Approved lines show here with the store\'s stock and sale.</div></div>';
+    const ta = all.reduce((t, r) => t + r.appr, 0), tm = all.reduce((t, r) => t + r.mtd, 0), cnt = (k) => all.filter(ST_STATUS[k][1]).length;
+    const tile = (cls, t, v, s, k) => `<div class="tile ${cls}${k ? ' pick' : ''}" ${k ? `data-act="stTile" data-k="${k}" title="Show only these"` : ''}><h3>${t}</h3><b>${v}</b><span>${s}</span></div>`;
+    const tiles = `<div class="tiles st4">${tile('lilac', 'Approved qty', inr(ta) + ' pcs', `${inr(all.length)} store-article lines, ${inr(new Set(all.map((r) => r.store)).size)} stores`)}
+      ${tile('mint', 'MTD sale', inr(tm) + ' pcs', `${ta ? Math.round(tm / ta * 100) : 0}% of the approved qty; ${inr(cnt('sold'))} lines sold all`, 'sold')}
+      ${tile('butter', 'Slow (under 50%)', inr(cnt('slow')), 'store-article lines - tap to see them', 'slow')}${tile('pink', 'No sale yet', inr(cnt('nosale')), 'store-article lines - tap to see them', 'nosale')}</div>`;
+    const opt = (v, t, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(t)}</option>`;
+    const uniq = (f) => Array.from(new Set(all.map(f))).sort(), keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);
+    const stores = uniq((r) => r.store), mcs = uniq((r) => r.mc).filter(Boolean), states = uniq((r) => r.state || '-'), buyers = uniq((r) => r.buyer || '-');
+    const grouped = !!(ST_GROUPS[T.group] || [])[1];
+    return head + `<p class="small" style="margin:-4px 0 10px">Store stock report loaded ${when(M.meta.sstock_loaded)} (${esc(M.meta.sstock_file || '')}). MTD sale is the store's whole sale of the article this month (corporate and regular), so a line approved last month, or an article the store also sells off the shelf, can read differently.</p>
+      ${tiles}
+      <div class="toolbar eight" style="margin-top:12px">
+        <input type="search" id="stq" class="wide search" placeholder="Search store, state, MC, article ..." value="${esc(T.q)}" aria-label="Search">
+        <select id="stgroup" class="gsel" aria-label="Group by" title="How the lines are grouped">${Object.keys(ST_GROUPS).map((k) => opt(k, 'Group by: ' + ST_GROUPS[k][0], T.group)).join('')}</select>
+        <select id="stsort" class="gsel" aria-label="Sort by" title="The order of the lines (and of the groups)">${Object.keys(ST_SORTS).map((k) => opt(k, 'Sort by: ' + ST_SORTS[k], T.sort)).join('')}</select>
+        <select id="ststatus" aria-label="Sale status">${opt('', 'Any sale status', T.status)}${Object.keys(ST_STATUS).map((k) => opt(k, ST_STATUS[k][0], T.status)).join('')}</select>
+        <select id="ststore" aria-label="Store">${opt('', 'All stores', T.store)}${keep(stores, T.store).map((s) => opt(s, s + '  ' + ((M.stores[s] || {}).store_name || ''), T.store)).join('')}</select>
+        <select id="ststate" aria-label="State">${opt('', 'All states', T.state)}${keep(states, T.state).map((s) => opt(s, s === '-' ? '(state not on file)' : s, T.state)).join('')}</select>
+        <select id="stmc" aria-label="MC">${opt('', 'All MCs', T.mc)}${keep(mcs, T.mc).map((m) => opt(m, m, T.mc)).join('')}</select>
+        <select id="stbuyer" aria-label="Buyer">${opt('', 'All buyers', T.buyer)}${keep(buyers, T.buyer).map((b) => opt(b, b === '-' ? '(buyer not set)' : b, T.buyer)).join('')}</select>
+      </div>
+      <div class="row wrap chipsbar" id="stchips">${stChips()}</div>
+      <div class="row wrap bulkbar">${grouped ? `<button class="btn sm" data-act="stCollapse">${T.collapsed ? 'Open all groups' : 'Close all groups (summary only)'}</button>` : ''}
+        <button class="btn sm" data-act="stExport" title="Excel file of exactly the lines listed below">Export these lines to Excel</button><span class="grow"></span></div>
+      <div id="stlist">${stTableHtml()}</div>`;
+  }
+  function exportSellThrough() {
+    const rows = stFiltered(), G = ST_GROUPS[S.st.group] || ST_GROUPS.none;
+    if (!rows.length) return tell('Export', 'There is nothing to export here.');
+    const pc = (r) => (stPct(r) == null ? '' : Math.round(stPct(r) * 1000) / 10), status = (r) => (r.mtd <= 0 ? 'No sale yet' : stPct(r) >= 1 ? 'Sold all' : stPct(r) >= 0.5 ? 'Selling' : 'Slow');
+    return excelFile('Sell_Through', false, (sheet) => {
+      sheet('Sell-through', ['Store Code', 'Store Name', 'State', 'MC Name', 'Article Code', 'Description', 'MRP', 'Buyer', 'Approved Order Qty', 'Approved Value', 'Closing Stock', 'In Transit', 'MTD Sale', 'Sold % (MTD sale / approved)', 'Status', 'Orders'],
+        rows.map((r) => [r.store, r.sname, r.state, r.mc, r.art, r.desc, r.mrp, r.buyer, r.appr, Math.round(r.value), r.closing, r.transit, r.mtd, pc(r), status(r), Array.from(r.orders).join(', ')]));
+      if (G[1]) {
+        const m = new Map(); for (const r of rows) { const k = G[1](r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
+        sheet(('By ' + G[0]).slice(0, 31), [G[0], 'Name', 'Stores', 'Articles', 'Approved Order Qty', 'Closing Stock', 'In Transit', 'MTD Sale', 'Sold %'],
+          Array.from(m.values()).map((rs) => { const t = stSum(rs), h = G[2](rs[0]); return [h[0], h[1], new Set(rs.map((r) => r.store)).size, new Set(rs.map((r) => r.art)).size, t.appr, t.closing, t.transit, t.mtd, pc(t)]; }));
+      }
+      return `Exported ${inr(rows.length)} ${plural(rows.length, 'line')}` + (stActive().length ? ' (the filters you have on were applied)' : '');
+    });
+  }
 
   /* ================= Queries from the stores =================
      Anyone on the team, view-only people too, logs what a store asks for: store, article, discount or final price, quantity.
@@ -2205,6 +2346,13 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     lyAll: () => { S.ly.all = !S.ly.all; S.ly.open.clear(); render(); },
     lyFind: () => lyFind(),
     qSubmit: () => qSubmit(),
+    stMore: () => { S.st.limit += 500; setHtml('stlist', stTableHtml()); },
+    stToggle: (el) => { const k = el.dataset.key, t = S.st.toggled; if (t.has(k)) t.delete(k); else t.add(k); setHtml('stlist', stTableHtml()); },
+    stCollapse: () => { S.st.collapsed = !S.st.collapsed; S.st.toggled.clear(); render(); },
+    stClear: (el) => { S.st[el.dataset.key] = ''; S.st.limit = 300; render(); },
+    stClearAll: () => { Object.assign(S.st, { q: '', status: '', store: '', state: '', mc: '', buyer: '', limit: 300 }); render(); },
+    stTile: (el) => { S.st.status = S.st.status === el.dataset.k ? '' : el.dataset.k; S.st.limit = 300; render(); },
+    stExport: () => exportSellThrough(),
     qExport: () => exportQueries(),
     qClear: () => { S.qy.form = QBLANK(); render(); const i = $('#qf-store'); if (i) i.focus(); },
     qDel: async (el) => {
@@ -2504,6 +2652,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
     else if (t.id === 'lymq' || t.id === 'lysq') { S.ly[t.id === 'lymq' ? 'q' : 'sq'] = t.value; const pos = t.selectionStart, id = t.id; render(); const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.id === 'lylq') S.ly.lq = t.value;
+    else if (t.id === 'stq') { S.st.q = t.value; S.st.limit = 300; setHtml('stlist', stTableHtml()); setHtml('stchips', stChips()); }
     else if (/^qf-/.test(t.id)) qTyped(t);
     else if (t.id === 'qq') { S.qy.q = t.value; setHtml('qlist', qListHtml()); }
     else if (t.id === 'dl-disc') dealCalc('disc');
@@ -2523,6 +2672,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'cscope') { S.c.scope = t.value; S.c.cat = ''; render(); }
     else if (t.id === 'sonly') { S.s.only = t.checked; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
+    else if (['stgroup', 'stsort', 'ststatus', 'ststore', 'ststate', 'stmc', 'stbuyer'].includes(t.id)) { S.st[t.id.slice(2)] = t.value; S.st.limit = 300; if (t.id === 'stgroup') { S.st.collapsed = false; S.st.toggled.clear(); } render(); }
     else if (t.dataset.role) {
       try { await A.rpc('team_set', { p_user: t.dataset.role, p_role: t.value }); toast('Access changed'); } catch (err) { await tell('Not done', err.message); }
       loadTeam();
