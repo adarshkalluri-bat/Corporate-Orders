@@ -235,24 +235,24 @@
     order_no: ['order id', 'order no', 'order number', 'sales order', 'sales document', 'so no', 'so number', 'document number', 'booking no', 'order', 'document'],
     line_no: ['item', 'line item', 'line no', 'item no', 'sales document item', 'line number', 'item number', 'line'],
     order_date: ['booking date', 'book date', 'order date', 'document date', 'created on', 'date'],
-    del_date: ['del date', 'delivery date', 'req delivery date', 'requested delivery date', 'reqd delivery date', 'required delivery date'],
+    del_date: ['del date', 'deliverydt', 'delivery date', 'req delivery date', 'requested delivery date', 'reqd delivery date', 'required delivery date'],
     customer: ['customer', 'customer name', 'corporate', 'corporate name', 'party name'],
     phone: ['ph no.', 'ph no', 'phone', 'phone no', 'mobile', 'mobile no', 'contact no', 'contact number'],
     poc_name: ['booked by', 'poc name', 'contact person', 'contact name', 'store poc'],
     req_price: ['price wanted', 'required price', 'requested price', 'price required', 'offer price', 'order price', 'net price', 'selling price', 'rate', 'price'],
     req_qty: ['quantity wanted', 'qty wanted', 'order qty', 'order quantity', 'required qty', 'required quantity', 'req qty', 'qty required', 'quantity', 'qty'],
     // articles
-    article_code: ['material', 'art code', 'article code', 'article', 'article no', 'article number', 'material number', 'sku'],
-    description: ['desc', 'description', 'short text', 'article description', 'material description', 'article desc', 'article name'],
+    article_code: ['material', 'art code', 'article code', 'article', 'article no', 'article number', 'material number', 'sku', 'artcode'],
+    description: ['desc', 'description', 'short text', 'article description', 'material description', 'article desc', 'article name', 'artdesc'],
     mc_code: ['mc code', 'merchandise category', 'mdse cat.', 'mdse cat', 'merchandise category code'],
-    mc_name: ['mc name', 'mc desc', 'mc description', 'mc', 'nc name', 'merchandise category name', 'merchandise category desc', 'merch cat.desc.', 'merch cat desc'],
+    mc_name: ['mc name', 'mc desc', 'mc description', 'mc', 'nc name', 'merchandise category name', 'merchandise category desc', 'merch cat.desc.', 'merch cat desc', 'mcdes'],
     category: ['category', 'cat'],
     buyer: ['buyer', 'buy'],
     mrp: ['new mrp', 'mrp', 'old mrp'],
     vrp: ['new vrp', 'vrp', 'old vrp'],
     cost: ['new cost', 'cost', 'article cost as per sap', 'cost including bogo'],
     gst: ['gst%', 'gst', 'gst rate', 'gst %'],
-    pack_size: ['packsize', 'pack size', 'pk size', 'pak size', 'pack'],
+    pack_size: ['packsize', 'pack size', 'pk size', 'pak size', 'pack', 'packsizedenom'],
     vendor_code: ['vendor code'],
     vendor_name: ['vendor name', 'vendor'],
     group_same: ['same model alternatives', 'same model alternative', 'same model', 'same design alternatives', 'same design'],
@@ -291,6 +291,19 @@
     in_date: ['grn date', 'posting date', 'pstng date', 'inward date', 'entry date', 'entered on', 'received date', 'received on', 'receipt date', 'gr date', 'document date', 'doc. date', 'date'],
     in_time: ['grn time', 'time of entry', 'entry time', 'posting time', 'received time', 'time'],
     sloc: ['storage location', 'stor. loc.', 'stor loc', 'storage loc', 'sloc', 's.loc', 'stock location', 'location', 'sl'],
+    // approvals done in SAP (the SAP approval export)
+    appr_status: ['apprstatus', 'approval status', 'appr status'],
+    qty_alloc: ['qtyalloc', 'qty alloc', 'quantity allocated', 'allocated qty'],
+    qty_appr: ['qtyappr', 'qty appr', 'quantity approved', 'approved qty'],
+    price_given: ['pricegiven', 'price given', 'approved price'],
+    appr_by: ['issuerecby', 'issue received by', 'approved by'],
+    cat_date: ['catapprdate', 'category approval date', 'approval date'],
+    cat_time: ['catapprtime', 'category approval time'],
+    plan_date: ['planapprdate', 'planning approval date'],
+    plan_time: ['plapprtime', 'planapprtime'],
+    sap_po: ['pono.', 'po no', 'po number', 'pono'],
+    remarks: ['remarks', 'remark'],
+    reason_cat: ['reasoncat', 'reason'],
     // stock at the stores (store-wise stock report)
     ss_cl: ['cl_stk_q', 'closing stock', 'closing stock qty', 'closing qty', 'cl stk qty', 'cl stk', 'store closing stock', 'closing'],
     ss_it: ['intransit_q', 'intransit qty', 'in transit qty', 'intransit', 'in transit', 'git qty', 'git'],
@@ -307,6 +320,9 @@
        or the layout of the DC stock report with the received quantity under each location. */
     inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'mc_name', 'mvt', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
       need: ['in_qty', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'], needNice: 'Inward qty' },
+    /* Approvals and rejections done in SAP: order + article, the status, and what was approved. */
+    sapappr: { required: ['order_no', 'article_code', 'appr_status'], optional: ['qty_alloc', 'qty_appr', 'price_given', 'appr_by', 'cat_date', 'cat_time', 'plan_date', 'plan_time',
+      'site_code', 'sap_po', 'remarks', 'reason_cat', 'store_code', 'store_name', 'mc_name', 'description', 'mrp', 'req_qty', 'req_price', 'order_date', 'del_date', 'poc_name', 'phone', 'pack_size'] },
     /* Stock at each store: closing stock, in transit and CLA, and the sale this month. Other sale columns are not used. */
     storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd'] }
   };
@@ -476,6 +492,33 @@
       }
       return Array.from(agg.values()).filter((r) => r.t !== 0 || r.v || r.n || r.h || r.p || r.b || r.e);
     },
+    /* The SAP approval export. st: 'A' approved (by category or planning), 'R' rejected; other statuses are listed in out.others.
+       q = the quantity allocated in SAP (QtyAlloc; QtyAppr when that is empty). pref = DC locations named in the remark (OK-DH29-0023 -> NSO). */
+    sapappr: (rows) => {
+      const out = []; out.others = {};
+      const at = (d, t) => {
+        const day = dateStr(d); if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+        const mins = minutesOf(t) == null ? (minutesOf(d) == null ? 12 * 60 : minutesOf(d)) : minutesOf(t);
+        return new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10), Math.floor(mins / 60), mins % 60).toISOString();
+      };
+      for (const r of rows) {
+        const o = code(r.order_no), a = code(r.article_code), label = txt(r.appr_status);
+        if (!o || !/^\d{6,}$/.test(a)) continue;
+        const st = /^approved/i.test(label) ? 'A' : /^rejected/i.test(label) ? 'R' : '';
+        if (!st) { out.others[label || '(blank)'] = (out.others[label || '(blank)'] || 0) + 1; continue; }
+        const alloc = Math.round(num(r.qty_alloc)), appr = Math.round(num(r.qty_appr)), rem = txt(r.remarks);
+        const pref = []; const u = rem.toUpperCase();
+        for (const [re, k] of [[/(^|[^0-9])(00)?23([^0-9]|$)/, 'nso'], [/(^|[^0-9])(00)?43([^0-9]|$)/, 'hh'], [/(^|[^0-9])(00)?41([^0-9]|$)/, 'spl'], [/(^|[^0-9])(00)?42([^0-9]|$)/, 'best'], [/V0[12]/, 'v']]) {
+          const m = re.exec(u.replace(/DH\d+/g, ' ')); if (m) pref.push([m.index, k]);
+        }
+        out.push({ o, a, st, label, q: alloc > 0 ? alloc : appr > 0 ? appr : 0, price: numOrNull(r.price_given), who: txt(r.appr_by),
+          at: at(r.cat_date, r.cat_time) || at(r.plan_date, r.plan_time), plan_at: at(r.plan_date, r.plan_time), dc: code(r.site_code), po: code(r.sap_po),
+          remarks: rem, reason: txt(r.reason_cat), pref: pref.sort((x, y) => x[0] - y[0]).map((x) => x[1]).join(','),
+          site: code(r.store_code).toUpperCase(), name: txt(r.store_name), mc: txt(r.mc_name), desc: txt(r.description), mrp: numOrNull(r.mrp),
+          want: Math.round(num(r.req_qty)), pw: numOrNull(r.req_price), book: dateStr(r.order_date), del: dateStr(r.del_date), poc: txt(r.poc_name), phone: code(r.phone), pack: int(r.pack_size) });
+      }
+      return out;
+    },
     /* Stock at the stores: one row per store and article, {s, a, c: closing, i: in transit, l: CLA, m: sale this month}. */
     storestock: (rows) => {
       const agg = new Map();
@@ -549,6 +592,16 @@
     storestock: { file: 'Template_7_Store_Stock', sheet: 'Store stock', cols: [
       ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'For reference only', 'Casserole 1500ml Red'], ['MRP', '', 'For reference only', 499],
       ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30]] },
+    sapappr: { file: 'Template_9_SAP_Approvals', sheet: 'Sheet1', cols: [
+      ['OrderNo', 'Yes', 'Order number', 'HH02051609'], ['ApprStatus', 'Yes', 'Approved By Category / Approved By Planning / Rejected By Category / Rejected By Planning', 'Approved By Planning'],
+      ['ArtCode', 'Yes', 'Article code', '1212013836'], ['ArtDesc', '', 'Article description', '99-HF-BOWL-6P-GLS'], ['MCDes', '', 'MC name', 'HH_C_G_BOWL'],
+      ['Site', '', 'Store code (used when the line is not in the tracker yet)', 'HH02'], ['Name', '', 'Store name', 'BHIWANI'], ['MRP', '', 'MRP', 99],
+      ['QtyWanted', '', 'Qty the store wanted', 500], ['PriceWanted', '', 'Price the store asked', 91.08], ['BookDate', '', 'Booking date', '05.10.2026'], ['DeliveryDT', '', 'Delivery date', '15.10.2026'],
+      ['QtyAlloc', 'Yes for approved', 'Quantity allocated in SAP - this is what is approved', 510], ['QtyAppr', '', 'Used only when QtyAlloc is empty', 510],
+      ['PriceGiven', '', 'Price approved', 91.08], ['IssueRecBy', '', 'Who approved', 'BABLU SINGH'], ['CatApprDate', '', 'Category approval date (the approval date)', '09.10.2026'],
+      ['CatApprTime', '', 'Category approval time', '17:05'], ['PlanApprDate', '', 'Planning approval date', '09.10.2026'], ['DC', '', 'DC', 'DH29'], ['PONo.', '', 'PO number', '5125987975'],
+      ['Remarks', '', 'Remark (a storage location in it, e.g. 0023, is used first for the stock)', 'OK-DH29-0023'], ['ReasonCAT', '', 'Reason for rejection', ''],
+      ['BookedBy', '', 'Who booked', 'TEST CONTACT'], ['ContactNo', '', 'Mobile number', '9000000201'], ['PackSizeDenom', '', 'Pieces in one pack', 10]] },
     orders: { file: 'Template_8_Orders', sheet: 'Orders', cols: [
       ['Site', 'Yes', 'Store (site) code', 'VM101'], ['Name', '', 'Store name', 'Gurugram Sector 14'], ['OrderNo', 'Yes', 'Order number', 'TW26000121'], ['MerchandiseCategory', '', 'For reference only (the MC code is taken from the article files)', 'TH101'],
       ['MC Desc', '', 'MC name', 'Casserole'], ['ArticleCode', 'Yes', 'Article code', '1005107'], ['ArticleDesc', '', 'Article description', 'Casserole 1500ml Red'], ['MRP', '', 'MRP', 499],

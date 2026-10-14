@@ -312,3 +312,4 @@ input.rowp.changed, #ap-price.changed { border-color: var(--warn); background: #
 #ap-price { width: 90px; }
 .otable td.big b.warnt { color: var(--warn); }
 table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; } table.fit th { font-size: 11px; }
+.sapnote { color: #1F6DB5; }

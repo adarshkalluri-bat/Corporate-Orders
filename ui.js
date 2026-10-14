@@ -18,11 +18,15 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 10;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 11;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
-  const priceOn = () => !!S.M && S.M.schema >= 8;     // approving a price with the quantity needs database version 8
+  const priceOn = () => !!S.M && S.M.schema >= 8;
+  const sapOn = () => !!S.M && S.M.schema >= 11;      // approvals done in SAP need database version 11
+  /* What the SAP approval file said about a line, in one line of text */
+  const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
+    return [x.label || (x.status === 'APPROVED' ? 'Approved in SAP' : 'Rejected in SAP'), x.status === 'APPROVED' && x.qty ? inr(x.qty) + ' pcs' : '', x.by, x.at ? when(x.at) : '', x.po ? 'PO ' + x.po : '', x.remarks].filter(Boolean).join(' · '); };     // approving a price with the quantity needs database version 8
   const artOf = (code) => (S.M && S.M.articles[code]) || S.extra[code] || null;
   const tick = () => new Promise((r) => setTimeout(r, 30));
   const ICON = {
@@ -328,7 +332,9 @@
     SAP: ['SAP quantity changed', (l) => l.sap_new_qty != null],
     DUP: ['Duplicate article in the order', (l) => l.dup_count > 0],
     STOREFULL: ['Store already holds the qty wanted (incl. alternates)', (l) => !!l.ss && l.req_qty > 0 && l.ss.family >= l.req_qty],
-    STOREHAS: ['Store has stock of it or an alternate', (l) => !!l.ss && l.ss.family > 0]
+    STOREHAS: ['Store has stock of it or an alternate', (l) => !!l.ss && l.ss.family > 0],
+    SAPDIFF: ['Differs from the SAP approval file', (l) => !!(l.sap_appr && l.sap_appr.conflict)],
+    SAPDONE: ['Approved or rejected in SAP', (l) => !!l.sap_appr]
   };
   const dupText = (l) => `entered ${l.dup_count} times in the SAP export (qty ${l.dup_qty || '?'})`;
   const dupBadge = (l) => (l.dup_count > 0 ? `<span class="badge bad" title="${esc('The same article is ' + dupText(l) + '. It is taken once.')}">Duplicate article</span>` : '');
@@ -365,6 +371,8 @@
       const ords = Array.from(new Set(lines.filter(FLAGS.DUP[1]).map((l) => l.order_no)));
       items.push(['bad', `Duplicate article in ${inr(ords.length)} ${plural(ords.length, 'order')}: <b>${ords.slice(0, 8).map(esc).join(', ')}</b>${ords.length > 8 ? ` and ${ords.length - 8} more` : ''}. The same article is entered more than once; each is taken once.`, go('Open', { flag: 'DUP' })]);
     }
+    const sapDiff = cnt('SAPDIFF');
+    if (sapDiff) items.push(['bad', `${inr(sapDiff)} ${plural(sapDiff, 'line')}: the SAP approval file says something different from this tracker - nothing was changed on ${sapDiff === 1 ? 'it' : 'them'}, please check`, go('Open', { flag: 'SAPDIFF' })]);
     const fullAtStore = lines.filter((l) => NEEDS.includes(l.status) && FLAGS.STOREFULL[1](l)).length;
     if (fullAtStore) items.push(['warn', `${inr(fullAtStore)} pending ${plural(fullAtStore, 'line')}: the store already holds at least the quantity it wants, in the article or its alternates (closing stock + in transit)`, go('Open', { flag: 'STOREFULL' })]);
     if (cnt('SAP')) items.push(['warn', `${inr(cnt('SAP'))} ${plural(cnt('SAP'), 'line')}: quantity changed in SAP after import`, go('Review', { flag: 'SAP' })]);
@@ -485,6 +493,8 @@
       <button class="btn link" data-act="clearFilters">Clear all filters</button>` : '';
   }
   function noteOf(l) {
+    if (l.sap_appr && l.sap_appr.conflict) return `<span class="bad">Differs from SAP: ${esc(l.sap_appr.conflict)}</span>`;
+    if (l.sap_appr && l.status !== 'PENDING') return `<span class="sapnote">${esc(sapText(l))}</span>`;
     if (l.sap_new_qty != null) return `<span class="warn">SAP qty now ${inr(l.sap_new_qty)}</span>`;
     if (l.status === 'REJECTED') return esc(l.reject_reason || '');
     if (l.offered) return `${inr(l.offered)} pcs of alternate offered`;
@@ -815,6 +825,13 @@
       <div class="small">${l.margin == null ? 'Margin cannot be worked out: cost or GST for this article is not on file.' : `${l.price_missing ? 'The store gave no price, so MRP is used. ' : ''}Margin after this discount is ${pct(l.margin)}; at ${Number(a.vrp) > 0 && Number(a.vrp) !== Number(l.mrp) ? 'VRP ' + inr(a.vrp) : 'MRP'} it would be ${pct(l.base_margin)}. Order value ${rupees(l.ask_value)}${l.approved ? ', approved ' + rupees(l.value) : ''}.`}</div>
       <div class="stats">${stat('Qty wanted', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered (alternate)', inr(l.offered), l.offered ? 'warn' : '')}${stat('Pending qty', inr(l.balance), l.balance ? 'bad' : '')}</div>
       ${deliveryNote(l)}</div>`);
+    if (l.sap_appr) {
+      const x = l.sap_appr, kv = (k, v) => (v ? `<span>${k}</span><b>${v}</b>` : '');
+      out.push(`<div class="card stack"><h3>In SAP</h3>${x.conflict ? `<div class="note bad"><b>The SAP approval file differs from this tracker:</b> ${esc(x.conflict)}. Nothing was changed on this line - check it and correct it here or in SAP.</div>` : ''}
+        <div class="kv">${kv('Status', esc(x.label || x.status))}${x.status === 'APPROVED' ? kv('Qty allocated', x.qty ? inr(x.qty) + ' pcs' : '') + kv('Price given', x.price ? 'Rs ' + inr2(x.price) : '') : ''}
+          ${kv('By', esc(x.by || ''))}${kv('Category approval', x.at ? when(x.at) : '')}${kv('Planning approval', x.plan_at ? when(x.plan_at) : '')}${kv('DC', esc(x.dc || ''))}${kv('PO', esc(x.po || ''))}
+          ${kv('Remarks', esc(x.remarks || ''))}${kv('Reason', esc(x.reason || ''))}${kv('From file', esc(x.file || '') + (x.loaded ? ', loaded ' + when(x.loaded) : ''))}</div></div>`);
+    }
     if (l.orig_article) out.push(`<div class="card"><div class="note info"><b>${esc(l.article_code)} is here in place of ${esc(l.orig_article)}</b> ${esc(l.orig_desc)}, which is what the store ordered. Cancelling the approval of the alternate brings the ordered article back.</div></div>`);
     if (l.ss) {
       const row = (code, kind, v, strong) => `<tr><td class="w"><b>${esc(code)}</b> <span class="small muted">${kind}</span><div class="small">${esc((artOf(code) || {}).description || '')}</div></td><td class="right">${inr(v.closing)}</td><td class="right">${inr(v.transit)}</td><td class="right b">${inr(v.total)}</td><td class="right">${inr(v.mtd)}</td></tr>`;
@@ -1246,6 +1263,8 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           b('Upload store stock ...', 'pick', 'data-kind="storestock"') + b('Template', 'template', 'data-kind="storestock"', 'ghost'), ssSt));
       }
       left.push(step('8 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary') + b('Template', 'template', 'data-kind="orders"', 'ghost'), last('Orders')));
+      if (sapOn()) left.push(step('9 &nbsp;Approvals done in SAP', 'The SAP approval export (OrderNo, ArtCode, ApprStatus ...). For each order + article: <b>approved by category or by planning</b> - the quantity allocated in SAP (QtyAlloc) is approved here, at the price given, by the person (IssueRecBy) and on the date (CatApprDate) SAP shows, and taken off the DC stock; <b>rejected</b> - the line is rejected with the SAP status and remark. Lines not in the tracker yet are added. Nothing is applied twice, and where the tracker and SAP disagree nothing is changed: those lines are listed for you to check. <b>Load this before a fresh DC stock report.</b>',
+        b('Upload SAP approvals ...', 'pick', 'data-kind="sapappr"', 'primary') + b('Template', 'template', 'data-kind="sapappr"', 'ghost'), last('SAP approvals')));
     }
     left.push(step('Export everything', 'One Excel file with every order line (pending, approved, dispatched, rejected), every allocation, stock by location and the activity log. To export only the pending orders, the approved orders or the shortages, use the Export button on that screen.', b('Export to Excel', 'export')));
     if (M.counts.deleted) left.push(step('Deleted order lines', `${inr(M.counts.deleted)} order ${plural(M.counts.deleted, 'line')} deleted from the Orders screen. They stay out when the SAP export is uploaded again. ${ed ? 'You can bring any of them back.' : ''}`, b('Show deleted lines', 'showDeleted')));
@@ -1274,7 +1293,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
 
   /* ---------- reading files ---------- */
   const chunks = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
-  const TITLES = { master: 'Diwali article master', data: 'Full article data', stores: 'Stores', stock: 'DC stock report', orders: 'Orders', inward: 'Inwards', storestock: 'Stock at the stores' };
+  const TITLES = { master: 'Diwali article master', data: 'Full article data', stores: 'Stores', stock: 'DC stock report', orders: 'Orders', inward: 'Inwards', storestock: 'Stock at the stores', sapappr: 'Approvals done in SAP' };
   const firstFew = (notes, n) => (notes.length ? '\n\n' + notes.slice(0, n).join('\n') + (notes.length > n ? `\n... and ${notes.length - n} more` : '') : '');
 
   async function importFile(kind, file, quiet) {
@@ -1322,6 +1341,26 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') + (gone ? `\nDeleted by you earlier (not added again): ${inr(gone)}` : '') +
           (dupOrders.length ? `\n\nDUPLICATE ARTICLE in ${dupOrders.length} ${plural(dupOrders.length, 'order')}: ${dupOrders.join(', ')}\nThe same article is entered more than once in the order. Each is taken once${S.M.schema >= 3 ? ' and marked on the Orders screen (filter: "Duplicate article in the order")' : ''}:` + firstFew(shaped.repeats, 15).replace(/^\n\n/, '\n') +
             (S.M.schema >= 3 ? '' : '\n(To keep these marked on the Orders screen, run the newest supabase-setup.sql once in Supabase. Your data stays as it is.)') : '') + firstFew(Array.from(new Set(notes)), 12);
+      } else if (kind === 'sapappr') {
+        if (!sapOn()) throw new Error('Approvals done in SAP need the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
+        const shaped = C.shape.sapappr(rows), parts = chunks(shaped, 300);
+        const others = Object.entries(shaped.others);
+        if (!shaped.length) throw new Error('No approved or rejected order lines were found in this file.' + (others.length ? '\nStatuses found: ' + others.map(([k, n]) => `${k} (${n})`).join(', ') : ''));
+        const t = { approved: 0, approved_new: 0, rejected: 0, rejected_new: 0, same: 0, closed: 0, deleted: 0, conflicts: [], notes: [] };
+        for (let i = 0; i < parts.length; i++) {
+          prog.set(`Applying ${inr(Math.min((i + 1) * 300, shaped.length))} of ${inr(shaped.length)} lines ...`);
+          const r = await A.rpc('sap_status_import', { p_rows: parts[i], p_file: file.name });
+          for (const k of ['approved', 'approved_new', 'rejected', 'rejected_new', 'same', 'closed', 'deleted']) t[k] += r[k] || 0;
+          t.conflicts = t.conflicts.concat(r.conflicts || []); t.notes = t.notes.concat(r.notes || []);
+        }
+        const nA = shaped.filter((x) => x.st === 'A').length, nR = shaped.length - nA;
+        msg = `${where}Lines in the file: ${inr(shaped.length + others.reduce((x, [, n]) => x + n, 0))} (approved ${inr(nA)}, rejected ${inr(nR)})\n\n` +
+          `Pending lines now approved: ${inr(t.approved)}\nNew lines added as approved: ${inr(t.approved_new)}\nPending lines now rejected: ${inr(t.rejected)}\nNew lines added as rejected: ${inr(t.rejected_new)}\n` +
+          `Already as SAP says (nothing to do): ${inr(t.same)}` + (t.closed ? `\nApproved for less than wanted - the rest closed: ${inr(t.closed)}` : '') +
+          (t.deleted ? `\nDeleted here earlier (left out): ${inr(t.deleted)}` : '') +
+          (others.length ? `\nOther statuses, not used: ${others.map(([k, n]) => `${k} (${n})`).join(', ')}` : '') +
+          (t.conflicts.length ? `\n\nNEED A LOOK - the tracker and SAP disagree, nothing was changed (${t.conflicts.length}; filter "Differs from the SAP approval file"):` + firstFew(t.conflicts, 15).replace(/^\n\n/, '\n') : '') +
+          firstFew(Array.from(new Set(t.notes)), 10) + '\n\nThe approved quantities are taken off the DC stock. When you load the next DC stock report, answer whether this stock has already left the DC.';
       } else if (kind === 'storestock') {
         if (!ssOn()) throw new Error('Stock at the stores needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
         prog.set('Reading the store stock ...'); await tick();
@@ -1553,6 +1592,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     'Approved qty (as entered)', 'Final Qty to Store', 'Price Approved', 'Approved from (DC location)', 'Order Value', 'Offered (awaiting store)', 'Dispatched Qty', 'Pending Qty',
     'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'Total DC Qty (stock report + inwards)', 'of which inwards since the report', 'Balance DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending PO', 'Store Closing Stock', 'Store In Transit (incl. CLA)', 'Store Total Stock', 'Store MTD Sale', 'Store Stock in Alternates', 'Alternates Held by Store',
+      'SAP Approval Status', 'SAP Qty Allocated', 'SAP Price Given', 'SAP Approved By', 'SAP Approval Date', 'SAP PO', 'SAP Remarks', 'Differs From SAP',
       'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']);
   function orderRow(l, ex, byLine) {
     const M = S.M, mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), p = M.pos[l.article_code] || NOPOS, a = M.articles[l.article_code] || {};
@@ -1563,6 +1603,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       l.dup_count ? `Entered ${Math.abs(l.dup_count)} times (qty ${l.dup_qty || ''}), taken once${l.dup_count < 0 ? ' - checked with the store' : ''}` : '', ex.approvers[l.id] || '', l.lead_time, l.dc, l.allocate_by || '', l.late ? 'Yes' : '',
       p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0),
       l.ss ? l.ss.own.closing : '', l.ss ? l.ss.own.transit : '', l.ss ? l.ss.own.total : '', l.ss ? l.ss.own.mtd : '', l.ss ? l.ss.altTotal : '', l.ss ? l.ss.alts.filter((x) => x.total > 0).map((x) => `${x.code} (${x.total})`).join(', ') : '',
+      ...(() => { const x = l.sap_appr || {}; return [x.label || '', x.qty || '', x.price || '', x.by || '', x.at ? when(x.at) : '', x.po || '', x.remarks || '', x.conflict || '']; })(),
       l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
   }
   const STOCK_HEAD = ['MC Name', 'MRP', 'Article', 'Description', 'Buyer', 'Same design group', 'Same price group', 'Pack', 'Stock report qty (Total MSA)', 'Inwards since the report', 'Total DC Qty']
