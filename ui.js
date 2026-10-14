@@ -18,7 +18,7 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 11;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 12;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -457,7 +457,7 @@
   const LISTS = ['orders', 'approved'];
   const sec = (view) => ((view || S.view) === 'approved' ? S.a : S.o);
   const SEGS = { todo: ['Approved', (l) => l.approved_open > 0], done: ['Dispatched', (l) => l.dispatched > 0], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
-  const ticks = (view) => editor() && S.wide && (view || S.view) !== 'approved';       // tick boxes are for the actions on Pending orders
+  const ticks = (view) => editor() && S.wide && ((view || S.view) !== 'approved' || S.a.seg === 'todo');   // tick boxes: Pending orders, and Approved (to mark dispatched)
   const baseLines = (view) => (view === 'approved' ? S.M.lines.filter(SEGS[S.a.seg][1]) : S.M.lines.filter((l) => NEEDS.includes(l.status)));
   function ordersFiltered(view) {
     view = view === 'approved' || (!view && S.view === 'approved') ? 'approved' : 'orders';
@@ -494,7 +494,7 @@
   }
   function noteOf(l) {
     if (l.sap_appr && l.sap_appr.conflict) return `<span class="bad">Differs from SAP: ${esc(l.sap_appr.conflict)}</span>`;
-    if (l.sap_appr && l.status !== 'PENDING') return `<span class="sapnote">${esc(sapText(l))}</span>`;
+    if (l.sap_appr && l.status !== 'PENDING') { const x = l.sap_appr; return `<span class="sapnote">${esc([(x.label || '').replace(/^(Approved|Rejected) By (\w+)$/i, '$1 by $2') + ' in SAP', x.by, x.at ? when(x.at).slice(0, 6) : '', x.po ? 'PO ' + x.po : ''].filter(Boolean).join(' · '))}</span>`; }
     if (l.sap_new_qty != null) return `<span class="warn">SAP qty now ${inr(l.sap_new_qty)}</span>`;
     if (l.status === 'REJECTED') return esc(l.reject_reason || '');
     if (l.offered) return `${inr(l.offered)} pcs of alternate offered`;
@@ -580,7 +580,7 @@
      then the numbers in large type, each in its own clearly named column. The group heading already carries some details. */
   function columnsFor(view, hide, ed) {
     const h = new Set(hide.split(' '));
-    return { chk: ed && view !== 'approved', so: !h.has('so'), art: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
+    return { chk: ed && (view !== 'approved' || S.a.seg === 'todo'), so: !h.has('so'), art: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
       ss: view !== 'approved' && !!S.M.hasStoreStock };
   }
   function tableHead(view, c, ed) {
@@ -588,14 +588,15 @@
     let cols = (c.chk ? W('36px') : '') + (c.so ? '<col>' : '') + (c.art ? W(c.so ? '190px' : '230px') : '') + (c.so ? '' : W('104px')) + W('84px') + W('94px');
     let th = (c.chk ? '<th></th>' : '') + (c.so ? TH('Store / order', 'booked, delivery') : '') + (c.art ? TH('Article') : '') + (c.so ? '' : TH('Booked', 'delivery')) +
       TH('Qty wanted', 'pcs', 'right') + (view === 'approved' ? TH('Price', 'Rs per pc', 'right') : TH('Price wanted', 'Rs per pc', 'right'));
-    if (view === 'approved') {
-      cols += W('110px') + (locsOn() ? W('170px') : '') + W('116px') + W('124px') + W(ed && locsOn() ? '120px' : '84px');
+    if (view === 'approved') {             // fixed widths that fit a laptop screen; the article column takes what is left
+      cols = (c.chk ? W('36px') : '') + (c.so ? W('180px') : '') + (c.art ? '<col>' : '') + (c.so ? '' : (c.art ? W('104px') : '<col>')) + W('80px') + W('92px') +
+        W('90px') + (locsOn() ? W('130px') : '') + W('96px') + W('132px') + W(ed && locsOn() ? '96px' : '84px');
       th += TH('Approved', 'pcs', 'right') + (locsOn() ? TH('Taken from', 'DC location') : '') + TH('Value', 'Rs', 'right') + TH('Status') + '<th></th>';
     } else {
       cols += W('92px') + (c.ss ? W('98px') + W('78px') : '') + W(ed ? (priceOn() ? '226px' : '192px') : '120px');
       th += TH('Balance DC qty', 'free to approve', 'right') + (c.ss ? TH('Store stock', 'closing + in transit', 'right') + TH('Store sale', 'this month', 'right') : '') + (ed ? TH('Approve', priceOn() ? 'qty &nbsp; &middot; &nbsp; price Rs' : 'pcs') : TH('Status'));
     }
-    if (!c.so) cols = cols.replace(c.art ? W('230px') : W('104px'), '<col>');      // the article column (or the dates, when grouped by article) takes the spare room
+    if (!c.so && view !== 'approved') cols = cols.replace(c.art ? W('230px') : W('104px'), '<col>');      // the article column (or the dates, when grouped by article) takes the spare room
     return `<colgroup>${cols}</colgroup><thead><tr>${th}</tr></thead>`;
   }
   /* Stock at the ordering store: the article itself, and what its alternates add. */
@@ -645,9 +646,9 @@
     if (view === 'approved') {
       const more = [l.dispatched ? `${inr(l.dispatched)} dispatched` : '', l.balance ? `${inr(l.balance)} still pending` : ''].filter(Boolean).join(', ');
       return wrap(l.status === 'REJECTED' ? 'rej' : '', `<td class="big right"><b class="${l.approved ? 'good' : 'zero'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
-        ${locsOn() ? `<td class="from">${esc(C.locText(l.locs)) || '<span class="muted">-</span>'}</td>` : ''}
+        ${locsOn() ? `<td class="from">${C.locText(l.locs) ? esc(C.locText(l.locs)) : l.sap_appr && l.sap_appr.status === 'APPROVED' ? `<span class="sapnote">In SAP${l.sap_appr.dc ? ' &middot; ' + esc(l.sap_appr.dc) : ''}</span>${l.sap_appr.remarks ? `<div class="small">${esc(l.sap_appr.remarks)}</div>` : ''}` : '<span class="muted">-</span>'}</td>` : ''}
         <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
-        <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() ? '>Details / change<' : '>Details<')}</div></td>`);
+        <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() && C.locText(l.locs) ? '>Details / change<' : '>Details<')}</div></td>`);
     }
     const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack), maxQ = canAct ? canGive(l) : 0;
     const dflt = top ? (need <= top ? l.open_qty : top) : 0, f = C.roundPack(dflt, l.pack);
@@ -732,7 +733,7 @@
     const stores = uniqOf(base, (l) => l.store_code).sort(), mcs = uniqOf(base, (l) => l.mc_name).sort(), buyers = Array.from(new Set(base.map((l) => l.buyer || '-'))).sort();
     const keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);          // a chosen filter stays in its list even when it matches nothing now
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
-    const bulk = !ed || !S.wide || view === 'approved' ? '' : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
+    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>` : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
         <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
@@ -902,7 +903,7 @@ if (l.approved_open > 0) acts.push('<button class="btn link" data-act="dispatch"
         const rounded = x.entered_qty != null && x.entered_qty !== x.qty ? ` <span class="small">(${inr(x.entered_qty)} asked, rounded up to full packs)</span>` : '';
         let b = '';
         if (ed && x.state === 'OFFERED') b = `<button class="btn sm primary" data-act="confirmOffer" data-alloc="${x.id}">Store confirmed</button><button class="btn sm" data-act="declineOffer" data-alloc="${x.id}">Store declined</button>${locsOn() ? `<button class="btn link" data-act="allocLocs" data-alloc="${x.id}">Change locations</button>` : ''}<button class="btn link" data-act="remsg">Message again</button>`;
-else if (ed && x.state === 'APPROVED') b = `${locsOn() ? `<button class="btn sm" data-act="allocLocs" data-alloc="${x.id}">Change locations ...</button>` : ''}<button class="btn link" data-act="undo" data-alloc="${x.id}">Cancel approval</button>`;
+else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `<button class="btn sm" data-act="allocLocs" data-alloc="${x.id}">Change locations ...</button>` : ''}<button class="btn link" data-act="undo" data-alloc="${x.id}">Cancel approval</button>`;
         else if (ed) b = `<button class="btn link" data-act="undo" data-alloc="${x.id}">Undo dispatch</button>`;
         const from = locsOn() && C.locText(x.locs) ? `<div class="allocfrom">Taken from <b>${esc(C.locText(x.locs))}</b></div>` : '';
         return `<div class="alloc">${pill(x.state)}<div class="grow"><b>${inr(x.qty)} pcs</b> of ${esc(x.article_code)} ${esc((artOf(x.article_code) || {}).description || '')}${rounded}
@@ -1867,6 +1868,14 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     undo: (el) => run(() => A.rpc('undo_alloc', { p_alloc: +el.dataset.alloc }), 'Undone'),
 dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use this only if the stock on this line has left the DC and you do not want to wait for the next DC stock report.\n\nUntil a newer stock report is loaded, the quantity is still taken off the current one, exactly as now.', 'Mark dispatched')) run(() => A.rpc('dispatch_lines', { p_lines: [S.o.sel] }), 'Marked dispatched'); },
     closeBal: () => run(() => A.rpc('close_balance', { p_line: S.o.sel }), 'Pending quantity closed'),
+    bulkDispatch: async () => {
+      const L = Array.from(sec().checked).map((id) => S.M.byId[id]).filter((l) => l && l.approved_open > 0);
+      if (!L.length) return tell('Mark dispatched', 'Tick one or more approved lines first ("Tick all shown" ticks every line listed).');
+      const pcs = L.reduce((t, l) => t + l.approved_open, 0);
+      if (!(await confirmBox(`Mark ${L.length} ${plural(L.length, 'line')} dispatched?`, L.slice(0, 12).map((l) => `${l.store_code}  ${l.order_no}  ${l.article_code}: ${inr(l.approved_open)} pcs`).join('\n') + (L.length > 12 ? `\n... and ${L.length - 12} more` : '') +
+        `\n\n${inr(pcs)} pcs in all. The lines move to the Dispatched tab. Until a newer DC stock report is loaded, stock approved here stays taken off the DC balance (approvals from SAP never are). Undo is in each line's Details.`, 'Mark dispatched'))) return;
+      run(async () => { const n = await A.rpc('dispatch_lines', { p_lines: L.map((l) => l.id) }); sec().checked.clear(); return n; }, (n) => `Marked dispatched: ${n} ${plural(n, 'line')}`);
+    },
     bulkClose: async () => {
       const ids = Array.from(sec().checked).map((id) => S.M.byId[id]).filter(Boolean);
       const L = ids.filter((l) => l.status === 'PARTIAL');
