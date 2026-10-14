@@ -314,3 +314,25 @@ input.rowp.changed, #ap-price.changed { border-color: var(--warn); background: #
 table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; } table.fit th { font-size: 11px; }
 .sapnote { color: #1F6DB5; }
 .otable td.from .small { font-weight: 400; color: var(--muted); } .otable td.so { overflow-wrap: anywhere; }
+
+/* ---------- this year against last year ---------- */
+.lyctl { gap: 8px; margin-bottom: 4px; } .lyctl .segs { margin-bottom: 8px; }
+.lystack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.lykpi td:first-child { white-space: normal; min-width: 130px; } .lykpi th .small { font-weight: 400; }
+.lykpi td, .lykpi th { padding: 7px 10px; } .lykpi td.num { font-size: 15px; font-variant-numeric: tabular-nums; } .lykpi td.b { font-size: 16px; }
+.lyday td, .lymc td { font-variant-numeric: tabular-nums; }
+.lyday tr.hl td { background: var(--select); font-weight: 600; } .lyday tr.later td { color: var(--muted); }
+.lymc tr.tot td { background: var(--lilac); font-weight: 700; } .lymc tr.mc td { border-top: 1px solid var(--line); }
+.lymc tr.mrp td { font-size: 13px; color: #4A4370; } .lymc .ind { padding-left: 22px; } .lymc .caret { display: inline-block; width: 12px; color: var(--muted); }
+.lychart { position: relative; } .lychart svg { width: 100%; height: auto; display: block; touch-action: pan-y; }
+.lychart .ax { font-size: 11px; fill: var(--muted); } .lychart .dl { font-size: 12px; fill: var(--ink); } .lychart .dl.b { font-weight: 700; }
+.lychart .legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--ink); margin-bottom: 4px; }
+.lychart .legend i, .lychart .tip i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.lychart .tip { position: absolute; top: 28px; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 6px 18px rgba(46, 42, 74, .14);
+  padding: 8px 10px; font-size: 12px; pointer-events: none; white-space: nowrap; z-index: 2; } .lychart .tip div { margin-top: 3px; }
+.lybigs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.lybig { display: flex; flex-direction: column; gap: 2px; background: var(--bg); border-radius: 12px; padding: 10px 12px; }
+.lybig > span:first-child { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; } .lybig b { font-size: 20px; }
+@media (min-width: 960px) {
+  .lybigs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

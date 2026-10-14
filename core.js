@@ -159,7 +159,7 @@
     for (const l of lines) byId[l.id] = l;
     const locOrder = String(snap.loc_order || DEFAULT_LOC_ORDER).split(',').filter((k) => LOC_NAME[k] && k !== 'oth');
     return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [], hasStoreStock: hasSS,
-             oldestOffer: snap.oldest_offer, rev: snap.rev, counts: snap.counts || {}, schema: snap.schema || 1 };
+             oldestOffer: snap.oldest_offer, rev: snap.rev, counts: snap.counts || {}, schema: snap.schema || 1, lyDaily: snap.ly_daily || [] };
   }
 
   /* Two kinds of alternate: the same design (other colour or vendor), and a different
@@ -291,6 +291,10 @@
     in_date: ['grn date', 'posting date', 'pstng date', 'inward date', 'entry date', 'entered on', 'received date', 'received on', 'receipt date', 'gr date', 'document date', 'doc. date', 'date'],
     in_time: ['grn time', 'time of entry', 'entry time', 'posting time', 'received time', 'time'],
     sloc: ['storage location', 'stor. loc.', 'stor loc', 'storage loc', 'sloc', 's.loc', 'stock location', 'location', 'sl'],
+    // last year's tracker
+    final_qty: ['final qty to store', 'final qty', 'qty to store'],
+    order_value: ['order value', 'approved value'],
+    ly_status: ['status', 'line status'],
     // approvals done in SAP (the SAP approval export)
     appr_status: ['apprstatus', 'approval status', 'appr status'],
     qty_alloc: ['qtyalloc', 'qty alloc', 'quantity allocated', 'allocated qty'],
@@ -320,6 +324,9 @@
        or the layout of the DC stock report with the received quantity under each location. */
     inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'mc_name', 'mvt', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
       need: ['in_qty', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'], needNice: 'Inward qty' },
+    /* Last year's corporate order tracker (one line per order + article). */
+    lastyear: { required: ['order_no', 'article_code', 'order_date', 'req_qty'], optional: ['store_code', 'store_name', 'description', 'mc_code', 'mc_name', 'category', 'buyer',
+      'mrp', 'req_price', 'final_qty', 'order_value', 'del_date', 'ly_status', 'remarks'] },
     /* Approvals and rejections done in SAP: order + article, the status, and what was approved. */
     sapappr: { required: ['order_no', 'article_code', 'appr_status'], optional: ['qty_alloc', 'qty_appr', 'price_given', 'appr_by', 'cat_date', 'cat_time', 'plan_date', 'plan_time',
       'site_code', 'sap_po', 'remarks', 'reason_cat', 'store_code', 'store_name', 'mc_name', 'description', 'mrp', 'req_qty', 'req_price', 'order_date', 'del_date', 'poc_name', 'phone', 'pack_size'] },
@@ -492,6 +499,13 @@
       }
       return Array.from(agg.values()).filter((r) => r.t !== 0 || r.v || r.n || r.h || r.p || r.b || r.e);
     },
+    /* Last year's tracker. The approved value is "Order Value" when the file has it, else final qty x price wanted. */
+    lastyear: (rows) => rows.map((r) => {
+      const q = Math.round(num(r.req_qty)), p = num(r.req_price), fq = Math.round(num(r.final_qty)), mrp = numOrNull(r.mrp);
+      return { o: code(r.order_no), s: code(r.store_code).toUpperCase(), sn: txt(r.store_name), a: code(r.article_code), d: txt(r.description), mcc: code(r.mc_code), mc: txt(r.mc_name),
+        cat: txt(r.category), buy: txt(r.buyer), mrp, q, p: p || mrp || 0, fq, fv: r.order_value != null && r.order_value !== '' ? Math.round(num(r.order_value) * 100) / 100 : Math.round(fq * (p || mrp || 0) * 100) / 100,
+        bd: dateStr(r.order_date), dd: dateStr(r.del_date), st: txt(r.ly_status), rm: txt(r.remarks) };
+    }).filter((r) => r.o && /^\d{6,}$/.test(r.a) && /^\d{4}-\d{2}-\d{2}$/.test(r.bd)),
     /* The SAP approval export. st: 'A' approved (by category or planning), 'R' rejected; other statuses are listed in out.others.
        q = the quantity allocated in SAP (QtyAlloc; QtyAppr when that is empty). pref = DC locations named in the remark (OK-DH29-0023 -> NSO). */
     sapappr: (rows) => {
@@ -592,6 +606,12 @@
     storestock: { file: 'Template_7_Store_Stock', sheet: 'Store stock', cols: [
       ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'For reference only', 'Casserole 1500ml Red'], ['MRP', '', 'For reference only', 499],
       ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30]] },
+    lastyear: { file: 'Template_10_Last_Year_Orders', sheet: 'Sheet1', cols: [
+      ['Status', '', 'Approved or Rejected', 'Approved'], ['Store Code', '', 'Store code', 'HA83'], ['Store Name', '', 'Store name', 'TENALI(343)'], ['Order ID', 'Yes', 'Order number', 'HA83042733'],
+      ['MC Code', '', 'MC code', '213030006'], ['MC Name', '', 'MC name', 'HH_C_M_DINNER SET'], ['Art Code', 'Yes', 'Article code', '1212012200'], ['Desc', '', 'Article description', '399-HF-DS-LNX-BLUCHN-20P-MLM-DPK-6-25'],
+      ['MRP', '', 'MRP', 399], ['Qty Wanted', 'Yes', 'Qty the store ordered', 40], ['Booking Date', 'Yes', 'Booking date', '20.09.2025'], ['Del Date', '', 'Delivery date', '29.09.2025'],
+      ['Price wanted', '', 'Price the store asked', 399], ['Final Qty to Store', '', 'Approved quantity (0 if rejected)', 42], ['Order Value', '', 'Approved value (final qty x price)', 16758],
+      ['Remarks', '', 'Remarks / reason', 'Approved'], ['Category', '', 'Category', 'Melamine'], ['Buyer', '', 'Buyer', 'Hemant']] },
     sapappr: { file: 'Template_9_SAP_Approvals', sheet: 'Sheet1', cols: [
       ['OrderNo', 'Yes', 'Order number', 'HH02051609'], ['ApprStatus', 'Yes', 'Approved By Category / Approved By Planning / Rejected By Category / Rejected By Planning', 'Approved By Planning'],
       ['ArtCode', 'Yes', 'Article code', '1212013836'], ['ArtDesc', '', 'Article description', '99-HF-BOWL-6P-GLS'], ['MCDes', '', 'MC name', 'HH_C_G_BOWL'],
@@ -609,6 +629,36 @@
       ['Price Wanted', '', 'Price per piece the store asks for (blank or 0 = MRP)', 439], ['Pak Size', '', 'Pieces in one pack', 12], ['Contact Number', '', 'Mobile number of the person who booked', '9000000201'],
       ['Booked By', '', 'Name of the person who booked', 'Test Contact F']] }
   };
+
+  /* ---------------- this year against last year, by D-day ----------------
+     D-30 is a booking day in each season (by default 20 Sep 2025 and 9 Oct 2026, 30 days before Diwali). Day k of a season
+     is D-(30-k). Lines booked before D-30 count on D-30. Returns, for k = 0..30, each season's day and cumulative figures:
+     n lines, o orders, wq qty ordered, wv value ordered (qty x price wanted), fq qty approved, fv value approved. */
+  const SEASON = { ly: '2025-09-20', ty: '2026-10-09', days: 31 };
+  function season(M, lyDaily) {
+    const ly0 = (M.meta && M.meta.ly_d30) || SEASON.ly, ty0 = (M.meta && M.meta.ty_d30) || SEASON.ty;
+    const blank = () => ({ n: 0, o: 0, wq: 0, wv: 0, fq: 0, fv: 0 });
+    const LYd = Array.from({ length: SEASON.days }, blank), TYd = Array.from({ length: SEASON.days }, blank);
+    let lyBefore = 0, lyAfter = 0, tyBefore = 0, tyAfter = 0;
+    for (const r of lyDaily || []) {
+      let k = dayDiff(ly0, r[0]); if (k < 0) { lyBefore += r[1]; k = 0; } if (k >= SEASON.days) { lyAfter += r[1]; continue; }
+      const d = LYd[k]; d.n += r[1]; d.o += r[2]; d.wq += +r[4]; d.wv += +r[5]; d.fq += +r[6]; d.fv += +r[7];
+    }
+    const seenOrder = new Set();
+    for (const l of M.lines) {
+      if (!l.order_date) continue;
+      let k = dayDiff(ty0, l.order_date); if (k < 0) { if (!l.parent_id) tyBefore++; k = 0; } if (k >= SEASON.days) { if (!l.parent_id) tyAfter++; continue; }
+      const d = TYd[k];
+      if (!l.parent_id) { d.n++; d.wq += l.sap_qty; d.wv += l.sap_qty * l.req_price; if (!seenOrder.has(l.order_no)) { seenOrder.add(l.order_no); d.o++; } }
+      d.fq += l.approved; d.fv += l.value;
+    }
+    const cum = (arr) => { const t = blank(); return arr.map((d) => { for (const k in t) t[k] += d[k]; return Object.assign({}, t); }); };
+    const today = (() => { const d = new Date(); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); })();
+    const kToday = dayDiff(ty0, today), upto = Math.min(SEASON.days - 1, kToday - 1);      // complete days: up to yesterday
+    return { ly0, ty0, lyDay: LYd, tyDay: TYd, lyCum: cum(LYd), tyCum: cum(TYd), upto, kToday, lyBefore, lyAfter, tyBefore, tyAfter,
+      lyDate: (k) => addDays(ly0, k), tyDate: (k) => addDays(ty0, k), label: (k) => 'D-' + (30 - k) };
+  }
+  const growth = (ty, ly) => (ly > 0 ? ty / ly - 1 : null);
 
   /* ---------------- messages to the store ---------------- */
   function offerSubject(line, replyBy) {
@@ -674,7 +724,7 @@
     return L.join('\r\n');
   }
 
-  root.Core = { TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
+  root.Core = { SEASON, season, growth, TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
     packOf, roundPack, floorPack, marginAt, discountOf, pct, addDays, today, dayDiff, inr, rupees, when, whenLong,
     norm, ALIASES, SPECS, code, num, dateStr, findHeader, readTable, shape, offerSubject, offerText, reorderSubject, reorderText, mailHtml,
     buildEml, esc, b64utf8 };

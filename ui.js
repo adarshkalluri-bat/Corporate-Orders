@@ -16,14 +16,18 @@
     a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
     s: { only: true, q: '', art: null, qty: {} },
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
+    /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
+    ly: { basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 12;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 13;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
   const priceOn = () => !!S.M && S.M.schema >= 8;
   const sapOn = () => !!S.M && S.M.schema >= 11;      // approvals done in SAP need database version 11
+  const lyOn = () => !!S.M && S.M.schema >= 13;       // last year's orders need database version 13
+  const hasLy = () => lyOn() && !!S.M.meta.ly_batch;
   /* What the SAP approval file said about a line, in one line of text */
   const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
     return [x.label || (x.status === 'APPROVED' ? 'Approved in SAP' : 'Rejected in SAP'), x.status === 'APPROVED' && x.qty ? inr(x.qty) + ' pcs' : '', x.by, x.at ? when(x.at) : '', x.po ? 'PO ' + x.po : '', x.remarks].filter(Boolean).join(' · '); };     // approving a price with the quantity needs database version 8
@@ -35,10 +39,11 @@
     shortages: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 2.5 20h19L12 3z"/><path d="M12 10v4M12 17.2v.3"/></svg>',
     catalogue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m4 18 5-4 3 2 4-4 4 4"/></svg>',
     approved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>',
-    data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>'
+    data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
+    lastyear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/><path d="m4 17 5-3 4 1 7-4" stroke-dasharray="2 3"/></svg>'
   };
-  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['catalogue', 'Articles'], ['data', 'Data']];
-  const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders' };
+  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['data', 'Data']];
+  const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders', lastyear: 'This year vs last year' };
 
   /* ================= small building blocks ================= */
   const pill = (st, text) => `<span class="pill ${st}">${esc(text || C.STATUS_LABEL[st] || st)}</span>`;
@@ -281,7 +286,7 @@
     const keep = {};
     $$('[data-keep]').forEach((e) => { keep[e.dataset.keep] = e.scrollTop; });
     const y = window.scrollY, M = S.M;
-    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, catalogue: vCatalogue, data: vData };
+    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, catalogue: vCatalogue, lastyear: vLastYear, data: vData };
     const role = editor() ? '' : '<span class="pill view">VIEW ONLY</span>';
     app.innerHTML = `<div class="shell">
       <aside class="side">
@@ -303,6 +308,8 @@
     if (LISTS.includes(S.view)) packPreview();
     if (S.view === 'shortages') tally();
     if (S.view === 'catalogue' && S.c.scope === 'all') searchAll();
+    if (S.view === 'lastyear') lyLoad();
+    wireCharts();
   }
   const setHtml = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
 
@@ -441,6 +448,7 @@
           ${parts.map(([n, q, col]) => `<span>${n}</span><div class="bar"><i style="width:${reqAll ? Math.min(100, q / reqAll * 100) : 0}%;background:${col}"></i></div><b class="right">${inr(q)}</b><span class="small right">${reqAll ? Math.round(q / reqAll * 100) : 0}%</span>`).join('')}
         </div><p class="small">${inr(appr)} of ${inr(req)} pcs approved (${req ? Math.round(appr / req * 100) : 0}%), not counting rejected lines; the bars are out of all ${inr(reqAll)} pcs ordered. Approved quantities are in full packs, so they can be a little above what was asked.</p></div>${moneyCard}</div>
       </div>
+      ${lyDashCard()}
       ${buyerCard ? `<div style="margin-top:12px">${buyerCard}</div>` : ''}
       <div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Biggest shortages</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
         ${short.length ? `<div class="tablewrap"><table><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Balance DC qty</th><th class="right">Stores waiting</th>
@@ -448,6 +456,266 @@
         : `<div class="note ${hasStock ? 'good' : 'info'}">${hasStock ? 'No article is short right now.' : 'Shortages appear once a DC stock report is loaded.'}</div>`}</div>`;
   }
   const l0 = (k) => (k === '(buyer not set)' ? '-' : k);
+
+  /* ================= This year against last year =================
+     Day k of a season is D-(30-k); D-30 is 20 Sep 2025 last year and 9 Oct 2026 this year (changeable).
+     "Same days so far" compares D-30 up to yesterday's D-day in both years, cumulatively. */
+  const LYC = '#C2761C', TYC = '#5B3FD1';
+  const BASIS = { ordered: ['wq', 'wv', 'ordered'], approved: ['fq', 'fv', 'approved'] };
+  const crore = (v) => { v = Number(v) || 0; const a = Math.abs(v); return a >= 1e7 ? 'Rs ' + (v / 1e7).toFixed(2) + ' Cr' : a >= 1e5 ? 'Rs ' + (v / 1e5).toFixed(2) + ' L' : 'Rs ' + inr(Math.round(v)); };
+  const pcsShort = (v) => { v = Number(v) || 0; return Math.abs(v) >= 1e5 ? (v / 1e5).toFixed(2) + ' L pcs' : inr(Math.round(v)) + ' pcs'; };
+  const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const dmy = (ymd, yr) => (ymd ? +ymd.slice(8, 10) + ' ' + MON[+ymd.slice(5, 7) - 1] + (yr ? ' ' + ymd.slice(0, 4) : '') : '');
+  const growNum = (ty, ly) => C.growth(ty, ly);
+  const growHtml = (ty, ly) => { const g = C.growth(ty, ly); return g == null ? `<span class="muted">${ty > 0 ? 'new' : '-'}</span>` : `<span class="${g >= 0 ? 'good' : 'bad'} b">${g >= 0 ? '+' : ''}${(g * 100).toFixed(1)}%</span>`; };
+  const growText = (ty, ly) => { const g = C.growth(ty, ly); return g == null ? (ty > 0 ? 'new' : '') : (g >= 0 ? '+' : '') + (g * 100).toFixed(1) + '%'; };
+  const axisFmt = (v, key) => { const t = key.endsWith('v') ? crore(v).replace('Rs ', '') : pcsShort(v).replace(' pcs', ''); return t.replace(/\.0+ /, ' ').replace(/(\.\d)0 /, '$1 '); };
+  const lyCut = (SE) => (S.ly.period === 'all' ? 30 : SE.upto);
+  const span = (a, b) => (a === b ? dmy(a, true) : a.slice(0, 7) === b.slice(0, 7) ? +a.slice(8, 10) + '-' + dmy(b, true) : dmy(a) + ' - ' + dmy(b, true));
+  const lyRange = (SE, cut) => (cut < 0 ? '' : { ly: span(SE.ly0, SE.lyDate(cut)), ty: span(SE.ty0, SE.tyDate(cut)) });
+  function lyLoad() {
+    const L = S.ly;
+    if (!hasLy()) return;
+    if (L.batch !== S.M.meta.ly_batch) { L.sum = null; L.stores = null; L.lines = null; L.err = ''; }
+    if (L.sum || L.loading || L.err) return;
+    L.loading = true;
+    const want = S.M.meta.ly_batch;
+    Promise.all([A.rpc('ly_summary'), A.rpc('ly_stores')])
+      .then(([a, b]) => { L.sum = a || []; L.stores = b || []; L.batch = want; })
+      .catch((e) => { L.err = e.message; })
+      .finally(() => { L.loading = false; if (S.view === 'lastyear') render(); });
+  }
+  /* The k of a booking day in a season: before D-30 counts on D-30. */
+  const kOf = (d0, ymd) => Math.max(0, C.dayDiff(d0, ymd));
+  /* This year's line, counted the same way as last year: ordered = the order line as booked (qty x price wanted, rejected or not);
+     approved = what is approved on it, at the price approved (an approved alternate counts under its own article). */
+  const tyQV = (l, basis) => (basis === 'ordered' ? (l.parent_id ? [0, 0] : [l.sap_qty, l.sap_qty * l.req_price]) : [l.approved, Number(l.value) || 0]);
+  const tyIn = (SE, l, cut) => (S.ly.period === 'all' ? true : !!l.order_date && kOf(SE.ty0, l.order_date) <= cut);
+
+  /* A cumulative line chart: last year all 31 days, this year up to the last complete day. Hover shows the D-day. */
+  function seasonChart(SE, key, opt) {
+    opt = opt || {};
+    const W = S.wide ? 1000 : 420, H = opt.h || (S.wide ? 300 : 260), pl = S.wide ? 76 : 58, pr = S.wide ? 92 : 70, pt = 16, pb = 30, n = SE.lyCum.length - 1;
+    const ly = SE.lyCum.map((d) => d[key]), last = Math.max(-1, Math.min(n, opt.upto != null ? opt.upto : SE.upto)), ty = SE.tyCum.slice(0, last + 1).map((d) => d[key]);
+    const top = Math.max(1, ...ly, ...ty);
+    const mag = Math.pow(10, Math.floor(Math.log10(top / 4))), step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => top / s <= 4.5) || mag * 10, ymax = Math.ceil(top / step) * step;
+    const x = (k) => pl + k * (W - pl - pr) / n, y = (v) => pt + (H - pt - pb) * (1 - v / ymax);
+    const fmt = key.endsWith('v') ? crore : pcsShort;
+    let g = '';
+    for (let v = 0; v <= ymax + step / 2; v += step) g += `<line x1="${pl}" x2="${W - pr}" y1="${y(v)}" y2="${y(v)}" stroke="#ECE7F8" stroke-width="1"/><text x="${pl - 8}" y="${y(v) + 4}" text-anchor="end" class="ax">${esc(v ? axisFmt(v, key) : '0')}</text>`;
+    for (let k = 0; k <= n; k += S.wide ? 5 : 10) g += `<text x="${x(k)}" y="${H - 8}" text-anchor="middle" class="ax">D-${30 - k}</text>`;
+    const path = (arr) => arr.map((v, k) => (k ? 'L' : 'M') + x(k).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+    const endLbl = (arr, col, name) => { const k = arr.length - 1; return k < 0 ? '' : `<circle cx="${x(k)}" cy="${y(arr[k])}" r="4.5" fill="${col}" stroke="#fff" stroke-width="2"/>`; };
+    /* direct labels at the right edge (this year's at its own end), pushed apart when they would touch */
+    let lyY = y(ly[n]), tyY = ty.length ? y(ty[ty.length - 1]) : null;
+    const tyX = ty.length ? x(ty.length - 1) + 8 : 0;
+    if (tyY != null && Math.abs(tyY - lyY) < 14 && tyX > W - pr - 40) { if (tyY < lyY) tyY = lyY - 14; else tyY = lyY + 14; }
+    const lbl = `<text x="${x(n) + 8}" y="${lyY + 4}" class="dl">Last year</text>` + (ty.length ? `<text x="${tyX}" y="${tyY + 4}" class="dl b">This year</text>` : '');
+    const mark = last >= 0 && last < n ? `<line x1="${x(last)}" x2="${x(last)}" y1="${pt}" y2="${H - pb}" stroke="#CFC6EE" stroke-dasharray="3 3"/>` : '';
+    const data = JSON.stringify({ k: key, n, last, ly, ty, lyd: Array.from({ length: n + 1 }, (_, k) => SE.lyDate(k)), tyd: Array.from({ length: n + 1 }, (_, k) => SE.tyDate(k)), pl, pr, W });
+    return `<div class="lychart${opt.mini ? ' mini' : ''}" data-chart='${esc(data)}'>
+      <div class="legend"><span><i style="background:${TYC}"></i>This year (from ${esc(dmy(SE.ty0, true))})</span><span><i style="background:${LYC}"></i>Last year (from ${esc(dmy(SE.ly0, true))})</span></div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Cumulative ${key.endsWith('v') ? 'value' : 'quantity'} by D-day, this year against last year">${g}${mark}
+        <path d="${path(ly)}" fill="none" stroke="${LYC}" stroke-width="2" stroke-linejoin="round"/>${ty.length ? `<path d="${path(ty)}" fill="none" stroke="${TYC}" stroke-width="2.5" stroke-linejoin="round"/>` : ''}
+        ${endLbl(ly, LYC)}${endLbl(ty, TYC)}${lbl}
+        <line class="xh" x1="0" x2="0" y1="${pt}" y2="${H - pb}" stroke="#2E2A4A" stroke-opacity=".35" style="display:none"/>
+        <rect x="${pl}" y="${pt}" width="${W - pl - pr}" height="${H - pt - pb}" fill="transparent" class="hit"/></svg>
+      <div class="tip" hidden></div></div>`;
+  }
+  /* hover: a crosshair and the two years' totals on that D-day */
+  function wireCharts() {
+    $$('.lychart').forEach((box) => {
+      if (box.dataset.wired) return; box.dataset.wired = '1';
+      const d = JSON.parse(box.dataset.chart), svg = $('svg', box), tip = $('.tip', box), xh = $('.xh', svg), fmt = d.k.endsWith('v') ? (v) => 'Rs ' + inr(Math.round(v)) : (v) => inr(Math.round(v)) + ' pcs';
+      const move = (ev) => {
+        const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * d.W / r.width;
+        const k = Math.max(0, Math.min(d.n, Math.round((sx - d.pl) / ((d.W - d.pl - d.pr) / d.n))));
+        const px = d.pl + k * (d.W - d.pl - d.pr) / d.n;
+        xh.setAttribute('x1', px); xh.setAttribute('x2', px); xh.style.display = '';
+        const t = k <= d.last ? d.ty[k] : null;
+        tip.innerHTML = `<b>D-${30 - k}</b> &middot; total so far<div><i style="background:${TYC}"></i>This year (to ${dmy(d.tyd[k])}): <b>${t == null ? 'not yet' : fmt(t)}</b></div><div><i style="background:${LYC}"></i>Last year (to ${dmy(d.lyd[k])}): <b>${fmt(d.ly[k])}</b></div>${t != null && d.ly[k] > 0 ? `<div>Change: <b>${growText(t, d.ly[k])}</b></div>` : ''}`;
+        tip.hidden = false;
+        const bx = box.getBoundingClientRect(), left = px * r.width / d.W + (r.left - bx.left);
+        tip.style.left = Math.max(0, Math.min(bx.width - tip.offsetWidth, left + 12 > bx.width - tip.offsetWidth ? left - tip.offsetWidth - 12 : left + 12)) + 'px';
+      };
+      svg.addEventListener('pointermove', move);
+      svg.addEventListener('pointerdown', move);
+      svg.addEventListener('pointerleave', () => { tip.hidden = true; xh.style.display = 'none'; });
+    });
+  }
+
+  /* The dashboard card: the order trend this year against last year, up to yesterday */
+  function lyDashCard() {
+    if (!lyOn()) return '';
+    if (!hasLy()) return editor() ? `<div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Orders vs last year</h2></div><div class="note info">Load last year's order tracker (Data, step 10) to follow this year's orders against last year, day by day from D-30.</div><div><button class="btn sm" data-act="nav" data-view="data">Open Data</button></div></div>` : '';
+    const SE = C.season(S.M, S.M.lyDaily), u = SE.upto;
+    if (u < 0) return `<div class="card stack" style="margin-top:12px"><h2>Orders vs last year</h2><div class="note info">D-30 this year is ${esc(dmy(SE.ty0, true))}. The comparison with last year (from ${esc(dmy(SE.ly0, true))}) starts the day after.</div></div>`;
+    const ly = SE.lyCum[u], ty = SE.tyCum[u], r = lyRange(SE, u);
+    const big = (t, a, b, f) => `<div class="lybig"><span>${t}</span><b>${f(b)}</b><span class="small">last year ${f(a)}</span><span>${growHtml(b, a)}</span></div>`;
+    return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Orders vs last year, ${SE.label(0)} to ${SE.label(u)}</h2><button class="btn sm" data-act="nav" data-view="lastyear">Open</button></div>
+      <p class="small">Total so far: this year ${esc(r.ty)}, last year ${esc(r.ly)} (the same D-days, up to yesterday). Ordered = qty wanted at the price wanted, rejected lines included.</p>
+      <div class="lybigs">${big('Value ordered', ly.wv, ty.wv, crore)}${big('Qty ordered', ly.wq, ty.wq, pcsShort)}${big('Orders', ly.o, ty.o, inr)}${big('Value approved', ly.fv, ty.fv, crore)}</div>
+      ${seasonChart(SE, 'wv', { h: 190, mini: true })}</div>`;
+  }
+
+  function vLastYear() {
+    const M = S.M, ed = editor(), L = S.ly;
+    const head = (sub) => `<div class="head"><h1>This year vs last year</h1>${sub ? `<span class="sub">${sub}</span>` : ''}</div>`;
+    if (!lyOn()) return head('') + `<div class="card"><div class="note warn">This needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.</div></div>`;
+    if (!hasLy()) return head('') + `<div class="card stack"><h2>Last year's orders are not loaded yet</h2><p>Upload last year's corporate order tracker under Data, step 10. This page then compares this year's orders with last year's: day by day from D-30, by MC and MRP, and by store.</p>
+      ${ed ? '<div><button class="btn primary" data-act="nav" data-view="data">Open Data</button></div>' : '<p class="muted">Ask the editor to load it.</p>'}</div>`;
+    const SE = C.season(M, M.lyDaily), cut = lyCut(SE), [qk, vk, word] = BASIS[L.basis], r = lyRange(SE, cut);
+    const lyN = M.lyDaily.reduce((t, x) => t + x[1], 0);
+    const sub = `Last year: ${esc(M.meta.ly_file || '')} (${inr(lyN)} lines). D-30 = <b>${esc(dmy(SE.ly0, true))}</b> last year and <b>${esc(dmy(SE.ty0, true))}</b> this year.`;
+    const segs = (act, cur, opts) => `<div class="segs">${opts.map(([k, t]) => `<button class="${cur === k ? 'on' : ''}" data-act="${act}" data-v="${k}">${t}</button>`).join('')}</div>`;
+    const controls = `<div class="row wrap lyctl">${segs('lyPeriod', L.period, [['same', SE.upto >= 0 ? `Same days so far (${SE.label(0)} to ${SE.label(Math.max(0, SE.upto))})` : 'Same days so far'], ['all', 'Whole season']])}
+      ${segs('lyBasis', L.basis, [['ordered', 'Ordered'], ['approved', 'Approved']])}<span class="grow"></span>
+      ${ed ? '<button class="btn sm" data-act="lySeason">Change D-30 dates ...</button>' : ''}<button class="btn sm" data-act="lyExport">Export to Excel</button></div>`;
+    if (cut < 0) return head(sub) + controls + `<div class="card"><div class="note info">D-30 this year is ${esc(dmy(SE.ty0, true))}. The day-by-day comparison starts the day after, once a full day of orders is in. Choose "Whole season" to see last year's season in full.</div></div>`;
+    const LY = SE.lyCum[cut], TY = SE.tyCum[cut];
+    /* the headline table */
+    const kr = (t, a, b, f, note) => `<tr><td>${t}${note ? `<div class="small">${note}</div>` : ''}</td><td class="right num">${f(a)}</td><td class="right num b">${f(b)}</td><td class="right">${growHtml(b, a)}</td></tr>`;
+    const rs = (v) => 'Rs ' + inr(Math.round(v)), pcs = (v) => inr(Math.round(v)), pc = (v) => (v == null ? '-' : (v * 100).toFixed(1) + '%');
+    const share = (x) => (x.wv ? x.fv / x.wv : null), avg = (x) => (x.o ? x.wv / x.o : 0);
+    const kpi = `<div class="card stack"><h2>${L.period === 'all' ? 'Whole season' : `Total so far, ${SE.label(0)} to ${SE.label(cut)}`}</h2>
+      <div class="tablewrap"><table class="lykpi"><thead><tr><th></th><th class="right">Last year<div class="small">${esc(r.ly)}</div></th><th class="right">This year<div class="small">${esc(r.ty)}${L.period === 'all' ? ', so far' : ''}</div></th><th class="right">Change</th></tr></thead><tbody>
+      ${kr('Orders', LY.o, TY.o, pcs)}${kr('Order lines', LY.n, TY.n, pcs)}${kr('Qty ordered (pcs)', LY.wq, TY.wq, pcs)}${kr('Value ordered', LY.wv, TY.wv, rs, 'qty wanted x price wanted')}
+      ${kr('Qty approved (pcs)', LY.fq, TY.fq, pcs)}${kr('Value approved', LY.fv, TY.fv, rs, 'at the price approved')}
+      <tr><td>Approved, as a share of the value ordered</td><td class="right num">${pc(share(LY))}</td><td class="right num b">${pc(share(TY))}</td><td class="right muted">${share(LY) != null && share(TY) != null ? ((share(TY) - share(LY)) * 100 >= 0 ? '+' : '') + ((share(TY) - share(LY)) * 100).toFixed(1) + ' pts' : '-'}</td></tr>
+      ${kr('Average order value', avg(LY), avg(TY), rs)}</tbody></table></div>
+      <p class="small">Last year's approvals are final; this year's are still being made, so "approved" this year grows as pending orders are decided.${SE.tyBefore ? ` ${inr(SE.tyBefore)} ${plural(SE.tyBefore, 'line')} this year ${SE.tyBefore === 1 ? 'was' : 'were'} booked before ${esc(dmy(SE.ty0))}; ${SE.tyBefore === 1 ? 'it counts' : 'they count'} on D-30.` : ''}${SE.lyBefore ? ` ${inr(SE.lyBefore)} last-year ${plural(SE.lyBefore, 'line')} booked before ${esc(dmy(SE.ly0))} count on D-30.` : ''}${SE.lyAfter ? ` ${inr(SE.lyAfter)} last-year ${plural(SE.lyAfter, 'line')} booked after D-0 ${SE.lyAfter === 1 ? 'is' : 'are'} not in the D-day figures.` : ''}${SE.tyAfter ? ` ${inr(SE.tyAfter)} ${plural(SE.tyAfter, 'line')} this year booked after D-0 ${SE.tyAfter === 1 ? 'is' : 'are'} not in the D-day figures.` : ''}</p></div>`;
+    /* chart */
+    const ck = L.unit === 'value' ? vk : qk;
+    const chart = `<div class="card stack"><div class="row wrap"><h2 class="grow">${L.unit === 'value' ? 'Value' : 'Quantity'} ${word}, total so far by D-day</h2>${segs('lyUnit', L.unit, [['value', 'Value'], ['qty', 'Qty']])}</div>
+      ${seasonChart(SE, ck)}<p class="small">Each point is the total from D-30 up to that day. The dotted line is yesterday (${esc(SE.label(Math.max(0, SE.upto)))}), the last full day this year.</p></div>`;
+    /* day by day */
+    const rows = [];
+    for (let k = 0; k <= 30; k++) {
+      const done = k <= SE.upto, today = k === SE.kToday, a = SE.lyCum[k], b = SE.tyCum[k], ad = SE.lyDay[k], bd = SE.tyDay[k];
+      const tyc = (v, f) => (done ? f(v) : today ? `<span class="muted">${f(v)} so far</span>` : '');
+      rows.push(`<tr class="${k === SE.upto ? 'hl' : ''}${!done && !today ? ' later' : ''}"><td class="b nowrap">${SE.label(k)}</td><td class="nowrap">${dmy(SE.lyDate(k))}</td><td class="nowrap">${dmy(SE.tyDate(k))}</td>
+        <td class="right">${rs(ad[vk])}</td><td class="right">${tyc(bd[vk], rs)}</td>
+        <td class="right">${pcs(a[qk])}</td><td class="right b">${tyc(b[qk], pcs)}</td><td class="right">${done ? growHtml(b[qk], a[qk]) : ''}</td>
+        <td class="right">${rs(a[vk])}</td><td class="right b">${tyc(b[vk], rs)}</td><td class="right">${done ? growHtml(b[vk], a[vk]) : ''}</td></tr>`);
+    }
+    const dayCard = `<div class="card stack"><h2>Day by day (${word})</h2>
+      <div class="tablewrap"><table class="tight lyday"><thead><tr><th>D-day</th><th>Last year</th><th>This year</th><th class="right">Value that day<br>last year</th><th class="right">Value that day<br>this year</th>
+        <th class="right">Qty so far<br>last year</th><th class="right">Qty so far<br>this year</th><th class="right">Qty<br>change</th><th class="right">Value so far<br>last year (Rs)</th><th class="right">Value so far<br>this year (Rs)</th><th class="right">Value<br>change</th></tr></thead>
+      <tbody>${rows.join('')}</tbody></table></div>
+      <p class="small">"So far" = from D-30 up to that day. The highlighted row is yesterday, the latest full day; today's figures show as "so far".</p></div>`;
+    /* by MC and MRP */
+    const wait = !L.sum ? `<div class="note info">${L.err ? esc(L.err) : 'Loading last year ...'}</div>` : '';
+    const mcs = lyByMc(SE, cut), q = L.q.trim().toLowerCase(), shown = q ? mcs.filter((g) => g.mc.toLowerCase().includes(q)) : mcs;
+    const tot = mcs.reduce((t, g) => { for (const k in t) t[k] += g.t[k]; return t; }, { lq: 0, tq: 0, lv: 0, tv: 0 });
+    const mrow = (cls, label, x, attrs) => `<tr class="${cls}" ${attrs || ''}><td>${label}</td><td class="right">${pcs(x.lq)}</td><td class="right b">${pcs(x.tq)}</td><td class="right">${growHtml(x.tq, x.lq)}</td>
+      <td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td></tr>`;
+    const body = shown.map((g) => { const open = L.all || L.open.has(g.key);
+      return mrow('mc pick', `<span class="caret">${open ? '&#9662;' : '&#9656;'}</span> <b>${esc(g.mc)}</b> <span class="small">${g.rows.length} MRP${g.rows.length === 1 ? '' : 's'}</span>`, g.t, `data-act="lyMc" data-mc="${esc(g.key)}"`) +
+        (open ? g.rows.map((x) => mrow('mrp', `<span class="ind">MRP Rs ${inr2(x.mrp)}</span>`, x)).join('') : ''); }).join('');
+    const mcCard = `<div class="card stack"><div class="row wrap"><h2 class="grow">By MC and MRP (${word})</h2>
+        <input type="search" id="lymq" placeholder="Find an MC ..." value="${esc(L.q)}" style="max-width:240px"><button class="btn sm" data-act="lyAll">${L.all ? 'Close all' : 'Open all MRPs'}</button></div>
+      ${wait}<div class="tablewrap"><table class="tight lymc"><thead><tr><th>MC / MRP</th><th class="right">Qty<br>last year</th><th class="right">Qty<br>this year</th><th class="right">Qty<br>change</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Value<br>change</th></tr></thead>
+      <tbody>${mrow('tot', '<b>All MCs</b>', tot)}${body || `<tr><td colspan="7" class="muted">${L.loading ? 'Loading last year ...' : L.err ? esc(L.err) : 'No MC matches.'}</td></tr>`}</tbody></table></div>
+      <p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Tap an MC to see its MRPs. MCs are matched by name; this year's MC comes from the order line or the article.</p></div>`;
+    /* by store */
+    const st = lyByStore(SE, cut), sq = L.sq.trim().toLowerCase();
+    const missing = st.filter((x) => x.lyAll > 0 && !x.tyAll), missV = missing.reduce((t, x) => t + x.lyAllV, 0);
+    let srows = st.filter((x) => (!L.sonly || (x.lyAll > 0 && !x.tyAll)) && (!sq || (x.s + ' ' + x.name).toLowerCase().includes(sq)));
+    const more = srows.length > 300; srows = srows.slice(0, 300);
+    const storeCard = `<div class="card stack"><div class="row wrap"><h2 class="grow">By store (${word})</h2>
+        <input type="search" id="lysq" placeholder="Find a store ..." value="${esc(L.sq)}" style="max-width:220px">
+        <label class="row small"><input type="checkbox" id="lysonly" ${L.sonly ? 'checked' : ''}> Ordered last year, nothing yet this year</label></div>
+      ${wait}${missing.length && L.stores ? `<div class="note warn"><b>${inr(missing.length)} ${plural(missing.length, 'store')}</b> ordered last year (${esc(crore(missV))} ${word} over the whole season) and ${missing.length === 1 ? 'has' : 'have'} not ordered anything this year yet.</div>` : ''}
+      <div class="tablewrap"><table class="tight lystore"><thead><tr><th>Store</th><th class="right">Lines<br>last year</th><th class="right">Lines<br>this year</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Change</th></tr></thead>
+      <tbody>${srows.map((x) => `<tr><td><b>${esc(x.s)}</b> <span class="small">${esc(x.name)}</span></td><td class="right">${inr(x.ln)}</td><td class="right b">${inr(x.tn)}</td><td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td></tr>`).join('') || `<tr><td colspan="6" class="muted">${L.loading ? 'Loading last year ...' : 'No store matches.'}</td></tr>`}</tbody></table></div>
+      ${more ? '<p class="small">Showing the first 300 stores; use the search box or Export for the rest.</p>' : ''}<p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Sorted by last year's value.</p></div>`;
+    /* last year's lines */
+    const lines = L.lines;
+    const lineCard = `<div class="card stack"><h2>Look up last year's orders</h2>
+      <div class="row wrap"><input type="search" id="lylq" placeholder="Article, order, store, MC ... then Enter" value="${esc(L.lq)}" style="max-width:360px"><button class="btn sm" data-act="lyFind">Find</button></div>
+      ${lines ? (lines.length ? `<div class="tablewrap"><table class="tight lylines"><thead><tr><th>Booked</th><th>Order</th><th>Store</th><th>Article</th><th>MC</th><th class="right">MRP</th><th class="right">Qty wanted</th><th class="right">Price wanted</th><th class="right">Final qty</th><th class="right">Order value</th><th>Status</th></tr></thead><tbody>
+        ${lines.map((x) => `<tr><td class="nowrap">${esc(dmy(x.book_date, true))}<div class="small">${SE ? SE.label(Math.min(30, kOf(SE.ly0, x.book_date))) : ''}</div></td><td class="nowrap">${esc(x.order_no)}</td><td><b>${esc(x.store_code || '')}</b><div class="small">${esc(x.store_name || '')}</div></td>
+          <td class="artcell"><b class="nowrap">${esc(x.article_code)}</b><div class="small">${esc(x.description || '')}</div></td><td class="small">${esc(x.mc_name || '')}</td><td class="right">${x.mrp == null ? '' : inr2(x.mrp)}</td>
+          <td class="right b">${inr(x.req_qty)}</td><td class="right">${x.req_price == null ? '' : inr2(x.req_price)}</td><td class="right b">${inr(x.final_qty || 0)}</td><td class="right">${inr(Math.round(x.order_value || 0))}</td>
+          <td><span class="small">${esc(x.status || '')}</span>${x.remarks && x.remarks !== x.status ? `<div class="small muted">${esc(x.remarks)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>${lines.length >= 200 ? '<p class="small">The first 200 lines are shown; type more words to narrow it down.</p>' : ''}`
+        : '<div class="note info">Nothing found in last year\'s orders.</div>') : '<p class="small">Search last year\'s order lines - for example an article code, to see which stores took it and how much.</p>'}</div>`;
+    return head(sub) + controls + `<div class="lystack">${kpi}${chart}${dayCard}${mcCard}${storeCard}${lineCard}</div>`;
+  }
+  /* MC -> MRP rows: {key, mc, t: {lq, tq, lv, tv}, rows: [{mrp, lq, tq, lv, tv}]} sorted by the bigger of the two years' values */
+  function lyByMc(SE, cut) {
+    const L = S.ly, all = L.period === 'all', groups = new Map(), z = () => ({ lq: 0, tq: 0, lv: 0, tv: 0 });
+    const slot = (mc, mrp) => {
+      const name = String(mc || '').trim() || '(MC not given)', key = name.toUpperCase();
+      let g = groups.get(key); if (!g) { g = { key, mc: name, t: z(), m: new Map() }; groups.set(key, g); }
+      const p = Math.round((Number(mrp) || 0) * 100) / 100;
+      let x = g.m.get(p); if (!x) { x = Object.assign({ mrp: p }, z()); g.m.set(p, x); }
+      return [g, x];
+    };
+    const ord = L.basis === 'ordered';
+    for (const x of L.sum || []) {
+      if (!all && kOf(SE.ly0, x[0]) > cut) continue;
+      const q = +(ord ? x[4] : x[6]) || 0, v = +(ord ? x[5] : x[7]) || 0; if (!q && !v) continue;
+      const [g, m] = slot(x[1], x[2]); g.t.lq += q; g.t.lv += v; m.lq += q; m.lv += v;
+    }
+    for (const l of S.M.lines) {
+      if (!tyIn(SE, l, cut)) continue;
+      const [q, v] = tyQV(l, L.basis); if (!q && !v) continue;
+      const a = S.M.articles[l.article_code] || {};
+      const [g, m] = slot(l.mc_name || a.mc_name, l.mrp); g.t.tq += q; g.t.tv += v; m.tq += q; m.tv += v;
+    }
+    return Array.from(groups.values()).map((g) => Object.assign(g, { rows: Array.from(g.m.values()).sort((a, b) => a.mrp - b.mrp) }))
+      .sort((a, b) => Math.max(b.t.lv, b.t.tv) - Math.max(a.t.lv, a.t.tv) || a.mc.localeCompare(b.mc));
+  }
+  /* Stores: in the period (ln, lv / tn, tv) and over the whole season (lyAll lines, lyAllV value / tyAll lines) */
+  function lyByStore(SE, cut) {
+    const L = S.ly, all = L.period === 'all', ord = L.basis === 'ordered', m = new Map();
+    const at = (code, name) => { const s = String(code || '').toUpperCase() || '(no store)'; let x = m.get(s); if (!x) { x = { s, name: name || '', ln: 0, lv: 0, tn: 0, tv: 0, lyAll: 0, lyAllV: 0, tyAll: 0 }; m.set(s, x); } if (!x.name && name) x.name = name; return x; };
+    for (const r of L.stores || []) {
+      const x = at(r[0], r[1]), v = +(ord ? r[5] : r[7]) || 0;
+      x.lyAll += r[3]; x.lyAllV += v;
+      if (all || kOf(SE.ly0, r[2]) <= cut) { x.ln += r[3]; x.lv += v; }
+    }
+    for (const l of S.M.lines) {
+      const x = at(l.store_code, l.store_name);
+      if (!l.parent_id) x.tyAll++;
+      if (!tyIn(SE, l, cut)) continue;
+      if (!l.parent_id) x.tn++;
+      x.tv += tyQV(l, L.basis)[1];
+    }
+    return Array.from(m.values()).sort((a, b) => b.lv - a.lv || b.tv - a.tv || a.s.localeCompare(b.s));
+  }
+  async function lyFind() {
+    const L = S.ly, q = L.lq.trim();
+    if (!q) { L.lines = null; render(); return; }
+    if (L.lbusy) return; L.lbusy = true;
+    try { L.lines = await A.rpc('ly_search', { p_q: q, p_limit: 200 }) || []; } catch (e) { await tell('Not found', e.message); }
+    finally { L.lbusy = false; }
+    render();
+  }
+  function exportLastYear() {
+    const M = S.M, SE = C.season(M, M.lyDaily), cut = lyCut(SE), L = S.ly, [qk, vk, word] = BASIS[L.basis];
+    if (cut < 0) return tell('Export', 'The comparison starts the day after D-30 this year.');
+    return excelFile('Last_Year_vs_This_Year', false, (sheet) => {
+      const LY = SE.lyCum[cut], TY = SE.tyCum[cut], r = lyRange(SE, cut);
+      const k = (t, f) => [t, Math.round(LY[f]), Math.round(TY[f]), growNum(TY[f], LY[f]) == null ? '' : Math.round(growNum(TY[f], LY[f]) * 1000) / 10];
+      sheet('Summary', ['', 'Last year ' + r.ly, 'This year ' + r.ty, 'Change %'], [k('Orders', 'o'), k('Order lines', 'n'), k('Qty ordered', 'wq'), k('Value ordered (Rs)', 'wv'), k('Qty approved', 'fq'), k('Value approved (Rs)', 'fv')]);
+      const days = [];
+      for (let i = 0; i <= 30; i++) {
+        const done = i <= SE.upto || i === SE.kToday;
+        days.push([SE.label(i), SE.lyDate(i), SE.tyDate(i), Math.round(SE.lyDay[i].wq), done ? Math.round(SE.tyDay[i].wq) : '', Math.round(SE.lyDay[i].wv), done ? Math.round(SE.tyDay[i].wv) : '',
+          Math.round(SE.lyDay[i].fq), done ? Math.round(SE.tyDay[i].fq) : '', Math.round(SE.lyDay[i].fv), done ? Math.round(SE.tyDay[i].fv) : '',
+          Math.round(SE.lyCum[i].wv), done ? Math.round(SE.tyCum[i].wv) : '', Math.round(SE.lyCum[i].fv), done ? Math.round(SE.tyCum[i].fv) : '', i === SE.kToday ? 'today, so far' : '']);
+      }
+      sheet('By D-day', ['D-day', 'Last year date', 'This year date', 'Qty ordered LY', 'Qty ordered TY', 'Value ordered LY', 'Value ordered TY', 'Qty approved LY', 'Qty approved TY', 'Value approved LY', 'Value approved TY',
+        'Value ordered so far LY', 'Value ordered so far TY', 'Value approved so far LY', 'Value approved so far TY', 'Note'], days);
+      const mc = [];
+      for (const g of lyByMc(SE, cut)) for (const x of g.rows) mc.push([g.mc, x.mrp, Math.round(x.lq), Math.round(x.tq), growNum(x.tq, x.lq) == null ? '' : Math.round(growNum(x.tq, x.lq) * 1000) / 10, Math.round(x.lv), Math.round(x.tv), growNum(x.tv, x.lv) == null ? '' : Math.round(growNum(x.tv, x.lv) * 1000) / 10]);
+      sheet('By MC and MRP', ['MC', 'MRP', `Qty ${word} LY`, `Qty ${word} TY`, 'Qty change %', `Value ${word} LY`, `Value ${word} TY`, 'Value change %'], mc);
+      sheet('By store', ['Store', 'Store name', 'Lines LY', 'Lines TY', `Value ${word} LY`, `Value ${word} TY`, 'Change %', 'Ordered last year, nothing yet this year'],
+        lyByStore(SE, cut).map((x) => [x.s, x.name, x.ln, x.tn, Math.round(x.lv), Math.round(x.tv), growNum(x.tv, x.lv) == null ? '' : Math.round(growNum(x.tv, x.lv) * 1000) / 10, x.lyAll > 0 && !x.tyAll ? 'Yes' : '']));
+      return `Exported: ${L.period === 'all' ? 'whole season' : r.ly + ' against ' + r.ty}, ${word}`;
+    });
+  }
 
   /* ================= Order lists: Pending orders and Approved orders =================
      Both screens are the same kind of list: order lines, filtered, then grouped the way the
@@ -1188,6 +1456,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
         ${inwards.length ? `<div class="small"><b>Inwards since the stock report:</b>${inwards.slice(0, 8).map((i) => `<br>${when(i.inward_at)} &middot; ${inr(i.qty)} pcs into ${C.LOC_NAME[i.loc] || i.loc}${i.mc_name ? ' &middot; ' + esc(i.mc_name) : ''}${i.doc_no ? ' &middot; GRN ' + esc(i.doc_no) : ''}${i.site_code ? ' &middot; ' + esc(i.site_code) : ''} <span class="muted">(${esc(i.source_file || '')})</span>`).join('')}${inwards.length > 8 ? `<br>... and ${inwards.length - 8} more` : ''}</div>` : ''}
         ${editor() && locsOn() && M.meta.stock_asof ? `<div><button class="btn sm" data-act="inwardHand" data-code="${esc(code)}" title="Stock of this article received at the DC after the stock report">Add an inward for this article ...</button></div>` : ''}
         ${d && d.store_total && S.M.hasStoreStock ? `<div class="small"><b>In stores</b> (store stock report): ${inr(d.store_total.closing)} pcs closing stock, ${inr(d.store_total.intransit)} in transit, held by ${inr(d.store_total.stores)} ${plural(d.store_total.stores, 'store')}; ${inr(d.store_total.mtd_sale)} sold this month.</div>` : ''}
+        ${d && d.ly && d.ly.lines ? `<div class="small"><b>Last year</b>: ${inr(d.ly.lines)} order ${plural(d.ly.lines, 'line')} from ${inr(d.ly.stores)} ${plural(d.ly.stores, 'store')}, ${inr(d.ly.wq)} pcs wanted, ${inr(d.ly.fq)} pcs approved (Rs ${inr(Math.round(d.ly.fv))}). <a href="#" data-act="lyArt" data-code="${esc(code)}">See the lines</a></div>` : ''}
         <div class="small">${mp.pending ? `${inr(mp.pending)} pcs still wanted by ${mp.n_stores} ${plural(mp.n_stores, 'store')}. ` : ''}${a.store_stock || a.intransit ? `From the article data sheet: ${inr(a.store_stock || 0)} pcs in stores, ${inr(a.intransit || 0)} in transit${ppo ? `, pending PO ${inr(a.ppo_cm || 0)} this month and ${inr(a.ppo_nm || 0)} next` : ''}.` : ''}</div>
         ${strip('Same design (tap to open)', al.same)}${strip('Same price, different design (tap to open)', al.diff)}
         <h3>Deal check</h3>
@@ -1239,7 +1508,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     const step = (title, text, btns, status) => `<div class="card step"><div class="row wrap"><h2 class="grow">${title}</h2>${btns}</div><p class="small">${text}</p>${status ? `<div class="stepstatus">${status}</div>` : ''}</div>`;
     const b = (label, act, extra, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" ${extra || ''}>${label}</button>`;
     const left = [];
-    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
+    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: the comparison with last year, stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
     if (ed) {
       left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"') + b('Template', 'template', 'data-kind="master"', 'ghost'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
@@ -1264,8 +1533,13 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           b('Upload store stock ...', 'pick', 'data-kind="storestock"') + b('Template', 'template', 'data-kind="storestock"', 'ghost'), ssSt));
       }
       left.push(step('8 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary') + b('Template', 'template', 'data-kind="orders"', 'ghost'), last('Orders')));
-      if (sapOn()) left.push(step('9 &nbsp;Approvals done in SAP', 'The SAP approval export (OrderNo, ArtCode, ApprStatus ...). For each order + article: <b>approved by category or by planning</b> - the quantity allocated in SAP (QtyAlloc) is approved here, at the price given, by the person (IssueRecBy) and on the date (CatApprDate) SAP shows, and taken off the DC stock; <b>rejected</b> - the line is rejected with the SAP status and remark. Lines not in the tracker yet are added. Nothing is applied twice, and where the tracker and SAP disagree nothing is changed: those lines are listed for you to check. <b>Load this before a fresh DC stock report.</b>',
+      if (sapOn()) left.push(step('9 &nbsp;Approvals done in SAP', 'The SAP approval export (OrderNo, ArtCode, ApprStatus ...). For each order + article: <b>approved by category or by planning</b> - the quantity allocated in SAP (QtyAlloc) is approved here, at the price given, by the person (IssueRecBy) and on the date (CatApprDate) SAP shows. These are <b>not</b> taken off the DC stock (the stock report already accounts for them); <b>rejected</b> - the line is rejected with the SAP status and remark. Lines not in the tracker yet are added. Nothing is applied twice, and where the tracker and SAP disagree nothing is changed: those lines are listed for you to check. ',
         b('Upload SAP approvals ...', 'pick', 'data-kind="sapappr"', 'primary') + b('Template', 'template', 'data-kind="sapappr"', 'ghost'), last('SAP approvals')));
+    }
+    if (ed && lyOn()) {
+      const lySt = M.meta.ly_batch ? `<span class="small">Last loaded ${when(M.meta.ly_loaded)} (${esc(M.meta.ly_file || '')}): ${inr(M.lyDaily.reduce((t, x) => t + x[1], 0))} order lines, booked ${M.lyDaily.length ? esc(dmy(M.lyDaily[0][0], true)) + ' to ' + esc(dmy(M.lyDaily[M.lyDaily.length - 1][0], true)) : ''}</span>` : '<span class="small warn">Not loaded yet</span>';
+      left.push(step("10 &nbsp;Last year's orders", "Last year's corporate order tracker (Order ID, Art Code, Qty Wanted, Booking Date, Price wanted, Final Qty to Store, Order Value ...). Used only for the comparison on the Last year screen and the dashboard: this year against last year by D-day, by MC and MRP, and by store. It never changes this year's orders. Each upload replaces the previous one, and Clear everything keeps it.",
+        b("Upload last year ...", 'pick', 'data-kind="lastyear"') + b('Template', 'template', 'data-kind="lastyear"', 'ghost'), lySt));
     }
     left.push(step('Export everything', 'One Excel file with every order line (pending, approved, dispatched, rejected), every allocation, stock by location and the activity log. To export only the pending orders, the approved orders or the shortages, use the Export button on that screen.', b('Export to Excel', 'export')));
     if (M.counts.deleted) left.push(step('Deleted order lines', `${inr(M.counts.deleted)} order ${plural(M.counts.deleted, 'line')} deleted from the Orders screen. They stay out when the SAP export is uploaded again. ${ed ? 'You can bring any of them back.' : ''}`, b('Show deleted lines', 'showDeleted')));
@@ -1294,7 +1568,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
 
   /* ---------- reading files ---------- */
   const chunks = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
-  const TITLES = { master: 'Diwali article master', data: 'Full article data', stores: 'Stores', stock: 'DC stock report', orders: 'Orders', inward: 'Inwards', storestock: 'Stock at the stores', sapappr: 'Approvals done in SAP' };
+  const TITLES = { master: 'Diwali article master', data: 'Full article data', stores: 'Stores', stock: 'DC stock report', orders: 'Orders', inward: 'Inwards', storestock: 'Stock at the stores', sapappr: 'Approvals done in SAP', lastyear: "Last year's orders" };
   const firstFew = (notes, n) => (notes.length ? '\n\n' + notes.slice(0, n).join('\n') + (notes.length > n ? `\n... and ${notes.length - n} more` : '') : '');
 
   async function importFile(kind, file, quiet) {
@@ -1361,7 +1635,25 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           (t.deleted ? `\nDeleted here earlier (left out): ${inr(t.deleted)}` : '') +
           (others.length ? `\nOther statuses, not used: ${others.map(([k, n]) => `${k} (${n})`).join(', ')}` : '') +
           (t.conflicts.length ? `\n\nNEED A LOOK - the tracker and SAP disagree, nothing was changed (${t.conflicts.length}; filter "Differs from the SAP approval file"):` + firstFew(t.conflicts, 15).replace(/^\n\n/, '\n') : '') +
-          firstFew(Array.from(new Set(t.notes)), 10) + '\n\nThe approved quantities are taken off the DC stock. When you load the next DC stock report, answer whether this stock has already left the DC.';
+          firstFew(Array.from(new Set(t.notes)), 10) + '\n\nThese approvals are not taken off the DC stock: the DC stock report already accounts for them.';
+      } else if (kind === 'lastyear') {
+        if (!lyOn()) throw new Error("Last year's orders need the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.");
+        const shaped = C.shape.lastyear(rows), parts = chunks(shaped, 2000);
+        if (!shaped.length) throw new Error('No order lines were found in this file (each needs an order number, an article code and a booking date).');
+        const batch = await A.rpc('ly_begin');
+        for (let i = 0; i < parts.length; i++) {
+          prog.set(`Saving ${inr(Math.min((i + 1) * 2000, shaped.length))} of ${inr(shaped.length)} lines ...`);
+          await A.rpc('ly_chunk', { p_batch: batch, p_rows: parts[i] });
+        }
+        const r = await A.rpc('ly_commit', { p_batch: batch, p_file: file.name });
+        const SE = C.season(S.M, []), sts = {};
+        shaped.forEach((x) => { const k = x.st || '(no status)'; sts[k] = (sts[k] || 0) + 1; });
+        const has = (f) => rows.fields.includes(f), withArt = rows.filter((x) => /^\d{6,}$/.test(C.code(x.article_code))).length;
+        msg = `${where}Order lines: ${inr(r.lines)}\nOrders: ${inr(r.orders)}\nStores: ${inr(r.stores)}\nBooked: ${dmy(r.from, true)} to ${dmy(r.to, true)}\nQty wanted: ${inr(r.qty)} pcs\nOrder value (approved): Rs ${inr(Math.round(r.value))}\n` +
+          `Status: ${Object.entries(sts).map(([k, n]) => `${k} ${inr(n)}`).join(', ')}` +
+          (withArt > shaped.length ? `\nRows with an article code left out (no order number or booking date): ${inr(withArt - shaped.length)}` : '') +
+          (!has('order_value') ? '\n(No "Order Value" column: the approved value is final qty x price wanted.)' : '') +
+          `\n\nD-30 last year: ${dmy(SE.ly0, true)}. Compared with this year from ${dmy(SE.ty0, true)} (Last year screen). This replaces any earlier load of last year's orders.`;
       } else if (kind === 'storestock') {
         if (!ssOn()) throw new Error('Stock at the stores needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
         prog.set('Reading the store stock ...'); await tick();
@@ -1564,8 +1856,9 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       const files = [];
       for (const n of list) files.push(await get('images/' + n).then((f) => new File([f], n)));
       await importImages(files, true);
-      for (const [kind, name] of [['data', '2_Full_Article_Data.xlsx'], ['stores', '3_Store_Emails.xlsx'], ['stores', '4_Lead_Time.xlsx'], ['stock', '5_DC_Stock.xlsx'], ['storestock', '9_Store_Stock.xls'], ['orders', '6_Orders_Batch1.xlsx']]) {
+      for (const [kind, name] of [['data', '2_Full_Article_Data.xlsx'], ['stores', '3_Store_Emails.xlsx'], ['stores', '4_Lead_Time.xlsx'], ['stock', '5_DC_Stock.xlsx'], ['storestock', '9_Store_Stock.xls'], ['orders', '6_Orders_Batch1.xlsx'], ['lastyear', '10_Last_Year_Orders.xlsx']]) {
         if (kind === 'storestock' && !ssOn()) continue;
+        if (kind === 'lastyear' && !lyOn()) continue;
         if ((await importFile(kind, await get(name), true)) === false) return;
       }
       await tell('Test data loaded', `${inr(S.M.counts.master)} articles in the Diwali range (${inr(S.M.counts.articles)} on file), ${inr(Object.keys(S.M.stores).length)} stores, ${inr(S.M.lines.length)} order lines.\n\nTo see duplicates being skipped, upload 7_Orders_Batch2.xlsx (in the testdata folder of the download) under Orders.\nTo see inwards being added to the DC stock, upload 8_Inwards_After_Stock.xlsx under Inwards.`);
@@ -1753,6 +2046,21 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
         if (S.view !== 'approved') S.a.flag = '';
       }
       render();
+    },
+    lyPeriod: (el) => { S.ly.period = el.dataset.v; render(); },
+    lyBasis: (el) => { S.ly.basis = el.dataset.v; render(); },
+    lyUnit: (el) => { S.ly.unit = el.dataset.v; render(); },
+    lyMc: (el) => { const k = el.dataset.mc; if (S.ly.all) { S.ly.all = false; S.ly.open = new Set(lyByMc(C.season(S.M, S.M.lyDaily), lyCut(C.season(S.M, S.M.lyDaily))).map((g) => g.key)); } if (S.ly.open.has(k)) S.ly.open.delete(k); else S.ly.open.add(k); render(); },
+    lyAll: () => { S.ly.all = !S.ly.all; S.ly.open.clear(); render(); },
+    lyFind: () => lyFind(),
+    lyArt: (el, e) => { if (e) e.preventDefault(); const o = $('#modal').lastElementChild; if (o) o.remove(); S.view = 'lastyear'; S.ly.lq = el.dataset.code; render(); lyFind(); },
+    lyExport: () => exportLastYear(),
+    lySeason: async () => {
+      const SE = C.season(S.M, S.M.lyDaily);
+      const v = await ask('D-30 of each season', `<p class="small">The booking day counted as D-30 (30 days before Diwali) in each year. Every day after it is compared with the same D-day of the other year.</p>
+        <label class="f">Last year<input type="date" name="ly" value="${SE.ly0}" required></label><label class="f">This year<input type="date" name="ty" value="${SE.ty0}" required></label>`, 'Save');
+      if (!v) return;
+      run(() => A.rpc('set_season', { p_ly: v.ly, p_ty: v.ty }), 'D-30 dates saved');
     },
     shortOpen: (el) => { S.view = 'shortages'; S.s.art = el.dataset.code; S.s.qty = {}; render(); },
     sel: (el) => { S.o.sel = +el.dataset.id; S.o.detail = null; render(); packPreview(); },
@@ -2028,6 +2336,8 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'ap-qty' || t.classList.contains('altq')) packPreview();
     else if (t.classList.contains('rowq')) rowPreview(t);
     else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
+    else if (t.id === 'lymq' || t.id === 'lysq') { S.ly[t.id === 'lymq' ? 'q' : 'sq'] = t.value; const pos = t.selectionStart, id = t.id; render(); const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
+    else if (t.id === 'lylq') S.ly.lq = t.value;
     else if (t.id === 'dl-disc') dealCalc('disc');
     else if (t.id === 'dl-price') dealCalc('price');
     else if (t.id === 'dl-qty' || t.id === 'dl-store') dealCalc();
@@ -2044,6 +2354,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'ccat') { S.c.cat = t.value; setHtml('cgrid', cGridHtml()); hydrate(); }
     else if (t.id === 'cscope') { S.c.scope = t.value; S.c.cat = ''; render(); }
     else if (t.id === 'sonly') { S.s.only = t.checked; render(); }
+    else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
     else if (t.dataset.role) {
       try { await A.rpc('team_set', { p_user: t.dataset.role, p_role: t.value }); toast('Access changed'); } catch (err) { await tell('Not done', err.message); }
       loadTeam();
@@ -2085,6 +2396,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       render();
       if (r.length === 1) openArticle(r[0].article_code); else if (!r.length && /^\d{6,}$/.test(code)) openArticle(code);
     }
+    if (e.key === 'Enter' && e.target.id === 'lylq') { e.preventDefault(); S.ly.lq = e.target.value; lyFind(); }
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('rowq')) { e.preventDefault(); ACT.rowApprove(e.target); }
     if (e.key === 'Escape') {
       const o = $('#modal').lastElementChild, c = o && $('[data-cancel],[data-done],[data-act=closePop]', o);
