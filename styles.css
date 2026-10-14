@@ -336,3 +336,26 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 @media (min-width: 960px) {
   .lybigs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
+
+/* ---------- shortages: the whole list, details open under the article ---------- */
+.slist > .tablewrap { overflow: visible; }
+.slist > .tablewrap > table > thead th { top: 0; }
+.slist tr.sel > td { background: var(--select); font-weight: 600; }
+.slist .caret { display: inline-block; width: 12px; color: var(--muted); }
+.slist tr.sdrow > td { white-space: normal; padding: 0 0 14px; background: #F6F2FF; border-bottom: 2px solid #D9CEF7; }
+.slist tr.sdrow .sdcard { margin: 0 10px; border-color: #D9CEF7; box-shadow: none; }
+
+/* ---------- queries ---------- */
+.qgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px 14px; align-items: end; }
+.qgrid4 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
+.qinfo { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; min-height: 38px; padding: 6px 10px; background: var(--bg); border-radius: 10px; font-size: 13px; }
+.qinfo b { font-size: 14px; }
+.qsum { display: flex; flex-wrap: wrap; gap: 6px 22px; align-items: baseline; padding: 10px 12px; background: var(--lilac); border-radius: 12px; }
+.qsum b { font-size: 15px; } .qsum .big b { font-size: 20px; color: var(--accent-deep); }
+.qtable td.artcell { white-space: normal; min-width: 180px; } .qtable td.w { min-width: 120px; }
+.qtable tr.new > td { background: #EAF8F1; }
+@media (min-width: 960px) {
+  .qgrid { grid-template-columns: minmax(160px, 220px) minmax(0, 1fr); }
+  .qgrid4 { grid-template-columns: repeat(3, minmax(0, 160px)) minmax(0, 1fr); }
+}
+.slist tr[data-act=shortSel] { scroll-margin-top: 96px; }

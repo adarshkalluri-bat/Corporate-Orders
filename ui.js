@@ -18,9 +18,10 @@
     c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
     ly: { basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
+    qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 13;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 14;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -28,6 +29,7 @@
   const sapOn = () => !!S.M && S.M.schema >= 11;      // approvals done in SAP need database version 11
   const lyOn = () => !!S.M && S.M.schema >= 13;       // last year's orders need database version 13
   const hasLy = () => lyOn() && !!S.M.meta.ly_batch;
+  const qOn = () => !!S.M && S.M.schema >= 14;        // queries from the stores need database version 14
   /* What the SAP approval file said about a line, in one line of text */
   const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
     return [x.label || (x.status === 'APPROVED' ? 'Approved in SAP' : 'Rejected in SAP'), x.status === 'APPROVED' && x.qty ? inr(x.qty) + ' pcs' : '', x.by, x.at ? when(x.at) : '', x.po ? 'PO ' + x.po : '', x.remarks].filter(Boolean).join(' · '); };     // approving a price with the quantity needs database version 8
@@ -40,9 +42,10 @@
     catalogue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m4 18 5-4 3 2 4-4 4 4"/></svg>',
     approved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>',
     data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
+    queries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.2v.3"/></svg>',
     lastyear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/><path d="m4 17 5-3 4 1 7-4" stroke-dasharray="2 3"/></svg>'
   };
-  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['data', 'Data']];
+  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
   const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders', lastyear: 'This year vs last year' };
 
   /* ================= small building blocks ================= */
@@ -286,7 +289,7 @@
     const keep = {};
     $$('[data-keep]').forEach((e) => { keep[e.dataset.keep] = e.scrollTop; });
     const y = window.scrollY, M = S.M;
-    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, catalogue: vCatalogue, lastyear: vLastYear, data: vData };
+    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
     const role = editor() ? '' : '<span class="pill view">VIEW ONLY</span>';
     app.innerHTML = `<div class="shell">
       <aside class="side">
@@ -309,6 +312,7 @@
     if (S.view === 'shortages') tally();
     if (S.view === 'catalogue' && S.c.scope === 'all') searchAll();
     if (S.view === 'lastyear') lyLoad();
+    if (S.view === 'queries') qLoad();
     wireCharts();
   }
   const setHtml = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
@@ -456,6 +460,140 @@
         : `<div class="note ${hasStock ? 'good' : 'info'}">${hasStock ? 'No article is short right now.' : 'Shortages appear once a DC stock report is loaded.'}</div>`}</div>`;
   }
   const l0 = (k) => (k === '(buyer not set)' ? '-' : k);
+
+
+  /* ================= Queries from the stores =================
+     Anyone on the team, view-only people too, logs what a store asks for: store, article, discount or final price, quantity.
+     Store and article details fill in by themselves; who logged it and when are set by the database. */
+  const QBLANK = () => ({ store: '', art: '', disc: '', price: '', qty: '', remarks: '' });
+  async function qLoad(force) {
+    const Q = S.qy;
+    if (!qOn() || Q.loading || (!force && Q.list && Q.rev === S.M.rev)) return;
+    Q.loading = true; Q.rev = S.M.rev;
+    try { Q.list = await A.rpc('queries_list', { p_limit: 50000 }) || []; Q.err = ''; } catch (e) { Q.err = e.message; }
+    finally { Q.loading = false; }
+    if (S.view === 'queries') setHtml('qlist', qListHtml());
+  }
+  /* the article for a code: the everyday data first, then anything looked up on the server */
+  const qArt = (code) => (code ? artOf(code) || (S.qy.found[code] === undefined ? undefined : S.qy.found[code]) : null);
+  async function qFindArt(code) {
+    if (!code || artOf(code) || S.qy.found[code] !== undefined) return;
+    try {
+      const r = await A.rpc('article_search', { p_q: code, p_limit: 20 });
+      const hit = (r || []).find((x) => x.article_code === code) || null;
+      S.qy.found[code] = hit;
+      if (hit) S.extra[code] = S.extra[code] || hit;
+    } catch (e) { S.qy.found[code] = null; }
+    if (C.code($('#qf-art') && $('#qf-art').value) === code) qInfo();
+  }
+  /* what is shown next to the boxes, worked out from what is typed */
+  function qCalc() {
+    const f = S.qy.form, sc = C.code(f.store).toUpperCase(), st = sc ? S.M.stores[sc] : null, ac = C.code(f.art), a = ac ? qArt(ac) : null;
+    const mrp = a ? Number(a.mrp) || 0 : 0, price = +f.price || 0, qty = Math.round(+f.qty || 0);
+    return { sc, st, ac, a, mrp, price, qty, value: Math.round(price * qty * 100) / 100, disc: mrp && price ? (1 - price / mrp) * 100 : null };
+  }
+  function qInfo() {
+    const x = qCalc(), f = S.qy.form;
+    setHtml('qf-store-info', !x.sc ? '<span class="muted">Type the store code</span>' : x.st
+      ? `<b>${esc(x.st.store_name || '')}</b><span>${esc(x.st.state || 'State not on file')}</span><span>Lead time ${x.st.lead_time == null ? 'not on file' : `<b>${x.st.lead_time} ${plural(x.st.lead_time, 'day')}</b>`}${x.st.dc ? ' from ' + esc(x.st.dc) : ''}</span>`
+      : `<span class="bad">Store ${esc(x.sc)} is not in the store list</span>`);
+    setHtml('qf-art-info', !x.ac ? '<span class="muted">Type the article code</span>' : x.a === undefined ? '<span class="muted">Looking it up ...</span>' : x.a
+      ? `<b>${esc(x.a.description || '')}</b><span>MRP <b>Rs ${inr2(x.mrp)}</b></span><span>${esc(x.a.mc_name || '')}</span>`
+      : `<span class="bad">Article ${esc(x.ac)} is not in the article files</span>`);
+    const over = x.mrp && x.price > x.mrp + 0.004;
+    setHtml('qf-sum', `<span>Discount <b>${x.disc == null ? '-' : x.disc.toFixed(2) + '%'}</b></span><span>Final price <b>${x.price ? 'Rs ' + inr2(x.price) : '-'}</b></span><span>Quantity <b>${x.qty ? inr(x.qty) + ' pcs' : '-'}</b></span>
+      <span class="big">Order value <b>${x.price && x.qty ? 'Rs ' + inr2(x.value) : '-'}</b></span>${over ? '<span class="bad">The final price is above MRP</span>' : ''}`);
+    const ok = x.st && x.a && x.price > 0 && !over && x.qty > 0;
+    const b = $('#qf-go'); if (b) b.disabled = !ok || S.qy.saving;
+    if (x.ac && x.a === undefined) qFindArt(x.ac);
+    void f;
+  }
+  /* discount and final price fill each other in; whichever was typed last wins */
+  function qTyped(t) {
+    const f = S.qy.form, map = { 'qf-store': 'store', 'qf-art': 'art', 'qf-disc': 'disc', 'qf-price': 'price', 'qf-qty': 'qty', 'qf-rem': 'remarks' };
+    f[map[t.id]] = t.value;
+    const x = qCalc();
+    if (t.id === 'qf-disc' && x.mrp) { const d = +t.value; f.price = t.value === '' ? '' : String(Math.round(x.mrp * (1 - d / 100) * 100) / 100); $('#qf-price').value = f.price; }
+    if (t.id === 'qf-price' && x.mrp) { f.disc = t.value === '' ? '' : String(Math.round((1 - (+t.value || 0) / x.mrp) * 10000) / 100); $('#qf-disc').value = f.disc; }
+    if (t.id === 'qf-art' && x.mrp && (f.disc !== '' || f.price !== '')) {          // a new article: keep the discount, work the price out again
+      if (f.disc !== '') { f.price = String(Math.round(x.mrp * (1 - (+f.disc || 0) / 100) * 100) / 100); $('#qf-price').value = f.price; }
+    }
+    qInfo();
+  }
+  async function qSubmit() {
+    const Q = S.qy, x = qCalc();
+    if (Q.saving || !(x.st && x.a && x.price > 0 && x.qty > 0)) return;
+    Q.saving = true; qInfo();
+    try {
+      const r = await A.rpc('query_add', { p: { store: x.sc, article: x.ac, price: Math.round(x.price * 100) / 100, qty: x.qty, remarks: Q.form.remarks } });
+      Q.form = Object.assign(QBLANK(), { store: Q.form.store });                  // the next query is often from the same store
+      Q.last = r.id;
+      toast(`Query logged: ${r.store_code} ${r.article_code}, ${inr(r.qty)} pcs, Rs ${inr2(Number(r.value))}`);
+      Q.saving = false;
+      await reload();
+      await qLoad(true);
+      const a = $('#qf-art'); if (a) a.focus();
+    } catch (e) { Q.saving = false; qInfo(); await tell('Query not logged', e.message); }
+  }
+  function qRows() {
+    const Q = S.qy, words = Q.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return (Q.list || []).filter((r) => !words.length || words.every((w) => [r.store_code, r.store_name, r.state, r.article_code, r.description, r.mc_name, r.by_name, r.remarks].join(' ').toLowerCase().includes(w)));
+  }
+  function qListHtml() {
+    const Q = S.qy, ed = editor();
+    if (!Q.list) return `<div class="empty card">${Q.err ? esc(Q.err) : 'Loading the queries ...'}</div>`;
+    const rows = qRows();
+    if (!rows.length) return `<div class="empty card">${Q.list.length ? 'No query matches the search.' : 'No query logged yet.'}</div>`;
+    const tv = rows.reduce((t, r) => t + Number(r.value || 0), 0), tq = rows.reduce((t, r) => t + (r.qty || 0), 0);
+    const shown = rows.slice(0, 500);
+    return `<div class="small" style="margin-bottom:6px">${inr(rows.length)} ${plural(rows.length, 'query', 'queries')}${rows.length < Q.list.length ? ` of ${inr(Q.list.length)}` : ''} &middot; ${inr(tq)} pcs &middot; order value <b>Rs ${inr(Math.round(tv))}</b></div>
+      <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th><th>Remarks</th><th></th></tr></thead><tbody>
+      ${shown.map((r) => `<tr class="${r.id === Q.last ? 'new' : ''}"><td class="nowrap">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div></td>
+        <td><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
+        <td class="artcell"><b class="nowrap">${esc(r.article_code)}</b><div class="small">${esc(r.description || '')}</div><div class="small muted">${esc(r.mc_name || '')}</div></td>
+        <td class="right">${r.mrp == null ? '-' : inr2(Number(r.mrp))}</td><td class="right">${r.discount == null ? '-' : (Number(r.discount) * 100).toFixed(2) + '%'}</td>
+        <td class="right b">${inr2(Number(r.price))}</td><td class="right b">${inr(r.qty)}</td><td class="right b">${inr2(Number(r.value))}</td>
+        <td class="w small">${esc(r.remarks || '')}</td><td>${r.mine || ed ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+      ${rows.length > shown.length ? `<p class="small">Showing the newest 500; Export to Excel has all ${inr(rows.length)}.</p>` : ''}`;
+  }
+  function vQueries() {
+    const Q = S.qy, f = Q.form;
+    if (!qOn()) return `<div class="head"><h1>Queries</h1></div><div class="card"><div class="note warn">Queries need the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.</div></div>`;
+    setTimeout(qInfo, 0);
+    const stores = Object.values(S.M.stores);
+    return `<div class="head"><h1>Queries</h1><span class="sub">What the stores ask for. Everyone on the team can log a query here, view-only too.</span></div>
+      <div class="card stack qform"><h2>Log a query</h2>
+        <div class="qgrid">
+          <label class="f">Store code<input id="qf-store" type="text" list="qf-stores" autocomplete="off" value="${esc(f.store)}" placeholder="e.g. HD02"></label>
+          <div class="qinfo" id="qf-store-info"></div>
+          <label class="f">Article code<input id="qf-art" type="text" inputmode="numeric" autocomplete="off" value="${esc(f.art)}" placeholder="e.g. 1212013789"></label>
+          <div class="qinfo" id="qf-art-info"></div>
+        </div>
+        <datalist id="qf-stores">${stores.slice(0, 3000).map((s) => `<option value="${esc(s.store_code)}">${esc(s.store_name || '')}</option>`).join('')}</datalist>
+        <div class="qgrid4">
+          <label class="f">Discount %<input id="qf-disc" type="number" min="0" max="100" step="0.01" inputmode="decimal" value="${esc(f.disc)}" placeholder="or type the price"></label>
+          <label class="f">Final price (Rs)<input id="qf-price" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(f.price)}" placeholder="or type the discount"></label>
+          <label class="f">Quantity (pcs)<input id="qf-qty" type="number" min="1" step="1" inputmode="numeric" value="${esc(f.qty)}"></label>
+          <label class="f">Remarks (optional)<input id="qf-rem" type="text" maxlength="500" value="${esc(f.remarks)}"></label>
+        </div>
+        <div class="qsum" id="qf-sum"></div>
+        <div class="row wrap"><span class="small grow">Logged in your name (${esc(S.me.name || S.me.email)}), with the date and time, when you press Submit.</span>
+          <button class="btn" data-act="qClear">Clear</button><button class="btn primary" id="qf-go" data-act="qSubmit" disabled>Submit</button></div></div>
+      <div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">All queries</h2><input type="search" id="qq" placeholder="Search store, article, MC, person ..." value="${esc(Q.q)}" style="max-width:300px"><button class="btn sm" data-act="qExport">Export to Excel</button></div>
+        <div id="qlist">${qListHtml()}</div></div>`;
+  }
+  function exportQueries() {
+    const Q = S.qy;
+    if (!Q.list || !Q.list.length) return tell('Export', 'There are no queries to export.');
+    const rows = qRows();
+    return excelFile('Store_Queries', false, (sheet) => {
+      sheet('Queries', ['Logged on', 'Time', 'Logged by', 'Store Code', 'Store Name', 'State', 'Lead Time (days)', 'Article Code', 'Description', 'MC Name', 'MRP', 'Discount %', 'Final Price', 'Qty', 'Order Value', 'Remarks'],
+        rows.map((r) => { const d = new Date(r.created_at), p2 = (n) => String(n).padStart(2, '0');
+          return [`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`, `${p2(d.getHours())}:${p2(d.getMinutes())}`, r.by_name, r.store_code, r.store_name, r.state, r.lead_time, r.article_code, r.description, r.mc_name,
+            r.mrp == null ? null : Number(r.mrp), r.discount == null ? null : Math.round(Number(r.discount) * 10000) / 100, Number(r.price), r.qty, Number(r.value), r.remarks || '']; }));
+      return `Exported ${inr(rows.length)} ${plural(rows.length, 'query', 'queries')}` + (rows.length < Q.list.length ? ' (the search you have on was applied)' : '');
+    });
+  }
 
   /* ================= This year against last year =================
      Day k of a season is D-(30-k); D-30 is 20 Sep 2025 last year and 9 Oct 2026 this year (changeable).
@@ -1287,8 +1425,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
   const altFreeOf = (arr) => arr.reduce((t, a) => t + Math.max(0, C.freeOf(S.M, a.article_code)), 0);
   function vShortages() {
     const M = S.M, rows = shortRows();
-    if (S.wide && (!S.s.art || !rows.some((r) => r.c === S.s.art))) S.s.art = rows.length ? rows[0].c : null;
-    if (S.s.art && !M.pos[S.s.art]) S.s.art = null;
+    if (S.s.art && (!M.pos[S.s.art] || (S.wide && !rows.some((r) => r.c === S.s.art)))) S.s.art = null;
     let list;
     if (!M.meta.stock_asof) list = '<div class="empty card">Shortages appear once a DC stock report is loaded.</div>';
     else if (!rows.length) list = `<div class="empty card">${S.s.only ? 'No article is short. Every pending order line can be covered from free DC stock.' : 'No pending demand.'}</div>`;
@@ -1296,10 +1433,11 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
       list = `<div class="tablewrap"><table class="twoline"><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Total<br>DC qty</th><th class="right">Allocated<br>to orders</th>
         <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th><th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th></tr></thead><tbody>
         ${rows.map(({ c, p, a, gap }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff), ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
-          return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td class="w mc">${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
+          return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td class="w mc"><span class="caret">${S.s.art === c ? '&#9662;' : '&#9656;'}</span> ${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
           <td class="right">${inr(p.dc)}</td><td class="right">${p.reserved ? inr(p.reserved) : '-'}</td><td class="right b ${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</td>
           <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td><td class="right ${ppo ? '' : 'muted'}" title="${ppo ? `This month ${inr(a.ppo_cm || 0)}, next month ${inr(a.ppo_nm || 0)}` : ''}">${ppo ? inr(ppo) : '-'}</td>
-          <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td></tr>`; }).join('')}</tbody></table></div>`;
+          <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td></tr>` +
+            (S.s.art === c ? `<tr class="sdrow"><td colspan="13"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
     } else {
       list = rows.map(({ c, p, a, gap }) => `<div class="ocard" data-act="shortSel" data-code="${esc(c)}">${thumb(c, 's')}<div class="grow">
         <div class="row"><span class="mcname grow">${esc(a.mc_name || '')}</span>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>
@@ -1307,11 +1445,12 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
         <div class="small">MRP ${inr(a.mrp)} &middot; ${esc(c)} &middot; ${p.n_stores} ${plural(p.n_stores, 'store')} waiting</div>
         <div class="nums"><span>Balance DC qty <b class="${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</b></span><span>Pending order qty <b>${inr(p.pending)}</b></span><span>Pending PO <b>${inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0))}</b></span><span>In alternates <b>${inr(altFreeOf(C.allAlternates(M, c)))}</b></span></div></div></div>`).join('');
     }
-    const detail = `<div id="sdetail" class="${!S.wide && S.s.art ? 'sheetpage' : ''}" ${!S.wide && !S.s.art ? 'hidden' : ''}>${sDetailHtml()}</div>`;
+    const detail = S.wide ? '' : `<div id="sdetail" class="${S.s.art ? 'sheetpage' : ''}" ${!S.s.art ? 'hidden' : ''}>${sDetailHtml()}</div>`;
     return `<div class="head"><h1>Shortages</h1><span class="sub">Articles that several stores are waiting for${editor() ? ' - share out the balance DC quantity here' : ''}</span><span class="grow"></span><button class="btn sm" data-act="exportShort" title="Excel file of every article listed here, and the order lines waiting for each">Export shortages to Excel</button></div>
       <div class="toolbar two"><input type="search" id="sq" placeholder="Search article, MC or buyer ..." value="${esc(S.s.q)}" aria-label="Search shortages">
         <label class="row" style="min-height:38px"><input type="checkbox" id="sonly" ${S.s.only ? 'checked' : ''}> Only articles that are short</label></div>
-      <div class="vpanes"><div data-keep="slist">${list}</div>${detail}</div>`;
+      ${S.wide && rows.length && M.meta.stock_asof ? `<p class="small" style="margin:0 0 8px">${inr(rows.length)} ${plural(rows.length, 'article')}, most short first. Click an article to open its order lines just below it; click it again to close.</p>` : ''}
+      <div class="slist">${list}</div>${detail}`;
   }
   function sDetailHtml() {
     const M = S.M, c = S.s.art, ed = editor();
@@ -1337,7 +1476,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
         ${ssHtml(l)}${ed ? `<div class="row" style="margin-top:6px"><span class="grow small">Approve qty</span>${input(l)}</div>` : ''}</div></div>`).join('');
     }
     return `<div class="back"><button class="btn" data-act="shortUnsel">&#8249; Shortages</button></div>
-      <div class="card stack"><div class="row top">${thumb(c, 'm', true)}<div class="grow"><div class="mcname">${esc(a.mc_name || '')} &nbsp;|&nbsp; MRP ${inr(a.mrp)}</div><h2>${esc(c)} &nbsp; ${esc(a.description || '')}</h2>
+      <div class="card stack sdcard"><div class="row top">${thumb(c, 'm', true)}<div class="grow"><div class="mcname">${esc(a.mc_name || '')} &nbsp;|&nbsp; MRP ${inr(a.mrp)}</div><h2>${esc(c)} &nbsp; ${esc(a.description || '')}</h2>
         <div class="small">Pack of ${pack}${a.buyer ? ' &nbsp;|&nbsp; ' + esc(a.buyer) : ''}</div>
         ${al.same.length ? `<div>Same design, balance DC qty - ${names(al.same)}</div>` : ''}${al.diff.length ? `<div>Same price, other design, balance DC qty - ${names(al.diff)}</div>` : ''}${!al.same.length && !al.diff.length ? '<div class="muted">No alternates listed.</div>' : ''}
 ${ed ? `<div class="small">Give each store its share below, in full packs. Lines left short stay open so alternates can be offered from the Orders screen.${locsOn() ? ' The stock is taken from the DC locations in the usual order; to choose the location for one store, approve it from Pending orders.' : ''}</div>` : ''}</div></div>
@@ -1508,12 +1647,12 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     const step = (title, text, btns, status) => `<div class="card step"><div class="row wrap"><h2 class="grow">${title}</h2>${btns}</div><p class="small">${text}</p>${status ? `<div class="stepstatus">${status}</div>` : ''}</div>`;
     const b = (label, act, extra, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" ${extra || ''}>${label}</button>`;
     const left = [];
-    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: the comparison with last year, stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
+    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: queries from the stores, the comparison with last year, stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
     if (ed) {
       left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"') + b('Template', 'template', 'data-kind="master"', 'ghost'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
       left.push(step('3 &nbsp;Full article data (second file)', 'The complete article sheet (DSR article-wise). Used for any article that is ordered but is not in the Diwali master, and for status, pending PO and store stock of all articles. It never overwrites what the Diwali master says.', b('Upload file ...', 'pick', 'data-kind="data"') + b('Template', 'template', 'data-kind="data"', 'ghost'), last('Full article data')));
-      left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files: upload each one, they are merged by store code.', b('Upload file ...', 'pick', 'data-kind="stores"') + b('Template', 'template', 'data-kind="stores"', 'ghost'), last('Store list')));
+      left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files - for example the store email list and the lead-time list (DC/RDC, ST CD, STORE NAME, State, LEAD TIME; the .xlsb works as it is): upload each one, they are merged by store code. The lead time sets the allocate-by date of every order line, and the Queries screen fills in store name, state and lead time from here.', b('Upload file ...', 'pick', 'data-kind="stores"') + b('Template', 'template', 'data-kind="stores"', 'ghost'), last('Store list')));
       left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, and the balance DC quantity is worked out again. For stock that arrives in between, use Inwards below instead of loading the whole report again.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary') + b('Template', 'template', 'data-kind="stock"', 'ghost'), last('DC stock')));
       if (locsOn()) {
         const loads = M.inwardLoads.filter((x) => x.counted > 0), inTot = inwardTotal(M), allIn = loads.reduce((t, x) => t + x.counted, 0);
@@ -2053,6 +2192,14 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     lyMc: (el) => { const k = el.dataset.mc; if (S.ly.all) { S.ly.all = false; S.ly.open = new Set(lyByMc(C.season(S.M, S.M.lyDaily), lyCut(C.season(S.M, S.M.lyDaily))).map((g) => g.key)); } if (S.ly.open.has(k)) S.ly.open.delete(k); else S.ly.open.add(k); render(); },
     lyAll: () => { S.ly.all = !S.ly.all; S.ly.open.clear(); render(); },
     lyFind: () => lyFind(),
+    qSubmit: () => qSubmit(),
+    qExport: () => exportQueries(),
+    qClear: () => { S.qy.form = QBLANK(); render(); const i = $('#qf-store'); if (i) i.focus(); },
+    qDel: async (el) => {
+      const r = (S.qy.list || []).find((x) => String(x.id) === el.dataset.id); if (!r) return;
+      if (!(await confirmBox('Remove this query?', `${r.store_code} ${r.store_name || ''}\n${r.article_code} ${r.description || ''}\n${inr(r.qty)} pcs at Rs ${inr2(Number(r.price))}, logged by ${r.by_name} on ${when(r.created_at)}`, 'Remove', true))) return;
+      await run(() => A.rpc('query_delete', { p_id: r.id }), 'Query removed'); await qLoad(true);
+    },
     lyArt: (el, e) => { if (e) e.preventDefault(); const o = $('#modal').lastElementChild; if (o) o.remove(); S.view = 'lastyear'; S.ly.lq = el.dataset.code; render(); lyFind(); },
     lyExport: () => exportLastYear(),
     lySeason: async () => {
@@ -2062,7 +2209,10 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       if (!v) return;
       run(() => A.rpc('set_season', { p_ly: v.ly, p_ty: v.ty }), 'D-30 dates saved');
     },
-    shortOpen: (el) => { S.view = 'shortages'; S.s.art = el.dataset.code; S.s.qty = {}; render(); },
+    shortOpen: (el) => {
+      S.view = 'shortages'; S.s.art = el.dataset.code; S.s.qty = {}; render();
+      if (S.wide) { const r = document.querySelector(`tr[data-act=shortSel][data-code="${CSS.escape(el.dataset.code)}"]`); if (r) r.scrollIntoView({ block: 'start' }); }
+    },
     sel: (el) => { S.o.sel = +el.dataset.id; S.o.detail = null; render(); packPreview(); },
     unsel: () => { S.o.sel = null; render(); },
     chk: (el) => { const id = +el.dataset.id, st = sec(); if (el.checked) st.checked.add(id); else st.checked.delete(id); },
@@ -2245,7 +2395,11 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       run(async () => { const r = await A.rpc('reject_lines', { p_lines: ids, p_reason: v.reason + (v.remark.trim() ? ' - ' + v.remark.trim() : '') }); sec().checked.clear(); return r; },
         (r) => `Rejected ${r.done} ${plural(r.done, 'line')}` + (r.skipped ? `, ${r.skipped} left alone (dispatched)` : ''));
     },
-    shortSel: (el) => { S.s.art = el.dataset.code; S.s.qty = {}; render(); },
+    shortSel: (el) => {
+      const c = el.dataset.code;
+      S.s.art = S.wide && S.s.art === c ? null : c; S.s.qty = {}; render();
+      if (S.wide && S.s.art) { const r = document.querySelector(`tr[data-act=shortSel][data-code="${CSS.escape(c)}"]`); if (r) r.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+    },
     shortUnsel: () => { S.s.art = null; S.s.qty = {}; render(); },
     fill: (el) => { S.s.qty = el.dataset.m ? C.suggestSplit(S.M, S.s.art, el.dataset.m) : {}; $$('.sq').forEach((i) => { i.value = S.s.qty[i.dataset.id] || ''; }); tally(); },
     applySplit: async () => {
@@ -2291,7 +2445,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       run(() => A.rpc('set_loc_order', { p_order: order.join(',') }), 'Order of locations saved');
     },
     template: (el) => downloadTemplate(el.dataset.kind),
-    pick: (el) => { pending = { kind: el.dataset.kind }; const i = $('#file-in'); i.accept = '.xlsx,.xlsm,.xls,.csv,.txt,.htm,.html,.mht,.mhtml'; i.value = ''; i.click(); },
+    pick: (el) => { pending = { kind: el.dataset.kind }; const i = $('#file-in'); i.accept = '.xlsx,.xlsm,.xlsb,.xls,.csv,.txt,.htm,.html,.mht,.mhtml'; i.value = ''; i.click(); },
     pickImages: () => { const i = $('#img-in'); i.value = ''; i.click(); },
     pickFolder: () => { const i = $('#dir-in'); i.value = ''; i.click(); },
     export: () => exportExcel(),
@@ -2338,6 +2492,8 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
     else if (t.id === 'lymq' || t.id === 'lysq') { S.ly[t.id === 'lymq' ? 'q' : 'sq'] = t.value; const pos = t.selectionStart, id = t.id; render(); const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.id === 'lylq') S.ly.lq = t.value;
+    else if (/^qf-/.test(t.id)) qTyped(t);
+    else if (t.id === 'qq') { S.qy.q = t.value; setHtml('qlist', qListHtml()); }
     else if (t.id === 'dl-disc') dealCalc('disc');
     else if (t.id === 'dl-price') dealCalc('price');
     else if (t.id === 'dl-qty' || t.id === 'dl-store') dealCalc();
@@ -2396,6 +2552,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       render();
       if (r.length === 1) openArticle(r[0].article_code); else if (!r.length && /^\d{6,}$/.test(code)) openArticle(code);
     }
+    if (e.key === 'Enter' && /^qf-(qty|rem|price|disc)$/.test(e.target.id || '')) { e.preventDefault(); qSubmit(); }
     if (e.key === 'Enter' && e.target.id === 'lylq') { e.preventDefault(); S.ly.lq = e.target.value; lyFind(); }
     if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('rowq')) { e.preventDefault(); ACT.rowApprove(e.target); }
     if (e.key === 'Escape') {

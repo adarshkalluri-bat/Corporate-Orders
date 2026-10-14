@@ -161,7 +161,14 @@
     };
     return [{ name: 'Text', peek: () => rowsOf(40), all: () => rowsOf(0) }];
   }
-  async function fromOther(u8, loadSheetJS) {                     // .xls, .csv, tab text
+  /* A binary workbook (.xlsb) is a zip too, with xl/workbook.bin instead of xl/workbook.xml. The file names
+     sit uncompressed in the zip's directory at the end of the file. */
+  function isXlsb(u8) {
+    const tail = u8.subarray(Math.max(0, u8.length - 262144));
+    let s = ''; for (let i = 0; i < tail.length; i += 32768) s += String.fromCharCode.apply(null, tail.subarray(i, i + 32768));
+    return s.includes('xl/workbook.bin') && !s.includes('xl/workbook.xml');
+  }
+  async function fromOther(u8, loadSheetJS) {                     // .xls, .xlsb, .csv, tab text                     // .xls, .csv, tab text
     const X = await loadSheetJS();
     const wb = X.read(u8, { type: 'array', raw: true });
     return wb.SheetNames.map((name) => {
@@ -181,7 +188,7 @@
      u8: the file's bytes. kind: master | data | stores | stock | orders. */
   async function read(u8, kind, loadSheetJS) {
     const isZip = u8[0] === 0x50 && u8[1] === 0x4b;
-    const sheets = isZip ? fromZip(u8) : looksHtml(u8) ? fromHtml(u8) : looksTabText(u8) ? fromTabText(u8) : await fromOther(u8, loadSheetJS);
+    const sheets = isZip && isXlsb(u8) ? await fromOther(u8, loadSheetJS) : isZip ? fromZip(u8) : looksHtml(u8) ? fromHtml(u8) : looksTabText(u8) ? fromTabText(u8) : await fromOther(u8, loadSheetJS);
     if (!sheets.length) throw new Error('The file has no sheets that could be read.');
     let best = null;
     for (const s of sheets) {
