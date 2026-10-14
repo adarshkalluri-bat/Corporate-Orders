@@ -22,7 +22,7 @@
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 14;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 15;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -30,6 +30,7 @@
   const sapOn = () => !!S.M && S.M.schema >= 11;      // approvals done in SAP need database version 11
   const lyOn = () => !!S.M && S.M.schema >= 13;       // last year's orders need database version 13
   const hasLy = () => lyOn() && !!S.M.meta.ly_batch;
+  const expOn = () => !!S.M && S.M.schema >= 15;       // expected stock needs database version 15
   const qOn = () => !!S.M && S.M.schema >= 14;        // queries from the stores need database version 14
   /* What the SAP approval file said about a line, in one line of text */
   const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
@@ -458,6 +459,7 @@
           ${parts.map(([n, q, col]) => `<span>${n}</span><div class="bar"><i style="width:${reqAll ? Math.min(100, q / reqAll * 100) : 0}%;background:${col}"></i></div><b class="right">${inr(q)}</b><span class="small right">${reqAll ? Math.round(q / reqAll * 100) : 0}%</span>`).join('')}
         </div><p class="small">${inr(appr)} of ${inr(req)} pcs approved (${req ? Math.round(appr / req * 100) : 0}%), not counting rejected lines; the bars are out of all ${inr(reqAll)} pcs ordered. Approved quantities are in full packs, so they can be a little above what was asked.</p></div>${moneyCard}</div>
       </div>
+      ${expDashCard()}
       ${lyDashCard()}
       ${buyerCard ? `<div style="margin-top:12px">${buyerCard}</div>` : ''}
       <div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Biggest shortages</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
@@ -469,6 +471,65 @@
 
 
 
+
+
+  /* ================= Stock expected at the DC =================
+     Editors note, per article, the deliveries expected (quantity, arrival date, note). It is never added to the DC stock:
+     it only shows when the shortage can be covered, and which waiting stores would be too late for it. */
+  const expOpen = (code) => (S.M.expected || []).filter((e) => e.article_code === code && !e.received_at).sort((a, b) => a.eta.localeCompare(b.eta) || a.id - b.id);
+  const expDone = (code) => (S.M.expected || []).filter((e) => e.article_code === code && e.received_at).sort((a, b) => String(b.received_at).localeCompare(String(a.received_at)));
+  const expLate = (e) => e.eta < C.today();
+  const expText = (e) => `${inr(e.qty)} pcs on ${when(e.eta)}${expLate(e) ? ' (date passed)' : ''}`;
+  /* what the expected stock does for the stores waiting: covered by which date, still short after it, stores too late for it */
+  function expPlan(code) {
+    const p = S.M.pos[code] || { pending: 0, free: 0 }, free = Math.max(0, p.free || 0), pend = p.pending || 0, ex = expOpen(code);
+    const short = Math.max(0, pend - free);
+    let have = free, cover = short ? null : 'now';
+    for (const e of ex) { have += e.qty; if (!cover && have >= pend) cover = e.eta; }
+    const waiting = S.M.lines.filter((l) => l.article_code === code && l.balance > 0);
+    const late = cover && cover !== 'now' ? waiting.filter((l) => l.allocate_by && l.allocate_by < cover) : [];
+    return { ex, pend, free, short, cover, after: Math.max(0, pend - have), late, total: ex.reduce((t, e) => t + e.qty, 0), passed: ex.filter(expLate), stores: new Set(waiting.map((l) => l.store_code)).size };
+  }
+  function expVerdict(x) {
+    if (!x.short) return '<span class="good b">Covered now</span>';
+    if (!x.ex.length) return '<span class="bad b">No date yet</span>';
+    if (x.cover) return `<span class="good b">Yes, by ${when(x.cover)}</span>${x.late.length ? `<div class="small warn">${inr(new Set(x.late.map((l) => l.store_code)).size)} ${plural(new Set(x.late.map((l) => l.store_code)).size, 'store')} must be allocated before that</div>` : ''}`;
+    return `<span class="warn b">Partly</span><div class="small">still short by ${inr(x.after)}</div>`;
+  }
+  /* the Dashboard card */
+  function expDashCard() {
+    const M = S.M;
+    if (!expOn() || !M.meta.stock_asof) return '';
+    const rows = Object.keys(M.pos).map((c) => [c, expPlan(c)]).filter(([, x]) => x.pend > 0 && (x.short > 0 || x.ex.length));
+    if (!rows.length) return '';
+    const rank = (x) => (x.passed.length ? 0 : x.ex.length && x.short ? 1 : x.short ? 2 : 3);
+    rows.sort((a, b) => rank(a[1]) - rank(b[1]) || (a[1].ex[0] ? a[1].ex[0].eta : '9').localeCompare(b[1].ex[0] ? b[1].ex[0].eta : '9') || b[1].short - a[1].short);
+    const shortN = rows.filter(([, x]) => x.short).length, withDate = rows.filter(([, x]) => x.short && x.ex.length).length, noDate = shortN - withDate, passed = rows.filter(([, x]) => x.passed.length).length;
+    const shown = rows.slice(0, 12);
+    return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Expected stock vs pending orders</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
+      <div class="row wrap expsum"><span><b>${inr(shortN)}</b> ${plural(shortN, 'article')} short</span><span class="good"><b>${inr(withDate)}</b> with stock expected</span><span class="${noDate ? 'bad' : ''}"><b>${inr(noDate)}</b> with no date yet</span>${passed ? `<span class="warn"><b>${inr(passed)}</b> with an arrival date passed, not marked received</span>` : ''}</div>
+      <div class="tablewrap"><table class="tight exptable"><thead><tr><th>Article</th><th class="right">Pending<br>order qty</th><th class="right">Balance<br>DC qty</th><th class="right">Short by</th><th>Expected</th><th>Covers it?</th></tr></thead><tbody>
+      ${shown.map(([c, x]) => { const a = M.articles[c] || {};
+        return `<tr class="pick" data-act="shortOpen" data-code="${esc(c)}"><td class="artcell"><b class="nowrap">${esc(c)}</b> <span class="small">${esc(a.description || '')}</span><div class="small muted">${esc(a.mc_name || '')}${a.mrp != null ? ' &middot; MRP ' + inr(a.mrp) : ''} &middot; ${x.stores} ${plural(x.stores, 'store')} waiting</div></td>
+          <td class="right b">${inr(x.pend)}</td><td class="right">${inr(x.free)}</td><td class="right b ${x.short ? 'bad' : 'muted'}">${x.short ? inr(x.short) : '-'}</td>
+          <td class="small">${x.ex.length ? x.ex.map((e) => `<div class="${expLate(e) ? 'warn b' : ''}">${expText(e)}</div>`).join('') : '<span class="muted">-</span>'}</td><td>${expVerdict(x)}</td></tr>`; }).join('')}</tbody></table></div>
+      ${rows.length > shown.length ? `<p class="small">${inr(rows.length - shown.length)} more on the Shortages screen.</p>` : ''}
+      <p class="small">Expected stock is not part of the balance DC qty; it shows when a shortage can be covered. "Must be allocated before that" = stores whose delivery date minus lead time comes before the stock arrives.</p></div>`;
+  }
+  /* the box in Shortages, under the article */
+  function expBoxHtml(code) {
+    if (!expOn()) return '';
+    const ed = editor(), x = expPlan(code), done = expDone(code).slice(0, 3);
+    const row = (e) => `<div class="exprow ${expLate(e) ? 'late' : ''}"><span class="grow"><b>${inr(e.qty)} pcs</b> on <b>${when(e.eta)}</b>${expLate(e) ? ' <span class="warn b">date passed</span>' : ''}${e.note ? ` &middot; ${esc(e.note)}` : ''} <span class="small muted">&middot; ${esc(e.created_by || '')}, ${when(e.created_at)}</span></span>
+      ${ed ? `<button class="btn sm" data-act="expRecv" data-id="${e.id}" title="The stock has come: load it as an inward or with the next stock report">Received</button><button class="btn sm" data-act="expEdit" data-id="${e.id}">Change</button><button class="btn sm danger" data-act="expDel" data-id="${e.id}">Remove</button>` : ''}</div>`;
+    const plan = x.pend ? `<div class="small">${x.short ? (x.cover ? `With this stock the ${inr(x.pend)} pcs pending are covered by <b>${when(x.cover)}</b>.${x.late.length ? ` <span class="warn">${x.late.length} ${plural(x.late.length, 'line')} must be allocated before then: ${Array.from(new Set(x.late.map((l) => l.store_code))).slice(0, 8).map(esc).join(', ')}.</span>` : ''}` : x.ex.length ? `Even with this stock it stays <b class="bad">short by ${inr(x.after)}</b>.` : 'No expected stock entered yet.') : 'The balance DC qty already covers what is pending.'}</div>` : '';
+    return `<div class="expbox stack"><h3 style="margin:0">Expected stock</h3>
+      ${x.ex.length ? x.ex.map(row).join('') : '<div class="small muted">Nothing expected yet.</div>'}${plan}
+      ${done.length ? `<div class="small muted">Received: ${done.map((e) => `${inr(e.qty)} pcs (${when(e.eta)}) - ${esc(e.received_by || '')} ${when(e.received_at)}${ed ? ` <button class="btn link" data-act="expUndo" data-id="${e.id}">undo</button>` : ''}`).join(' &middot; ')}</div>` : ''}
+      ${ed ? `<div class="row wrap expadd"><label class="f">Expected qty<input type="number" id="exp-qty" min="1" step="1" inputmode="numeric" placeholder="pcs"></label><label class="f">Arrival date<input type="date" id="exp-eta" min="${C.today()}"></label>
+        <label class="f grow">Note (optional)<input type="text" id="exp-note" maxlength="300" placeholder="PO number, vendor ..."></label><button class="btn primary" data-act="expAdd" data-code="${esc(code)}">Add</button></div>` : ''}</div>`;
+  }
+  const expById = (id) => (S.M.expected || []).find((e) => String(e.id) === String(id));
 
   /* ================= Check a label =================
      A photo of an article label (forwarded from a store on WhatsApp) is read on this phone or laptop - the photo goes
@@ -598,6 +659,8 @@
     else say.push('No store is waiting for this article.');
     if (apprQty) say.push(`${inr(apprQty)} pcs approved so far for ${inr(stores(appr))} ${plural(stores(appr), 'store')}.`);
     if (ppo) say.push(`Pending PO ${inr(ppo)} pcs - not in the DC stock until it arrives.`);
+    const exx = expOn() && S.M.expected ? expOpen(code) : [];
+    if (exx.length) say.push(`<b>Expected:</b> ${exx.map(expText).join(', ')}.`);
     if (sameF.length || diffF.length) say.push(`Alternates with balance: ${sameF.length ? `same design ${inr(sumF(sameF))} pcs` : ''}${sameF.length && diffF.length ? ', ' : ''}${diffF.length ? `same price, other design ${inr(sumF(diffF))} pcs` : ''}.`);
     else if (short) say.push('No alternate has balance at the DC.');
     if (ly) say.push(`Last year: ${inr(ly.lines)} order ${plural(ly.lines, 'line')} from ${inr(ly.stores)} ${plural(ly.stores, 'store')}, ${inr(ly.wq)} pcs wanted, ${inr(ly.fq)} approved.`);
@@ -1731,19 +1794,20 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
     else if (!rows.length) list = `<div class="empty card">${S.s.only ? 'No article is short. Every pending order line can be covered from free DC stock.' : 'No pending demand.'}</div>`;
     else if (S.wide) {
       list = `<div class="tablewrap"><table class="twoline"><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Total<br>DC qty</th><th class="right">Allocated<br>to orders</th>
-        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th><th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th></tr></thead><tbody>
+        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th>${expOn() ? '<th class="right">Expected<br>qty</th><th>Next<br>arrival</th>' : ''}<th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th></tr></thead><tbody>
         ${rows.map(({ c, p, a, gap }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff), ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
           return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td class="w mc"><span class="caret">${S.s.art === c ? '&#9662;' : '&#9656;'}</span> ${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
           <td class="right">${inr(p.dc)}</td><td class="right">${p.reserved ? inr(p.reserved) : '-'}</td><td class="right b ${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</td>
           <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td><td class="right ${ppo ? '' : 'muted'}" title="${ppo ? `This month ${inr(a.ppo_cm || 0)}, next month ${inr(a.ppo_nm || 0)}` : ''}">${ppo ? inr(ppo) : '-'}</td>
+          ${expOn() ? (() => { const ex = expOpen(c), t = ex.reduce((x, e) => x + e.qty, 0); return `<td class="right ${t ? 'b' : 'muted'}">${t ? inr(t) : '-'}</td><td class="${ex[0] && expLate(ex[0]) ? 'warn b' : ''}">${ex[0] ? when(ex[0].eta) + (ex.length > 1 ? ` <span class="small muted">+${ex.length - 1}</span>` : '') : '<span class="muted">-</span>'}</td>`; })() : ''}
           <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td></tr>` +
-            (S.s.art === c ? `<tr class="sdrow"><td colspan="13"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
+            (S.s.art === c ? `<tr class="sdrow"><td colspan="${expOn() ? 15 : 13}"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
     } else {
       list = rows.map(({ c, p, a, gap }) => `<div class="ocard" data-act="shortSel" data-code="${esc(c)}">${thumb(c, 's')}<div class="grow">
         <div class="row"><span class="mcname grow">${esc(a.mc_name || '')}</span>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>
         <div><b>${esc(a.description || c)}</b></div>
         <div class="small">MRP ${inr(a.mrp)} &middot; ${esc(c)} &middot; ${p.n_stores} ${plural(p.n_stores, 'store')} waiting</div>
-        <div class="nums"><span>Balance DC qty <b class="${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</b></span><span>Pending order qty <b>${inr(p.pending)}</b></span><span>Pending PO <b>${inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0))}</b></span><span>In alternates <b>${inr(altFreeOf(C.allAlternates(M, c)))}</b></span></div></div></div>`).join('');
+        <div class="nums"><span>Balance DC qty <b class="${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</b></span><span>Pending order qty <b>${inr(p.pending)}</b></span><span>Pending PO <b>${inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0))}</b></span><span>In alternates <b>${inr(altFreeOf(C.allAlternates(M, c)))}</b></span>${expOn() && expOpen(c).length ? `<span>Expected <b>${expOpen(c).map(expText).join(', ')}</b></span>` : ''}</div></div></div>`).join('');
     }
     const detail = S.wide ? '' : `<div id="sdetail" class="${S.s.art ? 'sheetpage' : ''}" ${!S.s.art ? 'hidden' : ''}>${sDetailHtml()}</div>`;
     return `<div class="head"><h1>Shortages</h1><span class="sub">Articles that several stores are waiting for${editor() ? ' - share out the balance DC quantity here' : ''}</span><span class="grow"></span><button class="btn sm" data-act="exportShort" title="Excel file of every article listed here, and the order lines waiting for each">Export shortages to Excel</button></div>
@@ -1782,6 +1846,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
 ${ed ? `<div class="small">Give each store its share below, in full packs. Lines left short stay open so alternates can be offered from the Orders screen.${locsOn() ? ' The stock is taken from the DC locations in the usual order; to choose the location for one store, approve it from Pending orders.' : ''}</div>` : ''}</div></div>
       <div class="stats five">${stat('Total DC qty', inr(p.dc))}${stat('Allocated to orders', inr(p.reserved))}${stat('Balance DC qty', inr(p.free), p.free > 0 ? 'good' : 'bad')}${stat('Pending order qty', inr(p.pending), p.pending > free ? 'bad' : '')}${stat('Pending PO', (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0) ? inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0)) : '-')}</div>
       ${stockSum(p)}${p.dc ? locChips(p) : ''}
+      ${expBoxHtml(c)}
       ${body}
       ${ed ? `<div class="row wrap"><span>Fill:</span><button class="btn sm" data-act="fill" data-m="fifo">Oldest order first</button><button class="btn sm" data-act="fill" data-m="prorata">Share in proportion</button>
         <button class="btn sm" data-act="fill" data-m="">Clear</button><span class="grow"></span><span id="stally"></span><button class="btn primary" id="sapply" data-act="applySplit">Approve these quantities</button></div>` : ''}</div>`;
@@ -2351,11 +2416,12 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
   }
   const STOCK_HEAD = ['MC Name', 'MRP', 'Article', 'Description', 'Buyer', 'Same design group', 'Same price group', 'Pack', 'Stock report qty (Total MSA)', 'Inwards since the report', 'Total DC Qty']
-    .concat(C.LOCATIONS.map(([, t]) => t + ' (report + inwards)'), ['Allocated to orders', 'Balance DC Qty'], C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO', 'Balance in same design', 'Balance in other designs']);
+    .concat(C.LOCATIONS.map(([, t]) => t + ' (report + inwards)'), ['Allocated to orders', 'Balance DC Qty'], C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO', 'Balance in same design', 'Balance in other designs', 'Expected Qty', 'Next Arrival', 'Expected deliveries']);
   function stockRow(c) {
     const M = S.M, p = M.pos[c], a = M.articles[c] || {}, al = C.alternates(M, c);
     return [a.mc_name, a.mrp == null ? null : +a.mrp, c, a.description, a.buyer, a.group_same, a.group_diff, C.packOf(a), p.stock, p.inward, p.dc].concat(C.LOCATIONS.map(([k]) => (p.loc[k] || 0) + (Number(p.locIn[k]) || 0)),
-      [p.reserved, p.free], C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [p.pending, p.n_stores, Math.max(0, p.pending - Math.max(p.free, 0)), (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0), altFreeOf(al.same), altFreeOf(al.diff)]);
+      [p.reserved, p.free], C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [p.pending, p.n_stores, Math.max(0, p.pending - Math.max(p.free, 0)), (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0), altFreeOf(al.same), altFreeOf(al.diff)],
+      (() => { const ex = expOn() ? expOpen(c) : []; return [ex.reduce((t, e) => t + e.qty, 0) || null, ex[0] ? ex[0].eta : '', ex.map((e) => `${e.qty} pcs on ${e.eta}${e.note ? ' (' + e.note + ')' : ''}`).join('; ')]; })());
   }
   /* Builds one Excel file. fill(sheet, extra) adds the sheets; it returns the line to show when done. */
   async function excelFile(fileStem, needExtra, fill) {
@@ -2509,6 +2575,21 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     labelOrders: (el) => { if (labelPop) labelPop.close(); ACT.go({ dataset: { view: 'orders', q: el.dataset.code } }); },
     labelQuery: (el) => { if (labelPop) labelPop.close(); S.qy.form = Object.assign(QBLANK(), { art: el.dataset.code }); S.view = 'queries'; render(); const i = $('#qf-store'); if (i) i.focus(); },
     qSubmit: () => qSubmit(),
+    expAdd: (el) => {
+      const q = Math.round(+$('#exp-qty').value || 0), eta = $('#exp-eta').value, note = $('#exp-note').value;
+      if (!(q > 0)) return tell('Expected stock', 'Type the expected quantity.');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(eta)) return tell('Expected stock', 'Choose the expected arrival date.');
+      run(() => A.rpc('exp_add', { p_article: el.dataset.code, p_qty: q, p_eta: eta, p_note: note }), `Expected stock added: ${inr(q)} pcs on ${when(eta)}`);
+    },
+    expRecv: (el) => run(() => A.rpc('exp_received', { p_id: +el.dataset.id, p_received: true }), 'Marked received'),
+    expUndo: (el) => run(() => A.rpc('exp_received', { p_id: +el.dataset.id, p_received: false }), 'Back on the expected list'),
+    expDel: async (el) => { const e = expById(el.dataset.id); if (!e) return;
+      if (await confirmBox('Remove expected stock?', `${e.article_code}: ${inr(e.qty)} pcs on ${when(e.eta)}${e.note ? '\n' + e.note : ''}`, 'Remove', true)) run(() => A.rpc('exp_delete', { p_id: e.id }), 'Removed'); },
+    expEdit: async (el) => { const e = expById(el.dataset.id); if (!e) return;
+      const v = await ask('Change expected stock', `<p class="small">${esc(e.article_code)} ${esc((artOf(e.article_code) || {}).description || '')}</p>
+        <label class="f">Expected qty<input type="number" name="qty" min="1" step="1" value="${e.qty}" required></label><label class="f">Arrival date<input type="date" name="eta" value="${esc(e.eta)}" required></label>
+        <label class="f">Note<input type="text" name="note" maxlength="300" value="${esc(e.note || '')}"></label>`, 'Save');
+      if (v) run(() => A.rpc('exp_edit', { p_id: e.id, p_qty: Math.round(+v.qty || 0), p_eta: v.eta, p_note: v.note }), 'Expected stock changed'); },
     stMore: () => { S.st.limit += 500; setHtml('stlist', stTableHtml()); },
     stToggle: (el) => { const k = el.dataset.key, t = S.st.toggled; if (t.has(k)) t.delete(k); else t.add(k); setHtml('stlist', stTableHtml()); },
     stCollapse: () => { S.st.collapsed = !S.st.collapsed; S.st.toggled.clear(); render(); },

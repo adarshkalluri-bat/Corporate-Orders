@@ -382,3 +382,10 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 .lblart { display: flex; gap: 12px; align-items: flex-start; margin-top: 4px; } .lblart .acode { font-size: 17px; }
 .lblsay { background: var(--lilac); border-radius: 12px; padding: 10px 14px; display: grid; gap: 4px; font-size: 14.5px; line-height: 1.45; margin: 10px 0; }
 @media (max-width: 600px) { .lblimg { width: 64px; max-height: 86px; } }
+
+/* ---------- expected stock ---------- */
+.expbox { background: #F6F2FF; border: 1px solid #E2D7FF; border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
+.exprow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0; border-bottom: 1px dashed #E2D7FF; } .exprow.late b { color: var(--warn); }
+.expadd { align-items: flex-end; gap: 10px; } .expadd input[type=number] { width: 110px; } .expadd label.grow { min-width: 180px; }
+.expsum { gap: 6px 18px; font-size: 13.5px; } .exptable td.artcell { white-space: normal; min-width: 220px; }
+.expadd label.f { display: flex; flex-direction: column; gap: 4px; } .expadd label.f > * { margin-top: 0; }
