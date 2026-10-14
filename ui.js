@@ -494,9 +494,10 @@
   }
   function qInfo() {
     const x = qCalc(), f = S.qy.form;
-    setHtml('qf-store-info', !x.sc ? '<span class="muted">Type the store code</span>' : x.st
-      ? `<b>${esc(x.st.store_name || '')}</b><span>${esc(x.st.state || 'State not on file')}</span><span>Lead time ${x.st.lead_time == null ? 'not on file' : `<b>${x.st.lead_time} ${plural(x.st.lead_time, 'day')}</b>`}${x.st.dc ? ' from ' + esc(x.st.dc) : ''}</span>`
-      : `<span class="bad">Store ${esc(x.sc)} is not in the store list</span>`);
+    setHtml('qf-store-info', (!x.sc ? '<span class="muted">Type the store code</span>' : x.st
+      ? `<b>${esc(x.st.store_name || '')}</b><span>${x.st.state ? esc(x.st.state) : '<span class="warn">State not in the store list</span>'}</span><span>Lead time ${x.st.lead_time == null ? '<span class="warn">not in the store list</span>' : `<b>${x.st.lead_time} ${plural(x.st.lead_time, 'day')}</b>`}${x.st.dc ? ' from ' + esc(x.st.dc) : ''}</span>`
+      : `<span class="bad">Store ${esc(x.sc)} is not in the store list</span>`) +
+      (x.st && (!x.st.state || x.st.lead_time == null) ? `<div class="small muted" style="flex-basis:100%">${editor() ? 'Upload the lead-time store list under Data &gt; 4 Stores to fill this in.' : 'The editor can fill this in by uploading the lead-time store list (Data &gt; 4 Stores).'}</div>` : ''));
     setHtml('qf-art-info', !x.ac ? '<span class="muted">Type the article code</span>' : x.a === undefined ? '<span class="muted">Looking it up ...</span>' : x.a
       ? `<b>${esc(x.a.description || '')}</b><span>MRP <b>Rs ${inr2(x.mrp)}</b></span><span>${esc(x.a.mc_name || '')}</span>`
       : `<span class="bad">Article ${esc(x.ac)} is not in the article files</span>`);
@@ -1652,7 +1653,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
       left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"') + b('Template', 'template', 'data-kind="master"', 'ghost'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
       left.push(step('3 &nbsp;Full article data (second file)', 'The complete article sheet (DSR article-wise). Used for any article that is ordered but is not in the Diwali master, and for status, pending PO and store stock of all articles. It never overwrites what the Diwali master says.', b('Upload file ...', 'pick', 'data-kind="data"') + b('Template', 'template', 'data-kind="data"', 'ghost'), last('Full article data')));
-      left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files - for example the store email list and the lead-time list (DC/RDC, ST CD, STORE NAME, State, LEAD TIME; the .xlsb works as it is): upload each one, they are merged by store code. The lead time sets the allocate-by date of every order line, and the Queries screen fills in store name, state and lead time from here.', b('Upload file ...', 'pick', 'data-kind="stores"') + b('Template', 'template', 'data-kind="stores"', 'ghost'), last('Store list')));
+      left.push(step('4 &nbsp;Stores: emails and lead times', 'Store code, name, state, city, email and lead time (days from allocation to delivery). These can come from different files - for example the store email list and the lead-time list (DC/RDC, ST CD, STORE NAME, State, LEAD TIME; the .xlsb works as it is): upload each one, they are merged by store code. The lead time sets the allocate-by date of every order line, and the Queries screen fills in store name, state and lead time from here.', b('Upload store list ...', 'pick', 'data-kind="stores"') + b('Template', 'template', 'data-kind="stores"', 'ghost'), storeStatus()));
       left.push(step('5 &nbsp;DC stock report', 'The SAP DC stock download. Total MSA quantity is the DC stock; the split by location (V01 & V02, NSO, HH reserved, special buy, best seller) is kept alongside. Upload a fresh one any time: approvals stay, and the balance DC quantity is worked out again. For stock that arrives in between, use Inwards below instead of loading the whole report again.', b('Upload DC stock ...', 'pick', 'data-kind="stock"', 'primary') + b('Template', 'template', 'data-kind="stock"', 'ghost'), last('DC stock')));
       if (locsOn()) {
         const loads = M.inwardLoads.filter((x) => x.counted > 0), inTot = inwardTotal(M), allIn = loads.reduce((t, x) => t + x.counted, 0);
@@ -1689,6 +1690,15 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     setTimeout(loadTeam, 0);
     return `<div class="head"><h1>Data</h1><span class="sub">${inr(n.master || 0)} articles in the Diwali range, ${inr(n.articles || 0)} on file &nbsp;|&nbsp; ${inr(Object.keys(M.stores).length)} stores &nbsp;|&nbsp; ${inr(M.lines.length)} order lines &nbsp;|&nbsp; ${M.meta.stock_asof ? 'DC stock as of ' + when(M.meta.stock_asof) + (M.meta.stock_sites ? ' (' + esc(M.meta.stock_sites) + ')' : '') : 'no DC stock report yet'}</span></div>
       <div class="steps two"><div class="steps">${left.join('')}</div><div class="card stack"><h2>Activity: loads and changes to the team</h2><div class="log">${log}</div></div></div>`;
+  }
+  /* How complete the store list is: shown under Data > 4, so a missing state or lead time is easy to spot */
+  function storeStatus() {
+    const all = Object.values(S.M.stores), n = all.length, c = (f) => all.filter(f).length;
+    if (!n) return '<span class="small warn">Not loaded yet</span>';
+    const st = c((x) => (x.state || '').trim()), lt = c((x) => x.lead_time != null), em = c((x) => (x.email || '').trim());
+    const e = S.M.imports.find((x) => (x.detail || '').startsWith('Store list'));
+    const part = (k, v) => `<span class="${v < n ? 'warn' : ''}">${inr(v)} with ${k}</span>`;
+    return `<span class="small">${e ? `Last loaded ${when(e.ts)}. ` : ''}<b>${inr(n)} stores</b>: ${part('a state', st)}, ${part('a lead time', lt)}, ${part('an email', em)}.${st < n || lt < n ? ' Upload the lead-time store list (it has the state and the lead time) to fill in the rest.' : ''}</span>`;
   }
   async function loadTeam() {
     const el = document.getElementById('team'); if (!el) return;
@@ -1738,7 +1748,9 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
         if (!shaped.length) throw new Error('No stores were found in this file.');
         for (const part of chunks(shaped, 2000)) { const r = await A.rpc('import_stores', { p_rows: part, p_file: file.name }); added += r.added; updated += r.updated; }
         const has = (f) => rows.fields.includes(f);
-        msg = `${where}Stores in the file: ${inr(shaped.length)}\nAdded: ${inr(added)}\nUpdated: ${inr(updated)}\n\nThis file gave: ${[has('store_name') && 'store name', has('email') && 'email', has('lead_time') && 'lead time', has('dc') && 'DC / RDC', has('state') && 'state', has('city') && 'city'].filter(Boolean).join(', ')}` +
+        const cnt = (f) => shaped.filter((r) => r[f] != null && r[f] !== '').length;
+        msg = `${where}Stores in the file: ${inr(shaped.length)}\nAdded: ${inr(added)}\nUpdated: ${inr(updated)}\n` +
+          (has('state') ? `State read for ${inr(cnt('state'))} of ${inr(shaped.length)} stores\n` : '') + (has('lead_time') ? `Lead time read for ${inr(cnt('lead_time'))} of ${inr(shaped.length)} stores\n` : '') + `\nThis file gave: ${[has('store_name') && 'store name', has('email') && 'email', has('lead_time') && 'lead time', has('dc') && 'DC / RDC', has('state') && 'state', has('city') && 'city'].filter(Boolean).join(', ')}` +
           (!has('email') ? '\n(No email column here - upload the file with store emails as well.)' : '') + (!has('lead_time') ? '\n(No lead time column here - upload the lead time file as well.)' : '');
       } else if (kind === 'orders') {
         const shaped = C.shape.orders(rows), parts = chunks(shaped, 1000);
