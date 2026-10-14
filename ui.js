@@ -1107,17 +1107,17 @@
     /* by MC and MRP */
     const wait = !L.sum ? `<div class="note info">${L.err ? esc(L.err) : 'Loading last year ...'}</div>` : '';
     const mcs = lyByMc(SE, cut), q = L.q.trim().toLowerCase(), shown = q ? mcs.filter((g) => g.mc.toLowerCase().includes(q)) : mcs;
-    const tot = mcs.reduce((t, g) => { for (const k in t) t[k] += g.t[k]; return t; }, { lq: 0, tq: 0, lv: 0, tv: 0 });
+    const tot = mcs.reduce((t, g) => { for (const k in t) t[k] += g.t[k]; return t; }, { lq: 0, tq: 0, lv: 0, tv: 0, lqa: 0, lva: 0 }), whole = L.period !== 'all';
     const mrow = (cls, label, x, attrs) => `<tr class="${cls}" ${attrs || ''}><td>${label}</td><td class="right">${pcs(x.lq)}</td><td class="right b">${pcs(x.tq)}</td><td class="right">${growHtml(x.tq, x.lq)}</td>
-      <td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td></tr>`;
+      <td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td>${whole ? `<td class="right lyall">${pcs(x.lqa)}</td><td class="right lyall">${rs(x.lva)}</td>` : ''}</tr>`;
     const body = shown.map((g) => { const open = L.all || L.open.has(g.key);
       return mrow('mc pick', `<span class="caret">${open ? '&#9662;' : '&#9656;'}</span> <b>${esc(g.mc)}</b> <span class="small">${g.rows.length} MRP${g.rows.length === 1 ? '' : 's'}</span>`, g.t, `data-act="lyMc" data-mc="${esc(g.key)}"`) +
         (open ? g.rows.map((x) => mrow('mrp', `<span class="ind">MRP Rs ${inr2(x.mrp)}</span>`, x)).join('') : ''); }).join('');
     const mcCard = `<div class="card stack"><div class="row wrap"><h2 class="grow">By MC and MRP (${word})</h2>
         <input type="search" id="lymq" placeholder="Find an MC ..." value="${esc(L.q)}" style="max-width:240px"><button class="btn sm" data-act="lyAll">${L.all ? 'Close all' : 'Open all MRPs'}</button></div>
-      ${wait}<div class="tablewrap"><table class="tight lymc"><thead><tr><th>MC / MRP</th><th class="right">Qty<br>last year</th><th class="right">Qty<br>this year</th><th class="right">Qty<br>change</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Value<br>change</th></tr></thead>
-      <tbody>${mrow('tot', '<b>All MCs</b>', tot)}${body || `<tr><td colspan="7" class="muted">${L.loading ? 'Loading last year ...' : L.err ? esc(L.err) : 'No MC matches.'}</td></tr>`}</tbody></table></div>
-      <p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Tap an MC to see its MRPs. MCs are matched by name; this year's MC comes from the order line or the article.</p></div>`;
+      ${wait}<div class="tablewrap"><table class="tight lymc"><thead><tr><th>MC / MRP</th><th class="right">Qty<br>last year</th><th class="right">Qty<br>this year</th><th class="right">Qty<br>change</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Value<br>change</th>${whole ? '<th class="right lyall">Qty last year<br>whole season</th><th class="right lyall">Value last year<br>whole season (Rs)</th>' : ''}</tr></thead>
+      <tbody>${mrow('tot', '<b>All MCs</b>', tot)}${body || `<tr><td colspan="${whole ? 9 : 7}" class="muted">${L.loading ? 'Loading last year ...' : L.err ? esc(L.err) : 'No MC matches.'}</td></tr>`}</tbody></table></div>
+      <p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Tap an MC to see its MRPs. MCs are matched by name; this year's MC comes from the order line or the article.${L.period !== 'all' ? ' The last two columns are last year\'s whole season, for reference.' : ''}</p></div>`;
     /* by store */
     const st = lyByStore(SE, cut), sq = L.sq.trim().toLowerCase();
     const missing = st.filter((x) => x.lyAll > 0 && !x.tyAll), missV = missing.reduce((t, x) => t + x.lyAllV, 0);
@@ -1127,9 +1127,9 @@
         <input type="search" id="lysq" placeholder="Find a store ..." value="${esc(L.sq)}" style="max-width:220px">
         <label class="row small"><input type="checkbox" id="lysonly" ${L.sonly ? 'checked' : ''}> Ordered last year, nothing yet this year</label></div>
       ${wait}${missing.length && L.stores ? `<div class="note warn"><b>${inr(missing.length)} ${plural(missing.length, 'store')}</b> ordered last year (${esc(crore(missV))} ${word} over the whole season) and ${missing.length === 1 ? 'has' : 'have'} not ordered anything this year yet.</div>` : ''}
-      <div class="tablewrap"><table class="tight lystore"><thead><tr><th>Store</th><th class="right">Lines<br>last year</th><th class="right">Lines<br>this year</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Change</th></tr></thead>
-      <tbody>${srows.map((x) => `<tr><td><b>${esc(x.s)}</b> <span class="small">${esc(x.name)}</span></td><td class="right">${inr(x.ln)}</td><td class="right b">${inr(x.tn)}</td><td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td></tr>`).join('') || `<tr><td colspan="6" class="muted">${L.loading ? 'Loading last year ...' : 'No store matches.'}</td></tr>`}</tbody></table></div>
-      ${more ? '<p class="small">Showing the first 300 stores; use the search box or Export for the rest.</p>' : ''}<p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Sorted by last year's value.</p></div>`;
+      <div class="tablewrap"><table class="tight lystore"><thead><tr><th>Store</th><th class="right">Lines<br>last year</th><th class="right">Lines<br>this year</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Change</th>${L.period !== 'all' ? '<th class="right lyall">Qty last year<br>whole season</th><th class="right lyall">Value last year<br>whole season (Rs)</th>' : ''}</tr></thead>
+      <tbody>${srows.map((x) => `<tr><td><b>${esc(x.s)}</b> <span class="small">${esc(x.name)}</span></td><td class="right">${inr(x.ln)}</td><td class="right b">${inr(x.tn)}</td><td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td>${L.period !== 'all' ? `<td class="right lyall">${inr(Math.round(x.lyAllQ))}</td><td class="right lyall">${rs(x.lyAllV)}</td>` : ''}</tr>`).join('') || `<tr><td colspan="${L.period !== 'all' ? 8 : 6}" class="muted">${L.loading ? 'Loading last year ...' : 'No store matches.'}</td></tr>`}</tbody></table></div>
+      ${more ? '<p class="small">Showing the first 300 stores; use the search box or Export for the rest.</p>' : ''}<p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Sorted by last year's value.${L.period !== 'all' ? ' The last two columns are last year\'s whole season.' : ''}</p></div>`;
     /* last year's lines */
     const lines = L.lines;
     const lineCard = `<div class="card stack"><h2>Look up last year's orders</h2>
@@ -1144,7 +1144,7 @@
   }
   /* MC -> MRP rows: {key, mc, t: {lq, tq, lv, tv}, rows: [{mrp, lq, tq, lv, tv}]} sorted by the bigger of the two years' values */
   function lyByMc(SE, cut) {
-    const L = S.ly, all = L.period === 'all', groups = new Map(), z = () => ({ lq: 0, tq: 0, lv: 0, tv: 0 });
+    const L = S.ly, all = L.period === 'all', groups = new Map(), z = () => ({ lq: 0, tq: 0, lv: 0, tv: 0, lqa: 0, lva: 0 });
     const slot = (mc, mrp) => {
       const name = String(mc || '').trim() || '(MC not given)', key = name.toUpperCase();
       let g = groups.get(key); if (!g) { g = { key, mc: name, t: z(), m: new Map() }; groups.set(key, g); }
@@ -1154,9 +1154,10 @@
     };
     const ord = L.basis === 'ordered';
     for (const x of L.sum || []) {
-      if (!all && kOf(SE.ly0, x[0]) > cut) continue;
       const q = +(ord ? x[4] : x[6]) || 0, v = +(ord ? x[5] : x[7]) || 0; if (!q && !v) continue;
-      const [g, m] = slot(x[1], x[2]); g.t.lq += q; g.t.lv += v; m.lq += q; m.lv += v;
+      const [g, m] = slot(x[1], x[2]); g.t.lqa += q; g.t.lva += v; m.lqa += q; m.lva += v;            // last year's whole season
+      if (!all && kOf(SE.ly0, x[0]) > cut) continue;
+      g.t.lq += q; g.t.lv += v; m.lq += q; m.lv += v;
     }
     for (const l of S.M.lines) {
       if (!tyIn(SE, l, cut)) continue;
@@ -1170,10 +1171,10 @@
   /* Stores: in the period (ln, lv / tn, tv) and over the whole season (lyAll lines, lyAllV value / tyAll lines) */
   function lyByStore(SE, cut) {
     const L = S.ly, all = L.period === 'all', ord = L.basis === 'ordered', m = new Map();
-    const at = (code, name) => { const s = String(code || '').toUpperCase() || '(no store)'; let x = m.get(s); if (!x) { x = { s, name: name || '', ln: 0, lv: 0, tn: 0, tv: 0, lyAll: 0, lyAllV: 0, tyAll: 0 }; m.set(s, x); } if (!x.name && name) x.name = name; return x; };
+    const at = (code, name) => { const s = String(code || '').toUpperCase() || '(no store)'; let x = m.get(s); if (!x) { x = { s, name: name || '', ln: 0, lv: 0, tn: 0, tv: 0, lyAll: 0, lyAllV: 0, lyAllQ: 0, tyAll: 0 }; m.set(s, x); } if (!x.name && name) x.name = name; return x; };
     for (const r of L.stores || []) {
       const x = at(r[0], r[1]), v = +(ord ? r[5] : r[7]) || 0;
-      x.lyAll += r[3]; x.lyAllV += v;
+      x.lyAll += r[3]; x.lyAllV += v; x.lyAllQ += +(ord ? r[4] : r[6]) || 0;
       if (all || kOf(SE.ly0, r[2]) <= cut) { x.ln += r[3]; x.lv += v; }
     }
     for (const l of S.M.lines) {
@@ -1210,10 +1211,10 @@
       sheet('By D-day', ['D-day', 'Last year date', 'This year date', 'Qty ordered LY', 'Qty ordered TY', 'Value ordered LY', 'Value ordered TY', 'Qty approved LY', 'Qty approved TY', 'Value approved LY', 'Value approved TY',
         'Value ordered so far LY', 'Value ordered so far TY', 'Value approved so far LY', 'Value approved so far TY', 'Note'], days);
       const mc = [];
-      for (const g of lyByMc(SE, cut)) for (const x of g.rows) mc.push([g.mc, x.mrp, Math.round(x.lq), Math.round(x.tq), growNum(x.tq, x.lq) == null ? '' : Math.round(growNum(x.tq, x.lq) * 1000) / 10, Math.round(x.lv), Math.round(x.tv), growNum(x.tv, x.lv) == null ? '' : Math.round(growNum(x.tv, x.lv) * 1000) / 10]);
-      sheet('By MC and MRP', ['MC', 'MRP', `Qty ${word} LY`, `Qty ${word} TY`, 'Qty change %', `Value ${word} LY`, `Value ${word} TY`, 'Value change %'], mc);
-      sheet('By store', ['Store', 'Store name', 'Lines LY', 'Lines TY', `Value ${word} LY`, `Value ${word} TY`, 'Change %', 'Ordered last year, nothing yet this year'],
-        lyByStore(SE, cut).map((x) => [x.s, x.name, x.ln, x.tn, Math.round(x.lv), Math.round(x.tv), growNum(x.tv, x.lv) == null ? '' : Math.round(growNum(x.tv, x.lv) * 1000) / 10, x.lyAll > 0 && !x.tyAll ? 'Yes' : '']));
+      for (const g of lyByMc(SE, cut)) for (const x of g.rows) mc.push([g.mc, x.mrp, Math.round(x.lq), Math.round(x.tq), growNum(x.tq, x.lq) == null ? '' : Math.round(growNum(x.tq, x.lq) * 1000) / 10, Math.round(x.lv), Math.round(x.tv), growNum(x.tv, x.lv) == null ? '' : Math.round(growNum(x.tv, x.lv) * 1000) / 10, Math.round(x.lqa), Math.round(x.lva)]);
+      sheet('By MC and MRP', ['MC', 'MRP', `Qty ${word} LY`, `Qty ${word} TY`, 'Qty change %', `Value ${word} LY`, `Value ${word} TY`, 'Value change %', `Qty ${word} LY whole season`, `Value ${word} LY whole season`], mc);
+      sheet('By store', ['Store', 'Store name', 'Lines LY', 'Lines TY', `Value ${word} LY`, `Value ${word} TY`, 'Change %', 'Ordered last year, nothing yet this year', `Qty ${word} LY whole season`, `Value ${word} LY whole season`],
+        lyByStore(SE, cut).map((x) => [x.s, x.name, x.ln, x.tn, Math.round(x.lv), Math.round(x.tv), growNum(x.tv, x.lv) == null ? '' : Math.round(growNum(x.tv, x.lv) * 1000) / 10, x.lyAll > 0 && !x.tyAll ? 'Yes' : '', Math.round(x.lyAllQ), Math.round(x.lyAllV)]));
       return `Exported: ${L.period === 'all' ? 'whole season' : r.ly + ' against ' + r.ty}, ${word}`;
     });
   }

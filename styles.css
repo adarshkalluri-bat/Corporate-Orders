@@ -389,3 +389,4 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 .expadd { align-items: flex-end; gap: 10px; } .expadd input[type=number] { width: 110px; } .expadd label.grow { min-width: 180px; }
 .expsum { gap: 6px 18px; font-size: 13.5px; } .exptable td.artcell { white-space: normal; min-width: 220px; }
 .expadd label.f { display: flex; flex-direction: column; gap: 4px; } .expadd label.f > * { margin-top: 0; }
+.lymc .lyall, .lystore .lyall { background: #FBF6EE; color: #5C4A2E; } .lymc th.lyall, .lystore th.lyall { background: #F6ECDD; }
