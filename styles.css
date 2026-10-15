@@ -390,3 +390,11 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 .expsum { gap: 6px 18px; font-size: 13.5px; } .exptable td.artcell { white-space: normal; min-width: 220px; }
 .expadd label.f { display: flex; flex-direction: column; gap: 4px; } .expadd label.f > * { margin-top: 0; }
 .lymc .lyall, .lystore .lyall { background: #FBF6EE; color: #5C4A2E; } .lymc th.lyall, .lystore th.lyall { background: #F6ECDD; }
+/* Store stock (search) */
+.tiles.sk5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@media (min-width: 960px) { .tiles.sk5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.mrprange { gap: 6px; flex-wrap: nowrap; } .mrprange input { min-width: 0; width: 50%; }
+.sktable td.big { font-size: 15px; } .sktable tr.tot td { background: var(--lilac); font-weight: 700; }
+.sktable td.artcell { white-space: normal; min-width: 180px; }
+.sktable tr.skg > td { cursor: pointer; } .sktable tr.skg:hover > td { background: #F6F2FF; }
+#skbusy { margin-left: 8px; }

@@ -19,10 +19,11 @@
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
     ly: { basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
+    sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 16;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 17;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -48,9 +49,10 @@
     sales: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><rect x="5" y="11" width="3" height="7" rx="1"/><rect x="10.5" y="7" width="3" height="11" rx="1"/><rect x="16" y="4" width="3" height="14" rx="1"/></svg>',
     label: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
     queries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.2v.3"/></svg>',
+    storestk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 5 4h14l2 5.5"/><path d="M4 9.5V20h16V9.5"/><path d="M3 9.5h18"/><circle cx="11" cy="14.5" r="2.5"/><path d="m13 16.5 2 2"/></svg>',
     lastyear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/><path d="m4 17 5-3 4 1 7-4" stroke-dasharray="2 3"/></svg>'
   };
-  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['sales', 'Sell-through'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
+  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['sales', 'Sell-through'], ['storestk', 'Store stock'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
   const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders', lastyear: 'This year vs last year', sales: 'Sell-through' };
 
   /* ================= small building blocks ================= */
@@ -296,7 +298,7 @@
     const keep = {};
     $$('[data-keep]').forEach((e) => { keep[e.dataset.keep] = e.scrollTop; });
     const y = window.scrollY, M = S.M;
-    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, sales: vSellThrough, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
+    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, sales: vSellThrough, storestk: vStoreStock, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
     const role = editor() ? '' : '<span class="pill view">VIEW ONLY</span>';
     app.innerHTML = `<div class="shell">
       <aside class="side">
@@ -321,6 +323,7 @@
     if (S.view === 'catalogue' && S.c.scope === 'all') searchAll();
     if (S.view === 'lastyear') lyLoad();
     if (S.view === 'queries') qLoad();
+    if (S.view === 'storestk') skLoad();
     wireCharts();
   }
   const setHtml = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
@@ -850,6 +853,137 @@
           Array.from(m.values()).map((rs) => { const t = stSum(rs), h = G[2](rs[0]); return [h[0], h[1], new Set(rs.map((r) => r.store)).size, new Set(rs.map((r) => r.art)).size, t.appr, t.closing, t.transit, t.mtd, pc(t)]; }));
       }
       return `Exported ${inr(rows.length)} ${plural(rows.length, 'line')}` + (stActive().length ? ' (the filters you have on were applied)' : '');
+    });
+  }
+
+  /* ================= Store stock (search) =================
+     Every store + article in the latest store stock report, and every store + article with an order: closing stock, in transit,
+     MTD sale, qty ordered (raised by the store) and qty approved. Searched and summed on the server, as the report is large. */
+  const SK_GROUPS = { rows: 'No grouping (store + article)', store: 'Store', state: 'State', mc: 'MC', mc_mrp: 'MC, then MRP', article: 'Article' };
+  const SK_SORTS = { stock: 'Stock at store (most first)', sale: 'MTD sale (most first)', ordered: 'Qty ordered (most first)', approved: 'Qty approved (most first)',
+    mrp: 'MRP (high to low)', store: 'Store code', article: 'Article code', mc: 'MC name' };
+  const SK_ONLY = { orders: 'Ordered by the store', orders_nostock: 'Ordered, no stock at the store', stock: 'Has stock at the store', sale: 'Has MTD sale' };
+  const SK_BLANK = { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '' };
+  const skOn = () => ssOn() && !!S.M && S.M.schema >= 17;     // searching store stock needs database version 17
+  const skParams = (limit) => { const T = S.sk, p = { group: T.group, sort: T.sort, limit: limit || T.limit, lists: T.mcs ? '' : '1' };
+    for (const k of Object.keys(SK_BLANK)) if (String(T[k]).trim() !== '') p[k] = String(T[k]).trim();
+    return p; };
+  let skTimer = null;
+  function skLoad(force, wait) {
+    const T = S.sk, key = JSON.stringify(skParams()) + '|' + S.M.rev;
+    if (!skOn() || !S.M.hasStoreStock || (!force && key === T.key)) return;
+    clearTimeout(skTimer);
+    skTimer = setTimeout(async () => {
+      const seq = ++T.seq; T.key = key; T.loading = true; setHtml('skbusy', '<span class="small muted">Searching ...</span>');
+      try {
+        const r = await A.rpc('ss_search', { p: skParams() });
+        if (seq !== T.seq) return;
+        if (r.mcs) T.mcs = r.mcs.sort();
+        T.res = r; T.err = '';
+      } catch (e) { if (seq === T.seq) T.err = e.message; }
+      if (seq !== T.seq) return;
+      T.loading = false;
+      if (S.view === 'storestk') { setHtml('sklist', skTableHtml()); setHtml('sktiles', skTilesHtml()); setHtml('skbusy', ''); setHtml('skmcs', skMcOptions()); }
+    }, wait || 0);
+  }
+  function skActive() {
+    const T = S.sk, out = [];
+    if (T.q.trim()) out.push(['q', 'Search: ' + T.q.trim()]);
+    if (T.only) out.push(['only', SK_ONLY[T.only]]);
+    if (T.store) out.push(['store', 'Store: ' + T.store.toUpperCase() + ' ' + ((S.M.stores[T.store.toUpperCase()] || {}).store_name || '')]);
+    if (T.state) out.push(['state', 'State: ' + T.state]);
+    if (T.mc) out.push(['mc', 'MC: ' + T.mc]);
+    if (T.mrp_min !== '' || T.mrp_max !== '') out.push(['mrp', 'MRP: ' + (T.mrp_min !== '' && T.mrp_min === T.mrp_max ? inr2(+T.mrp_min) : (T.mrp_min !== '' ? 'from ' + inr2(+T.mrp_min) + ' ' : '') + (T.mrp_max !== '' ? 'up to ' + inr2(+T.mrp_max) : ''))]);
+    return out;
+  }
+  const skChips = () => { const f = skActive();
+    return f.length ? `<span class="small">Filters on:</span>${f.map(([k, t]) => `<button class="fchip" data-act="skClear" data-key="${k}" title="Remove this filter">${esc(t)} <b>&#10005;</b></button>`).join('')}
+      <button class="btn link" data-act="skClearAll">Clear all filters</button>` : ''; };
+  const skMcOptions = () => (S.sk.mcs || []).map((m) => `<option value="${esc(m)}"></option>`).join('');
+  function skTilesHtml() {
+    const r = S.sk.res;
+    if (!r) return '';
+    const t = r.total, tile = (cls, h, v, s, k) => `<div class="tile ${cls}${k ? ' pick' : ''}" ${k ? `data-act="skTile" data-k="${k}" title="Show only these"` : ''}><h3>${h}</h3><b>${v}</b><span>${s}</span></div>`;
+    return `<div class="tiles sk5">${tile('lilac', 'Stock at stores', inr(t.closing + t.transit) + ' pcs', `closing ${inr(t.closing)} + in transit ${inr(t.transit)}`, 'stock')}
+      ${tile('mint', 'MTD sale', inr(t.mtd) + ' pcs', 'sale this month', 'sale')}
+      ${tile('butter', 'Qty ordered', inr(t.ordered) + ' pcs', 'raised by the stores (not rejected)', 'orders')}
+      ${tile('sky', 'Qty approved', inr(t.approved) + ' pcs', t.ordered ? Math.round(t.approved / t.ordered * 100) + '% of the qty ordered' : 'approved and dispatched')}
+      ${tile('pink', 'Stores / articles', inr(t.stores) + ' / ' + inr(t.articles), inr(t.n) + ' store-article ' + plural(t.n, 'line'))}</div>`;
+  }
+  function skTableHtml() {
+    const T = S.sk, r = T.res;
+    if (T.err) return `<div class="card note bad">${esc(T.err)}</div>`;
+    if (!r) return '<div class="card empty">Searching ...</div>';
+    if (!r.rows.length) return `<div class="empty card">${skActive().length ? 'Nothing matches these filters. <button class="btn sm" data-act="skClearAll">Clear all filters</button>' : 'The store stock report has no rows.'}</div>`;
+    const nums = (x) => `<td class="right">${inr(x.closing)}</td><td class="right">${inr(x.transit)}</td><td class="right b big">${inr(x.closing + x.transit)}</td><td class="right b big">${inr(x.mtd)}</td>
+      <td class="right">${x.ordered ? `<b>${inr(x.ordered)}</b>${T.group === 'rows' && x.lines > 1 ? `<div class="small muted">${x.lines} lines</div>` : ''}` : '<span class="muted">-</span>'}</td><td class="right">${x.approved ? `<b class="good">${inr(x.approved)}</b>` : '<span class="muted">-</span>'}</td>`;
+    const numHead = '<th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">Total at<br>store</th><th class="right">MTD<br>sale</th><th class="right">Qty<br>ordered</th><th class="right">Qty<br>approved</th>';
+    const store = (x) => `<b>${esc(x.s)}</b> <span class="small">${esc(x.sname || '')}</span>${x.state ? `<div class="small muted">${esc(x.state)}</div>` : ''}`;
+    const art = (x) => `<b class="nowrap pick" data-act="art" data-code="${esc(x.a)}">${esc(x.a)}</b><div class="small">${esc(x.descr || '')}</div>`;
+    const mrp = (x) => (x.mrp == null ? '-' : inr2(x.mrp)), cnt = (n, w) => `${inr(n)} ${plural(n, w)}`;
+    let head, body;
+    if (T.group === 'rows') {
+      head = `<th>Store</th><th>MC</th><th>Article</th><th class="right">MRP</th>${numHead}`;
+      body = r.rows.map((x) => `<tr><td>${store(x)}</td><td class="small">${esc(x.mc || '')}</td><td class="artcell">${art(x)}</td><td class="right">${mrp(x)}</td>${nums(x)}</tr>`).join('');
+    } else {
+      const lab = {
+        store: (x) => [store(x), cnt(x.articles, 'article')],
+        state: (x) => [`<b>${esc(x.key || '(state not on file)')}</b>`, cnt(x.stores, 'store') + ' &middot; ' + cnt(x.articles, 'article')],
+        mc: (x) => [`<b>${esc(x.key || '(MC not given)')}</b>`, cnt(x.stores, 'store') + ' &middot; ' + cnt(x.articles, 'article')],
+        mc_mrp: (x) => [`<b>${esc((x.mc || '(MC not given)').toUpperCase())}</b> <span class="small">MRP ${mrp(x)}</span>`, cnt(x.stores, 'store') + ' &middot; ' + cnt(x.articles, 'article')],
+        article: (x) => [`${art(x)}<div class="small muted">${esc(x.mc || '')}${x.mrp != null ? ' &middot; MRP ' + inr2(x.mrp) : ''}</div>`, cnt(x.stores, 'store')]
+      }[T.group];
+      head = `<th>${esc(SK_GROUPS[T.group])}</th><th class="right">Spread</th>${numHead}`;
+      body = r.rows.map((x) => { const [a, b] = lab(x);
+        return `<tr class="skg pick" data-act="skDrill" data-key="${esc(x.key)}" data-mrp="${x.mrp == null ? '' : x.mrp}" title="Show the stores and articles under this"><td class="artcell">${a}</td><td class="right small">${b}</td>${nums(x)}</tr>`; }).join('');
+    }
+    const t = r.total, cols = T.group === 'rows' ? 4 : 2;
+    return `<div class="tablewrap"><table class="tight sktable"><thead><tr>${head}</tr></thead><tbody>
+      <tr class="tot"><td colspan="${cols}"><b>Total</b> <span class="small">${cnt(t.n, 'store-article line')}, ${cnt(t.stores, 'store')}, ${cnt(t.articles, 'article')}${T.group !== 'rows' ? ', ' + cnt(r.groups, 'group') : ''}</span></td>${nums(Object.assign({ lines: 0 }, t, { transit: t.transit }))}</tr>${body}</tbody></table></div>
+      ${r.more ? `<div class="row" style="margin-top:8px"><span class="small grow">Showing the first ${inr(r.rows.length)} of ${inr(r.groups)}.</span><button class="btn sm" data-act="skMore">Show more</button></div>` : ''}`;
+  }
+  function vStoreStock() {
+    const M = S.M, T = S.sk;
+    const head = `<div class="head"><h1>Store stock</h1><span class="sub">Any article at any store: closing stock, in transit, MTD sale, and what the store ordered and got approved</span></div>`;
+    if (!M.hasStoreStock) return head + `<div class="card stack"><h2>The store stock report is not loaded</h2><p>This screen searches the store stock report. ${editor() ? 'Upload it under Data, step 7.' : 'Ask the editor to upload it (Data, step 7).'}</p>${editor() ? '<div><button class="btn primary" data-act="nav" data-view="data">Open Data</button></div>' : ''}</div>`;
+    if (!skOn()) return head + `<div class="card note warn">${editor() ? 'This screen needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.' : 'This screen needs a database update. Ask the editor to run the newest setup script.'}</div>`;
+    const opt = (v, t, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(t)}</option>`;
+    const states = Array.from(new Set(Object.values(M.stores).map((s) => s.state).filter(Boolean))).sort();
+    return head + `<p class="small" style="margin:-4px 0 10px">Store stock report loaded ${when(M.meta.sstock_loaded)} (${esc(M.meta.sstock_file || '')}). In transit includes CLA stock. Qty ordered = all the store's order lines for the article that are not rejected; qty approved = approved here or in SAP, dispatched included.</p>
+      <div id="sktiles">${skTilesHtml()}</div>
+      <div class="toolbar eight" style="margin-top:12px">
+        <input type="search" id="skq" class="wide search" placeholder="Search article code, description, MC, store ..." value="${esc(T.q)}" aria-label="Search">
+        <select id="skgroup" class="gsel" aria-label="Group by" title="Add up by store, state, MC, MRP or article">${Object.keys(SK_GROUPS).map((k) => opt(k, 'Group by: ' + SK_GROUPS[k], T.group)).join('')}</select>
+        <select id="sksort" class="gsel" aria-label="Sort by">${Object.keys(SK_SORTS).map((k) => opt(k, 'Sort by: ' + SK_SORTS[k], T.sort)).join('')}</select>
+        <select id="skonly" aria-label="Show">${opt('', 'Show: everything', T.only)}${Object.keys(SK_ONLY).map((k) => opt(k, 'Show: ' + SK_ONLY[k], T.only)).join('')}</select>
+        <input type="search" id="skstore" list="skstores" placeholder="Store code" value="${esc(T.store)}" aria-label="Store code" title="Type a store code, then press Enter">
+        <select id="skstate" aria-label="State">${opt('', 'All states', T.state)}${(T.state && !states.includes(T.state) ? states.concat([T.state]) : states).map((s) => opt(s, s, T.state)).join('')}</select>
+        <input type="search" id="skmc" list="skmcs" placeholder="MC name" value="${esc(T.mc)}" aria-label="MC name" title="Pick or type an MC name">
+        <span class="row mrprange"><input type="number" id="skmrpmin" min="0" step="1" inputmode="numeric" placeholder="MRP from" value="${esc(T.mrp_min)}" aria-label="MRP from"><input type="number" id="skmrpmax" min="0" step="1" inputmode="numeric" placeholder="MRP to" value="${esc(T.mrp_max)}" aria-label="MRP to"></span>
+      </div>
+      <datalist id="skstores">${Object.values(M.stores).map((s) => `<option value="${esc(s.store_code)}">${esc(s.store_name || '')}</option>`).join('')}</datalist>
+      <datalist id="skmcs">${skMcOptions()}</datalist>
+      <div class="row wrap chipsbar" id="skchips">${skChips()}</div>
+      <div class="row wrap bulkbar"><button class="btn sm" data-act="skExport" title="Excel file of everything that matches the filters">Export to Excel</button><span id="skbusy"></span><span class="grow"></span></div>
+      <div id="sklist">${skTableHtml()}</div>`;
+  }
+  async function exportStoreStock() {
+    const T = S.sk, prog = progress('Fetching the lines ...');
+    let r;
+    try { r = await A.rpc('ss_search', { p: skParams(100000) }); } catch (e) { prog.close(); return tell('Export failed', e.message); }
+    prog.close();
+    if (!r.rows.length) return tell('Export', 'There is nothing to export here.');
+    return excelFile('Store_Stock', false, (sheet) => {
+      const nums = (x) => [x.closing, x.transit, x.closing + x.transit, x.mtd, x.ordered, x.approved];
+      const numHead = ['Closing Stock', 'In Transit (incl. CLA)', 'Total at Store', 'MTD Sale', 'Qty Ordered', 'Qty Approved'];
+      if (T.group === 'rows') sheet('Store stock', ['Store Code', 'Store Name', 'State', 'MC Name', 'Article Code', 'Description', 'MRP'].concat(numHead, ['Order Lines']),
+        r.rows.map((x) => [x.s, x.sname, x.state, x.mc, x.a, x.descr, x.mrp].concat(nums(x), [x.lines])));
+      else {
+        const first = { store: ['Store Code', 'Store Name', 'State'], state: ['State'], mc: ['MC Name'], mc_mrp: ['MC Name', 'MRP'], article: ['Article Code', 'Description', 'MC Name', 'MRP'] }[T.group];
+        const vals = { store: (x) => [x.s, x.sname, x.state], state: (x) => [x.key], mc: (x) => [x.key], mc_mrp: (x) => [x.mc, x.mrp], article: (x) => [x.a, x.descr, x.mc, x.mrp] }[T.group];
+        sheet(('By ' + SK_GROUPS[T.group]).replace(',', '').slice(0, 31), first.concat(['Stores', 'Articles'], numHead), r.rows.map((x) => vals(x).concat([x.stores, x.articles], nums(x))));
+      }
+      return `Exported ${inr(r.rows.length)} ${plural(r.rows.length, 'line')}` + (r.more ? ' (the first 1,00,000)' : '') + (skActive().length ? ' (the filters you have on were applied)' : '');
     });
   }
 
@@ -2045,7 +2179,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     const step = (title, text, btns, status) => `<div class="card step"><div class="row wrap"><h2 class="grow">${title}</h2>${btns}</div><p class="small">${text}</p>${status ? `<div class="stepstatus">${status}</div>` : ''}</div>`;
     const b = (label, act, extra, cls) => `<button class="btn sm ${cls || ''}" data-act="${act}" ${extra || ''}>${label}</button>`;
     const left = [];
-    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: queries from the stores, the comparison with last year, stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
+    if (ed && M.schema < LATEST_SCHEMA) left.push('<div class="card"><div class="note warn"><b>One database update is waiting.</b> In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Until then the newest features do not work: searching stock at the stores, queries from the stores, the comparison with last year, stock at the stores, choosing the DC location of an approval, inwards after the stock report, an approved alternate taking the place of the ordered article, deleting order lines, and duplicate marks. Your data stays as it is.</div></div>');
     if (ed) {
       left.push(step('1 &nbsp;Diwali article master', 'The gifting range: article, description, MC, category, buyer, MRP, VRP, cost, GST, pack size, vendor, and the two alternate columns (same model / different model). This file wins wherever it has a value.', b('Upload file ...', 'pick', 'data-kind="master"') + b('Template', 'template', 'data-kind="master"', 'ghost'), last('Diwali article master')));
       left.push(step('2 &nbsp;Article images', 'Pictures named by article code (1005107.jpg). They are made smaller and stored online for everyone. An article without a picture shows "Image not uploaded".', b('Choose pictures ...', 'pickImages') + (S.wide ? b('Choose a folder ...', 'pickFolder') : ''), last('Images')));
@@ -2216,7 +2350,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
         const ordering = new Set(S.M.lines.map((l) => l.store_code)), inFile = new Set(shaped.map((x) => x.s));
         const missing = Array.from(ordering).filter((x) => !inFile.has(x));
         const has = (f) => rows.fields.includes(f);
-        msg = `${where}Rows read: ${inr(rows.length)}\nStores: ${inr(r.stores)}\nArticles: ${inr(r.articles)}\nStore-article rows saved: ${inr(r.rows)}\n\nUsed: closing stock (CL_STK_Q)${has('ss_it') ? ', in transit (INTRANSIT_Q)' : ''}${has('ss_cla') ? ' + CLA (CLA_STK_Q)' : ''}${has('ss_mtd') ? ', sale this month (MTD_SALE_Q)' : ''}. Other sale columns are not used.` +
+        msg = `${where}Rows read: ${inr(rows.length)}\nStores: ${inr(r.stores)}\nArticles: ${inr(r.articles)}\nStore-article rows saved: ${inr(r.rows)}\n\nUsed: closing stock (CL_STK_Q)${has('ss_it') ? ', in transit (INTRANSIT_Q)' : ''}${has('ss_cla') ? ' + CLA (CLA_STK_Q)' : ''}${has('ss_mtd') ? ', sale this month (MTD_SALE_Q)' : ''}. Other sale columns are not used.${has('ss_desc') || has('ss_mc') || has('mrp') ? '\nAlso kept from the report: ' + [has('ss_sname') ? 'store name' : '', has('ss_desc') ? 'article description' : '', has('ss_mc') ? 'MC' : '', has('mrp') ? 'MRP' : ''].filter(Boolean).join(', ') + ' (used on the Store stock screen for articles and stores that are not in your own files).' : ''}` +
           (!has('ss_mtd') ? '\n(No MTD sale column was found in this file.)' : '') +
           (missing.length ? `\n\nStores with orders that are not in this file (shown as no stock): ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? ' ...' : ''}` : '') + '\n\nThis replaces the store stock loaded before.';
       } else if (kind === 'inward') {
@@ -2642,6 +2776,19 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     stClearAll: () => { Object.assign(S.st, { q: '', status: '', store: '', state: '', mc: '', buyer: '', limit: 300 }); render(); },
     stTile: (el) => { S.st.status = S.st.status === el.dataset.k ? '' : el.dataset.k; S.st.limit = 300; render(); },
     stExport: () => exportSellThrough(),
+    skMore: () => { S.sk.limit += 500; skLoad(true); },
+    skClear: (el) => { const k = el.dataset.key; if (k === 'mrp') { S.sk.mrp_min = ''; S.sk.mrp_max = ''; } else S.sk[k] = ''; S.sk.limit = 300; render(); },
+    skClearAll: () => { Object.assign(S.sk, SK_BLANK, { limit: 300 }); render(); },
+    skTile: (el) => { S.sk.only = S.sk.only === el.dataset.k ? '' : el.dataset.k; S.sk.limit = 300; render(); },
+    skDrill: (el, e) => {
+      if (e && e.target.closest('[data-act="art"]')) return;
+      const T = S.sk, k = el.dataset.key;
+      if (T.group === 'store') T.store = k; else if (T.group === 'state') T.state = k; else if (T.group === 'mc') T.mc = k;
+      else if (T.group === 'mc_mrp') { T.mc = k.split('|')[0]; T.mrp_min = T.mrp_max = el.dataset.mrp; } else if (T.group === 'article') T.q = k;
+      T.group = T.group === 'article' || T.group === 'mc_mrp' ? 'rows' : T.group === 'state' ? 'store' : T.group === 'mc' ? 'mc_mrp' : 'rows';
+      T.limit = 300; render(); window.scrollTo(0, 0);
+    },
+    skExport: () => exportStoreStock(),
     qExport: () => exportQueries(),
     qClear: () => { S.qy.form = QBLANK(); render(); const i = $('#qf-store'); if (i) i.focus(); },
     qDel: async (el) => {
@@ -2948,6 +3095,8 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
     else if (t.id === 'lymq' || t.id === 'lysq') { S.ly[t.id === 'lymq' ? 'q' : 'sq'] = t.value; const pos = t.selectionStart, id = t.id; render(); const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.id === 'lylq') S.ly.lq = t.value;
+    else if (t.id === 'skq') { S.sk.q = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 350); }
+    else if (t.id === 'skmrpmin' || t.id === 'skmrpmax') { S.sk[t.id === 'skmrpmin' ? 'mrp_min' : 'mrp_max'] = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 500); }
     else if (t.id === 'stq') { S.st.q = t.value; S.st.limit = 300; setHtml('stlist', stTableHtml()); setHtml('stchips', stChips()); }
     else if (/^qf-/.test(t.id)) qTyped(t);
     else if (t.id === 'qq') { S.qy.q = t.value; setHtml('qlist', qListHtml()); }
@@ -2968,6 +3117,8 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'cscope') { S.c.scope = t.value; S.c.cat = ''; render(); }
     else if (t.id === 'sonly') { S.s.only = t.checked; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
+    else if (['skgroup', 'sksort', 'skonly', 'skstate'].includes(t.id)) { S.sk[t.id.slice(2)] = t.value; S.sk.limit = 300; render(); }
+    else if (t.id === 'skstore' || t.id === 'skmc') { S.sk[t.id.slice(2)] = t.id === 'skstore' ? t.value.trim().toUpperCase() : t.value.trim(); S.sk.limit = 300; render(); }
     else if (['stgroup', 'stsort', 'ststatus', 'ststore', 'ststate', 'stmc', 'stbuyer'].includes(t.id)) { S.st[t.id.slice(2)] = t.value; S.st.limit = 300; if (t.id === 'stgroup') { S.st.collapsed = false; S.st.toggled.clear(); } render(); }
     else if (t.dataset.role) {
       try { await A.rpc('team_set', { p_user: t.dataset.role, p_role: t.value }); toast('Access changed'); } catch (err) { await tell('Not done', err.message); }

@@ -312,7 +312,11 @@
     ss_cl: ['cl_stk_q', 'closing stock', 'closing stock qty', 'closing qty', 'cl stk qty', 'cl stk', 'store closing stock', 'closing'],
     ss_it: ['intransit_q', 'intransit qty', 'in transit qty', 'intransit', 'in transit', 'git qty', 'git'],
     ss_cla: ['cla_stk_q', 'cla stk qty', 'cla stock', 'cla qty', 'cla'],
-    ss_mtd: ['mtd_sale_q', 'mtd sale qty', 'mtd sales qty', 'mtd sale', 'mtd sales', 'mtd qty', 'mtd']
+    ss_mtd: ['mtd_sale_q', 'mtd sale qty', 'mtd sales qty', 'mtd sale', 'mtd sales', 'mtd qty', 'mtd'],
+    ss_sname: ['plant (2)', 'store name', 'site name', 'plant name'],
+    ss_desc: ['article (2)', 'article description', 'description', 'material description', 'article desc'],
+    ss_mcc: ['merchandise category', 'mc code', 'merchandise category code'],
+    ss_mc: ['merchandise category (2)', 'mc name', 'mc desc', 'mc description', 'merchandise category name']
   };
   const SPECS = {
     master: { required: ['article_code'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'mrp', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'group_same', 'group_diff', 'status'] },
@@ -331,7 +335,7 @@
     sapappr: { required: ['order_no', 'article_code', 'appr_status'], optional: ['qty_alloc', 'qty_appr', 'price_given', 'appr_by', 'cat_date', 'cat_time', 'plan_date', 'plan_time',
       'site_code', 'sap_po', 'remarks', 'reason_cat', 'store_code', 'store_name', 'mc_name', 'description', 'mrp', 'req_qty', 'req_price', 'order_date', 'del_date', 'poc_name', 'phone', 'pack_size'] },
     /* Stock at each store: closing stock, in transit and CLA, and the sale this month. Other sale columns are not used. */
-    storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd'] }
+    storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd', 'ss_sname', 'ss_desc', 'ss_mcc', 'ss_mc', 'mrp'] }
   };
   const NICE = { article_code: 'Article', total: 'Total MSA qty', req_qty: 'Qty wanted', order_no: 'Order ID', store_code: 'Store Code', mrp: 'MRP', in_qty: 'Inward qty', ss_cl: 'CL_STK_Q (closing stock)' };
 
@@ -533,15 +537,24 @@
       }
       return out;
     },
-    /* Stock at the stores: one row per store and article, {s, a, c: closing, i: in transit, l: CLA, m: sale this month}. */
+    /* Stock at the stores: one row per store and article, {s, a, c: closing, i: in transit, l: CLA, m: sale this month,
+       and when the report has them sn: store name, d: description, mcc: MC code, mc: MC name, p: MRP}. */
     storestock: (rows) => {
       const agg = new Map();
       for (const r of rows) {
         const a = code(r.article_code), st = code(r.store_code).toUpperCase();
         if (!/^\d{6,}$/.test(a) || !st || st.length > 12) continue;
         const k = st + '|' + a, q = { s: st, a, c: Math.round(num(r.ss_cl)), i: Math.round(num(r.ss_it)), l: Math.round(num(r.ss_cla)), m: Math.round(num(r.ss_mtd)) };
+        /* store name, article description, MC and MRP as the report has them (used when the article or store is not in our own files) */
+        const sn = txt(r.ss_sname), d = txt(r.ss_desc), mcc = code(r.ss_mcc), mc = txt(r.ss_mc), p = numOrNull(r.mrp);
         const cur = agg.get(k);
-        if (cur) { cur.c += q.c; cur.i += q.i; cur.l += q.l; cur.m += q.m; } else agg.set(k, q);
+        if (cur) {
+          cur.c += q.c; cur.i += q.i; cur.l += q.l; cur.m += q.m;
+          if (!cur.sn && sn) cur.sn = sn; if (!cur.d && d) cur.d = d; if (!cur.mcc && mcc) cur.mcc = mcc; if (!cur.mc && mc) cur.mc = mc; if (cur.p == null && p) cur.p = p;
+        } else {
+          if (sn) q.sn = sn; if (d) q.d = d; if (mcc) q.mcc = mcc; if (mc) q.mc = mc; if (p) q.p = p;
+          agg.set(k, q);
+        }
       }
       return Array.from(agg.values());
     },
@@ -609,7 +622,7 @@
       ['MvT', '', 'Movement type: only 101 (goods receipt) is added', '101'], ['Mat. Doc.', '', 'Material document (a document already loaded is not counted twice)', '5025408701'],
       ['Pstng Date', '', 'Posting date (DD.MM.YYYY)', '13.10.2026']] },
     storestock: { file: 'Template_7_Store_Stock', sheet: 'Store stock', cols: [
-      ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'For reference only', 'Casserole 1500ml Red'], ['MRP', '', 'For reference only', 499],
+      ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'Used when the article is not in the article files', 'Casserole 1500ml Red'], ['MC Name', '', 'MC name (same use)', 'HH_C_PO_CASSEROLE'], ['MRP', '', 'MRP (same use)', 499],
       ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30]] },
     lastyear: { file: 'Template_10_Last_Year_Orders', sheet: 'Sheet1', cols: [
       ['Status', '', 'Approved or Rejected', 'Approved'], ['Store Code', '', 'Store code', 'HA83'], ['Store Name', '', 'Store name', 'TENALI(343)'], ['Order ID', 'Yes', 'Order number', 'HA83042733'],
