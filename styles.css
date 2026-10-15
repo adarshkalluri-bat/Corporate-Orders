@@ -398,3 +398,4 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 .sktable td.artcell { white-space: normal; min-width: 180px; }
 .sktable tr.skg > td { cursor: pointer; } .sktable tr.skg:hover > td { background: #F6F2FF; }
 #skbusy { margin-left: 8px; }
+.dlq { align-items: flex-end; gap: 8px; margin-top: 8px; } .dlq .btn { margin-bottom: 1px; }

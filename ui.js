@@ -2139,6 +2139,9 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           <datalist id="dl-stores">${Object.values(M.stores).slice(0, 1500).map((s) => `<option value="${esc(s.store_code)}">${esc(s.store_name || '')}</option>`).join('')}</datalist>
         </div>
         <div id="dl-out" class="note info"></div>
+        ${qOn() ? `<div class="row wrap dlq"><label class="f grow">Remarks (optional)<input type="text" id="dl-rem" maxlength="500" placeholder="Customer, delivery date, anything else ..."></label>
+          <button class="btn primary" id="dl-log" data-act="dealLog" data-code="${esc(code)}" disabled title="Give the store code, the final price and the quantity first">Submit as a query</button></div>
+          <div class="small muted" id="dl-loghint">Saved to the Queries list in your name, with the date and time, like a query logged there.</div>` : ''}
       </div></div>`;
     hydrate(); dealCalc();
   }
@@ -2163,6 +2166,26 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     const sc = C.code($('#dl-store').value).toUpperCase(), st = sc && S.M.stores[sc];
     if (sc) L.push(st ? `${esc(st.store_code)} ${esc(st.store_name || '')}${st.state ? ', ' + esc(st.state) : ''}: ${st.lead_time == null ? 'lead time not on file' : `lead time <b>${st.lead_time} ${plural(st.lead_time, 'day')}</b>${st.dc ? ' from ' + esc(st.dc) : ''} - allocated today, it reaches about ${when(C.addDays(C.today(), st.lead_time))}`}` : `Store ${esc(sc)} is not in the store list`);
     out.innerHTML = L.join('<br>');
+    const go = $('#dl-log');
+    if (go) { const ready = !!st && price > 0 && qty > 0; go.disabled = !ready || dealSaving;
+      go.title = ready ? 'Save this to the Queries list' : 'Give a store code from the store list, the final price and the quantity first'; }
+  }
+  /* The deal check, logged as a query from a store: the same as logging it in Queries (store, article, final price, qty, remarks). */
+  let dealSaving = false;
+  async function dealLog(code) {
+    const sc = C.code($('#dl-store').value).toUpperCase(), price = Math.round((+$('#dl-price').value || 0) * 100) / 100, qty = Math.round(+$('#dl-qty').value || 0);
+    if (dealSaving || !sc || !(price > 0) || !(qty > 0)) return;
+    dealSaving = true; dealCalc();
+    try {
+      const r = await A.rpc('query_add', { p: { store: sc, article: code, price, qty, remarks: $('#dl-rem').value.trim() } });
+      S.qy.last = r.id;
+      toast(`Query logged: ${r.store_code} ${r.article_code}, ${inr(r.qty)} pcs, Rs ${inr2(Number(r.value))}`);
+      const rem = $('#dl-rem'); if (rem) rem.value = '';
+      const h = $('#dl-loghint'); if (h) h.innerHTML = `<span class="good b">Logged at ${when(new Date().toISOString())}:</span> ${esc(r.store_code)}, ${inr(r.qty)} pcs at Rs ${inr2(Number(r.price))} (Rs ${inr2(Number(r.value))}). <a href="#" data-act="dealToQueries">Open Queries</a>`;
+      dealSaving = false;
+      await reload(); await qLoad(true);
+    } catch (e) { dealSaving = false; await tell('Query not logged', e.message); }
+    dealCalc();
   }
   async function imageBlob(code) {
     const a = artOf(code);
@@ -2789,6 +2812,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       T.limit = 300; render(); window.scrollTo(0, 0);
     },
     skExport: () => exportStoreStock(),
+    dealLog: (el) => dealLog(el.dataset.code),
+    dealToQueries: (el, e) => { if (e) e.preventDefault(); $$('.overlay').forEach((o) => { try { o.close(); } catch (_) { /* already shut */ } }); S.view = 'queries'; render(); window.scrollTo(0, 0); },
     qExport: () => exportQueries(),
     qClear: () => { S.qy.form = QBLANK(); render(); const i = $('#qf-store'); if (i) i.focus(); },
     qDel: async (el) => {
