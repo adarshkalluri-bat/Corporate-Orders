@@ -549,15 +549,20 @@
        day: 'YYYY-MM-DD' or '', mins: time of day in minutes or null}. Totals rows and rows without an article number are skipped. */
     inward: (rows) => {
       const out = [];
-      out.skipped = [];                                                  // rows that are not a goods receipt (movement type other than 101, or a minus quantity)
+      out.skipped = [];                                                  // kept for older callers; nothing is skipped now
       for (const r of rows) {
         const a = code(r.article_code);
         if (!/^\d{6,}$/.test(a)) continue;
         const mvt = code(r.mvt);
-        if ((mvt && mvt !== '101') || num(r.in_qty) < 0) { out.skipped.push({ a, mvt, q: Math.round(num(r.in_qty)), d: code(r.doc_no) }); continue; }
-        const base = { a, s: code(r.site_code), d: code(r.doc_no), m: txt(r.mc_name), n: txt(r.description), day: dateStr(r.in_date), mins: minutesOf(r.in_time) };
+        const base = { a, s: code(r.site_code), d: code(r.doc_no), m: txt(r.mc_name), n: txt(r.description), day: dateStr(r.in_date), mins: minutesOf(r.in_time), v: mvt };
         if (!/^\d{4}-\d{2}-\d{2}$/.test(base.day)) base.day = '';
         if (base.mins == null) base.mins = minutesOf(r.in_date);        // a date cell that carries the time as well
+        /* anything that is not a goods receipt (101) - a reversal (102), a return to the vendor (122) ... - or a minus quantity is stock going OUT */
+        if ((mvt && mvt !== '101') || num(r.in_qty) < 0) {
+          const q = Math.abs(Math.round(num(r.in_qty != null && r.in_qty !== '' ? r.in_qty : r.total)));
+          if (q > 0) out.push(Object.assign({ q: -q, l: locOfSloc(r.sloc) }, base));
+          continue;
+        }
         const byLoc = { v: Math.round(num(r.v0102) + num(r.v01) + num(r.v02)), nso: Math.round(num(r.nso)), hh: Math.round(num(r.hh)), spl: Math.round(num(r.spl)), best: Math.round(num(r.best)), sea: Math.round(num(r.sea)) };
         const placed = Object.keys(byLoc).reduce((t, k) => t + Math.max(0, byLoc[k]), 0);
         if (placed > 0) {                                               // laid out like the stock report: a quantity under each location

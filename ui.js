@@ -22,7 +22,7 @@
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 15;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 16;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -30,6 +30,7 @@
   const sapOn = () => !!S.M && S.M.schema >= 11;      // approvals done in SAP need database version 11
   const lyOn = () => !!S.M && S.M.schema >= 13;       // last year's orders need database version 13
   const hasLy = () => lyOn() && !!S.M.meta.ly_batch;
+  const dedOn = () => !!S.M && S.M.schema >= 16;       // taking SAP approvals off the DC balance by hand needs version 16
   const expOn = () => !!S.M && S.M.schema >= 15;       // expected stock needs database version 15
   const qOn = () => !!S.M && S.M.schema >= 14;        // queries from the stores need database version 14
   /* What the SAP approval file said about a line, in one line of text */
@@ -472,6 +473,34 @@
 
 
 
+
+  /* ================= Approvals done in SAP, taken off the DC balance by hand =================
+     Normally they are not (the DC stock report already has them out). For the live ones the latest report still holds,
+     an editor takes them off here; they then count like approvals made here until a newer stock report. */
+  async function sapDeduct(L, on) {
+    L = L.filter((l) => (on ? l.sap_open > 0 : l.sap_ded > 0));
+    if (!L.length) return;
+    const by = {}; L.forEach((l) => { by[l.article_code] = (by[l.article_code] || 0) + (on ? l.sap_open : l.sap_ded); });
+    const rows = Object.entries(by).map(([c, q]) => { const p = S.M.pos[c] || { free: 0 }, a = artOf(c) || {};
+      return `${c} ${a.description || ''}: ${inr(q)} pcs - balance DC qty ${inr(p.free)} -> ${inr(p.free + (on ? -q : q))}${on && q > p.free ? '  (MORE THAN THE BALANCE)' : ''}`; });
+    const total = Object.values(by).reduce((t, q) => t + q, 0);
+    const ok = await confirmBox(on ? `Take ${inr(total)} pcs off the DC balance?` : `Stop taking ${inr(total)} pcs off the DC balance?`,
+      `${L.length} ${plural(L.length, 'line')} approved in SAP:\n` + rows.slice(0, 15).join('\n') + (rows.length > 15 ? `\n... and ${rows.length - 15} more articles` : '') +
+      (on ? '\n\nDo this for approvals the latest DC stock report still has in it (approved in SAP after the report was downloaded). They then count like approvals made here, from the DC locations in the usual order, until a newer DC stock report is loaded.' : '\n\nThe stock goes back into the balance DC qty.'), on ? 'Take off DC stock' : 'Stop taking it off');
+    if (!ok) return;
+    run(async () => { const r = await A.rpc('sap_deduct', { p_lines: L.map((l) => l.id), p_on: on }); sec().checked.clear(); return r; },
+      (r) => `${on ? 'Taken off the DC balance' : 'Back in the DC balance'}: ${inr(r.qty)} pcs on ${r.done} ${plural(r.done, 'line')}` + (r.short && r.short.length ? ` - more than the balance for ${r.short.length} ${plural(r.short.length, 'article')}` : ''));
+  }
+
+  /* For one article: what is approved in SAP and not taken off the DC balance, with the button to take it off */
+  function sapOpenHtml(code) {
+    if (!dedOn()) return '';
+    const L = S.M.lines.filter((l) => l.article_code === code && l.sap_open > 0), q = L.reduce((t, l) => t + l.sap_open, 0);
+    const D = S.M.lines.filter((l) => l.article_code === code && l.sap_ded > 0), qd = D.reduce((t, l) => t + l.sap_ded, 0);
+    if (!q && !qd) return '';
+    return `<div class="note info row wrap"><span class="grow">${q ? `<b>${inr(q)} pcs approved in SAP</b> on ${L.length} ${plural(L.length, 'line')} are <b>not</b> taken off the DC balance (the stock report normally has them out already).` : ''}${qd ? ` ${inr(qd)} pcs approved in SAP are taken off by hand.` : ''}</span>
+      ${q && editor() ? `<button class="btn sm" data-act="sapDeductArt" data-code="${esc(code)}">Take off DC stock ...</button>` : ''}</div>`;
+  }
 
   /* ================= Stock expected at the DC =================
      Editors note, per article, the deliveries expected (quantity, arrival date, note). It is never added to the DC stock:
@@ -1416,7 +1445,7 @@
     if (view === 'approved') {
       const more = [l.dispatched ? `${inr(l.dispatched)} dispatched` : '', l.balance ? `${inr(l.balance)} still pending` : ''].filter(Boolean).join(', ');
       return wrap(l.status === 'REJECTED' ? 'rej' : '', `<td class="big right"><b class="${l.approved ? 'good' : 'zero'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
-        ${locsOn() ? `<td class="from">${C.locText(l.locs) ? esc(C.locText(l.locs)) : l.sap_appr && l.sap_appr.status === 'APPROVED' ? `<span class="sapnote">In SAP${l.sap_appr.dc ? ' &middot; ' + esc(l.sap_appr.dc) : ''}</span>${l.sap_appr.remarks ? `<div class="small">${esc(l.sap_appr.remarks)}</div>` : ''}` : '<span class="muted">-</span>'}</td>` : ''}
+        ${locsOn() ? `<td class="from">${C.locText(l.locs) ? esc(C.locText(l.locs)) + (l.sap_ded ? `<div class="small sapnote">In SAP, taken off the DC balance by hand${ed && l.approved_open > 0 ? ` <button class="btn link" data-act="sapDeduct" data-id="${l.id}" data-on="0" title="Stop taking it off the DC balance">undo</button>` : ''}</div>` : '') : l.sap_appr && l.sap_appr.status === 'APPROVED' ? `<span class="sapnote">In SAP${l.sap_appr.dc ? ' &middot; ' + esc(l.sap_appr.dc) : ''}</span>${l.sap_appr.remarks ? `<div class="small">${esc(l.sap_appr.remarks)}</div>` : ''}${ed && dedOn() && l.sap_open > 0 ? `<div><button class="btn sm" data-act="sapDeduct" data-id="${l.id}" data-on="1" title="Not taken off the DC balance now. Take it off when the latest stock report still has this stock (approved in SAP after the report)">Take off DC stock</button></div>` : ''}` : '<span class="muted">-</span>'}</td>` : ''}
         <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
         <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() && C.locText(l.locs) ? '>Details / change<' : '>Details<')}</div></td>`);
     }
@@ -1503,7 +1532,7 @@
     const stores = uniqOf(base, (l) => l.store_code).sort(), mcs = uniqOf(base, (l) => l.mc_name).sort(), buyers = Array.from(new Set(base.map((l) => l.buyer || '-'))).sort();
     const keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);          // a chosen filter stays in its list even when it matches nothing now
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
-    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>` : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
+    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}` : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
         <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
@@ -1601,7 +1630,9 @@
       out.push(`<div class="card stack"><h3>In SAP</h3>${x.conflict ? `<div class="note bad"><b>The SAP approval file differs from this tracker:</b> ${esc(x.conflict)}. Nothing was changed on this line - check it and correct it here or in SAP.</div>` : ''}
         <div class="kv">${kv('Status', esc(x.label || x.status))}${x.status === 'APPROVED' ? kv('Qty allocated', x.qty ? inr(x.qty) + ' pcs' : '') + kv('Price given', x.price ? 'Rs ' + inr2(x.price) : '') : ''}
           ${kv('By', esc(x.by || ''))}${kv('Category approval', x.at ? when(x.at) : '')}${kv('Planning approval', x.plan_at ? when(x.plan_at) : '')}${kv('DC', esc(x.dc || ''))}${kv('PO', esc(x.po || ''))}
-          ${kv('Remarks', esc(x.remarks || ''))}${kv('Reason', esc(x.reason || ''))}${kv('From file', esc(x.file || '') + (x.loaded ? ', loaded ' + when(x.loaded) : ''))}</div></div>`);
+          ${kv('Remarks', esc(x.remarks || ''))}${kv('Reason', esc(x.reason || ''))}${kv('From file', esc(x.file || '') + (x.loaded ? ', loaded ' + when(x.loaded) : ''))}</div>
+        ${dedOn() && (l.sap_open || l.sap_ded) ? `<div class="row wrap"><span class="small grow">${l.sap_ded ? `<b>${inr(l.sap_ded)} pcs taken off the DC balance by hand</b> (from ${esc(C.locText(l.locs) || 'the DC')}).` : `${inr(l.sap_open)} pcs approved in SAP - <b>not</b> taken off the DC balance (the DC stock report normally has them out already).`}</span>
+          ${editor() ? (l.sap_ded ? `<button class="btn sm" data-act="sapDeduct" data-id="${l.id}" data-on="0">Stop taking it off</button>` : `<button class="btn sm primary" data-act="sapDeduct" data-id="${l.id}" data-on="1">Take off DC stock</button>`) : ''}</div>` : ''}</div>`);
     }
     if (l.orig_article) out.push(`<div class="card"><div class="note info"><b>${esc(l.article_code)} is here in place of ${esc(l.orig_article)}</b> ${esc(l.orig_desc)}, which is what the store ordered. Cancelling the approval of the alternate brings the ordered article back.</div></div>`);
     if (l.ss) {
@@ -1847,7 +1878,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
 ${ed ? `<div class="small">Give each store its share below, in full packs. Lines left short stay open so alternates can be offered from the Orders screen.${locsOn() ? ' The stock is taken from the DC locations in the usual order; to choose the location for one store, approve it from Pending orders.' : ''}</div>` : ''}</div></div>
       <div class="stats five">${stat('Total DC qty', inr(p.dc))}${stat('Allocated to orders', inr(p.reserved))}${stat('Balance DC qty', inr(p.free), p.free > 0 ? 'good' : 'bad')}${stat('Pending order qty', inr(p.pending), p.pending > free ? 'bad' : '')}${stat('Pending PO', (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0) ? inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0)) : '-')}</div>
       ${stockSum(p)}${p.dc ? locChips(p) : ''}
-      ${expBoxHtml(c)}
+      ${expBoxHtml(c)}${sapOpenHtml(c)}
       ${body}
       ${ed ? `<div class="row wrap"><span>Fill:</span><button class="btn sm" data-act="fill" data-m="fifo">Oldest order first</button><button class="btn sm" data-act="fill" data-m="prorata">Share in proportion</button>
         <button class="btn sm" data-act="fill" data-m="">Clear</button><span class="grow"></span><span id="stally"></span><button class="btn primary" id="sapply" data-act="applySplit">Approve these quantities</button></div>` : ''}</div>`;
@@ -1958,7 +1989,8 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           ${inTot ? sumRow('+ Inwards since the report', inTot, (k) => inBy[k] || 0, 'plus') : ''}
           ${lf ? sumRow('&minus; Allocated to orders', reserved, (k) => rep(k) + (inBy[k] || 0) - (lf[k] || 0), 'minus') + sumRow('= Balance DC qty', free, (k) => lf[k] || 0, 'tot bal') : ''}</tbody></table></div>`
           : `<div class="note info">${M.meta.stock_asof ? 'Not in the latest DC stock report.' : 'No DC stock report is loaded.'}</div>`}
-        ${inwards.length ? `<div class="small"><b>Inwards since the stock report:</b>${inwards.slice(0, 8).map((i) => `<br>${when(i.inward_at)} &middot; ${inr(i.qty)} pcs into ${C.LOC_NAME[i.loc] || i.loc}${i.mc_name ? ' &middot; ' + esc(i.mc_name) : ''}${i.doc_no ? ' &middot; GRN ' + esc(i.doc_no) : ''}${i.site_code ? ' &middot; ' + esc(i.site_code) : ''} <span class="muted">(${esc(i.source_file || '')})</span>`).join('')}${inwards.length > 8 ? `<br>... and ${inwards.length - 8} more` : ''}</div>` : ''}
+        ${inwards.length ? `<div class="small"><b>Inwards since the stock report:</b>${inwards.slice(0, 8).map((i) => `<br>${when(i.inward_at)} &middot; ${i.qty < 0 ? `<span class="warn">${inr(-i.qty)} pcs out of ${C.LOC_NAME[i.loc] || i.loc}${i.mvt ? ' (movement ' + esc(i.mvt) + ')' : ''}</span>` : `${inr(i.qty)} pcs into ${C.LOC_NAME[i.loc] || i.loc}`}${i.mc_name ? ' &middot; ' + esc(i.mc_name) : ''}${i.doc_no ? ' &middot; GRN ' + esc(i.doc_no) : ''}${i.site_code ? ' &middot; ' + esc(i.site_code) : ''} <span class="muted">(${esc(i.source_file || '')})</span>`).join('')}${inwards.length > 8 ? `<br>... and ${inwards.length - 8} more` : ''}</div>` : ''}
+        ${sapOpenHtml(code)}
         ${editor() && locsOn() && M.meta.stock_asof ? `<div><button class="btn sm" data-act="inwardHand" data-code="${esc(code)}" title="Stock of this article received at the DC after the stock report">Add an inward for this article ...</button></div>` : ''}
         ${d && d.store_total && S.M.hasStoreStock ? `<div class="small"><b>In stores</b> (store stock report): ${inr(d.store_total.closing)} pcs closing stock, ${inr(d.store_total.intransit)} in transit, held by ${inr(d.store_total.stores)} ${plural(d.store_total.stores, 'store')}; ${inr(d.store_total.mtd_sale)} sold this month.</div>` : ''}
         ${d && d.ly && d.ly.lines ? `<div class="small"><b>Last year</b>: ${inr(d.ly.lines)} order ${plural(d.ly.lines, 'line')} from ${inr(d.ly.stores)} ${plural(d.ly.stores, 'store')}, ${inr(d.ly.wq)} pcs wanted, ${inr(d.ly.fq)} pcs approved (Rs ${inr(Math.round(d.ly.fv))}). <a href="#" data-act="lyArt" data-code="${esc(code)}">See the lines</a></div>` : ''}
@@ -2260,7 +2292,13 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       else if (e.mins == null) unsure.push(e);
       else (e.mins > asofMins ? after : before).push(e);
     }
-    const qty = (arr) => arr.reduce((t, e) => t + e.q, 0), n = (arr) => `${inr(arr.length)} ${plural(arr.length, 'entry', 'entries')}, ${inr(qty(arr))} pcs`;
+    const qty = (arr) => arr.reduce((t, e) => t + e.q, 0), pin = (arr) => arr.filter((e) => e.q > 0).reduce((t, e) => t + e.q, 0), pout = (arr) => -arr.filter((e) => e.q < 0).reduce((t, e) => t + e.q, 0);
+    const n = (arr) => `${inr(arr.length)} ${plural(arr.length, 'entry', 'entries')}, ${inr(pin(arr))} pcs${pout(arr) ? ` in, ${inr(pout(arr))} pcs out` : ''}`;
+    /* stock going out (reversals, returns to the vendor ...), by movement type: each can be left out */
+    const outBy = {}; all.filter((e) => e.q < 0).forEach((e) => { const k = e.v || '(no movement type)'; outBy[k] = outBy[k] || { n: 0, q: 0 }; outBy[k].n++; outBy[k].q -= e.q; });
+    /* how many lines of this file are already loaded (same GRN / document, article, location, quantity) */
+    let seen = null;
+    if (M.schema >= 16 && all.some((e) => e.d)) { try { seen = await A.rpc('inward_seen', { p_rows: all.filter((e) => e.d).map((e) => ({ a: e.a, q: e.q, l: e.l, d: e.d })) }); } catch (e) { seen = null; } }
     const earlier = M.inwardLoads.filter((x) => x.counted > 0), earlierQty = earlier.reduce((t, x) => t + x.counted, 0), hasDoc = all.some((e) => e.d);
     const undated = unsure.filter((e) => !e.day).length;
     let addUnsure = true, replace = false;
@@ -2268,7 +2306,10 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       const radio = (name, val, text, on) => `<label class="row top"><input type="radio" name="${name}" value="${val}" ${on ? 'checked' : ''}> <span>${text}</span></label>`;
       const v = await ask('Inwards', `<div class="stack">
         <p>${n(all)} in ${inr(new Set(all.map((e) => e.a)).size)} articles. The DC stock report in use is as of <b>${when(asof)}</b>.</p>
-        ${after.length ? `<div class="note good">Received after the stock report: <b>${n(after)}</b> - added to the DC stock.</div>` : ''}
+        ${seen && seen.n ? `<div class="note info"><b>${inr(seen.n)} of these ${plural(seen.n, 'line is', 'lines are')} already loaded</b> (same GRN / document number) - ${seen.n === all.length ? 'nothing in this file is new; ' : ''}they are skipped, nothing is counted twice.</div>` : ''}
+        ${after.length ? `<div class="note good">Received after the stock report: <b>${n(after)}</b> - ${seen && seen.n ? 'the new ones are ' : ''}added to the DC stock${pout(after) ? ' (stock going out is taken off)' : ''}.</div>` : ''}
+        ${Object.keys(outBy).length ? `<div class="note warn stack"><div><b>Stock going out</b> in this file - taken off the DC stock (reversals, returns to the vendor ...). Untick a movement type that should not be taken off, for example dispatches to stores that are already approved here:</div>
+          ${Object.entries(outBy).map(([k, x]) => `<label class="row"><input type="checkbox" name="out_${esc(k)}" checked> <span>Movement type <b>${esc(k)}</b>: ${inr(x.n)} ${plural(x.n, 'entry', 'entries')}, ${inr(x.q)} pcs</span></label>`).join('')}</div>` : ''}
         ${before.length ? `<div class="note warn">Received before the stock report: ${n(before)} - left out, the report already has them.</div>` : ''}
         ${unsure.length ? `<div class="note info stack"><div><b>${n(unsure)}</b> ${undated === unsure.length ? 'have no date in the file' : `are dated ${when(asofDay)}, the day of the stock report, with no time`}, so the app cannot tell whether the report already has them.</div>
           ${radio('unsure', 'add', 'They came in after the stock report - add them', true)}${radio('unsure', 'skip', 'The stock report already has them - leave them out', false)}</div>` : ''}
@@ -2278,29 +2319,32 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
         <p class="small">Location: ${rows.fields.includes('sloc') || ['v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'].some((f) => rows.fields.includes(f)) ? 'taken from the storage location in the file (0023 NSO, 0043 HH reserved, 0041 special buy, 0042 best seller; anything else V01 & V02).' : 'the file has no storage location, so everything goes into V01 & V02.'}</p></div>`, 'Add to DC stock', { noFocus: true });
       if (!v) return null;
       addUnsure = v.unsure !== 'skip'; replace = v.mode === 'replace';
+      for (const k of Object.keys(outBy)) if (v['out_' + k] === false) outBy[k].skip = true;
     }
+    const keepOut = (e) => e.q > 0 || !(outBy[e.v || '(no movement type)'] || {}).skip;
     const local = (day, mins) => new Date(+day.slice(0, 4), +day.slice(5, 7) - 1, +day.slice(8, 10), Math.floor(mins / 60), mins % 60).toISOString();
     const justAfter = new Date(asof.getTime() + 60000).toISOString();
-    const send = after.map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, m: e.m, n: e.n, t: e.mins == null ? local(e.day, 12 * 60) : local(e.day, e.mins) }))
-      .concat(addUnsure ? unsure.map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, m: e.m, n: e.n, t: justAfter })) : []);
+    const send = after.filter(keepOut).map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, m: e.m, n: e.n, v: e.v, t: e.mins == null ? local(e.day, 12 * 60) : local(e.day, e.mins) }))
+      .concat(addUnsure ? unsure.filter(keepOut).map((e) => ({ a: e.a, q: e.q, l: e.l, s: e.s, d: e.d, m: e.m, n: e.n, v: e.v, t: justAfter })) : []);
+    const outLeft = after.concat(addUnsure ? unsure : []).filter((e) => !keepOut(e)).length;
     const left = before.length + (addUnsure ? 0 : unsure.length);
     if (!send.length && !replace) return `Nothing was added.\n\nEntries in the file: ${inr(all.length)}\nLeft out (the stock report already has them): ${inr(left)}`;
-    let added = 0, skipped = 0, pcs = 0, batch = null, replaced = 0;
+    let added = 0, skipped = 0, pcs = 0, batch = null, replaced = 0, outQ = 0;
     const parts = send.length ? chunks(send, 2000) : [[]];
     for (let i = 0; i < parts.length; i++) {
       prog.set(`Saving ${inr(Math.min((i + 1) * 2000, send.length))} of ${inr(send.length)} inward entries ...`);
       const r = await A.rpc('inward_add', Object.assign({ p_rows: parts[i], p_file: file.name, p_replace: replace && i === 0 }, batch ? { p_batch: batch } : {}));
-      batch = r.batch; added += r.added; skipped += r.skipped; pcs += r.qty; replaced += r.replaced || 0;
+      batch = r.batch; added += r.added; skipped += r.skipped; pcs += r.qty; replaced += r.replaced || 0; outQ += r.out_qty || 0;
     }
     const known = send.filter((e) => !M.articles[e.a]), unknownArts = new Set(known.map((e) => e.a)).size;
     /* what matters for the orders: the articles of the Diwali range or on an order, by MC */
     const mine = send.filter((e) => M.articles[e.a]), byMc = {};
-    mine.forEach((e) => { const k = e.m || (M.articles[e.a] || {}).mc_name || '(MC not given)'; byMc[k] = (byMc[k] || 0) + e.q; });
+    mine.filter((e) => e.q > 0).forEach((e) => { const k = e.m || (M.articles[e.a] || {}).mc_name || '(MC not given)'; byMc[k] = (byMc[k] || 0) + e.q; });
     const mcList = Object.entries(byMc).sort((x, y) => y[1] - x[1]);
     const notGr = (all.skipped || []).length;
-    return `Entries in the file: ${inr(all.length + notGr)}\nAdded to the DC stock: ${inr(added)} ${plural(added, 'entry', 'entries')}, ${inr(pcs)} pcs` +
-      (notGr ? `\nNot goods receipts (movement type other than 101, or a minus quantity), not added: ${inr(notGr)}` : '') +
-      (mine.length ? `\n\nArticles of the Diwali range or on orders: ${inr(new Set(mine.map((e) => e.a)).size)}, ${inr(mine.reduce((t, e) => t + e.q, 0))} pcs. By MC:\n` + mcList.slice(0, 12).map(([k, q]) => `  ${k}: ${inr(q)} pcs`).join('\n') + (mcList.length > 12 ? `\n  ... and ${mcList.length - 12} more MCs` : '') : '') +
+    return `Entries in the file: ${inr(all.length + notGr)}\nNew entries saved: ${inr(added)}\nAdded to the DC stock: ${inr(pcs)} pcs` + (outQ ? `\nTaken off the DC stock (returns / reversals): ${inr(outQ)} pcs` : '') +
+      (outLeft ? `\nStock going out that you left out: ${inr(outLeft)} ${plural(outLeft, 'entry', 'entries')}` : '') +
+      (mcList.length ? `\n\nReceived in articles of the Diwali range or on orders: ${inr(new Set(mine.filter((e) => e.q > 0).map((e) => e.a)).size)} articles, ${inr(mine.filter((e) => e.q > 0).reduce((t, e) => t + e.q, 0))} pcs. By MC:\n` + mcList.slice(0, 12).map(([k, q]) => `  ${k}: ${inr(q)} pcs`).join('\n') + (mcList.length > 12 ? `\n  ... and ${mcList.length - 12} more MCs` : '') : '') +
       (skipped ? `\nAlready loaded earlier, same GRN number (skipped): ${inr(skipped)}` : '') + (left ? `\nLeft out, the stock report already has them: ${inr(left)}` : '') +
       (replaced ? `\nEarlier inward entries replaced by this file: ${inr(replaced)}` : '') +
       (unknownArts ? `\n\n${inr(unknownArts)} ${plural(unknownArts, 'article')} in the file ${unknownArts === 1 ? 'is' : 'are'} not in the Diwali range or on any order. They are stored, and show up once such an article is ordered.` : '') +
@@ -2453,8 +2497,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
           return [l.order_no, l.line_item || '', l.store_code, l.orig_article || l.article_code, a.article_code, a.article_code === (l.orig_article || l.article_code) ? 'Ordered article' : 'Alternate',
             a.entered_qty == null ? a.qty : a.entered_qty, a.qty, a.price != null ? +a.price : l.req_price, C.locText(a.locs), C.STATUS_LABEL[a.state], when(a.created_at), a.created_by, when(a.decided_at), when(a.dispatched_at)]; }));
       sheet('Stock position', STOCK_HEAD, Object.keys(M.pos).sort().map(stockRow));
-      if (ex.inwards && ex.inwards.length) sheet('Inwards', ['Received', 'Article', 'Description', 'MC', 'Qty', 'DC location', 'DC', 'GRN / document', 'File', 'Loaded by', 'Counted on top of the stock report'],
-        ex.inwards.map((i) => [when(i.inward_at), i.article_code, i.description || (artOf(i.article_code) || {}).description || '', i.mc_name || (artOf(i.article_code) || {}).mc_name || '', i.qty, C.LOC_NAME[i.loc] || i.loc, i.site_code, i.doc_no, i.source_file, i.created_by, i.counted ? 'Yes' : 'No (the stock report already has it)']));
+      if (ex.inwards && ex.inwards.length) sheet('Inwards', ['Received', 'Article', 'Description', 'MC', 'Qty', 'DC location', 'DC', 'GRN / document', 'Movement type', 'File', 'Loaded by', 'Counted on top of the stock report'],
+        ex.inwards.map((i) => [when(i.inward_at), i.article_code, i.description || (artOf(i.article_code) || {}).description || '', i.mc_name || (artOf(i.article_code) || {}).mc_name || '', i.qty, C.LOC_NAME[i.loc] || i.loc, i.site_code, i.doc_no, i.mvt || (i.qty < 0 ? 'out' : ''), i.source_file, i.created_by, i.counted ? 'Yes' : 'No (the stock report already has it)']));
       sheet('Activity log', ['When', 'User', 'Order No', 'Line', 'Action', 'Detail'], ex.events.map((e) => [when(e.ts), e.user_name, e.order_no, String(e.line_no || '').includes('~') ? '' : e.line_no, e.action, e.detail]));
       return `Exported ${inr(M.lines.length)} order lines`;
     });
@@ -2731,6 +2775,13 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     undo: (el) => run(() => A.rpc('undo_alloc', { p_alloc: +el.dataset.alloc }), 'Undone'),
 dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use this only if the stock on this line has left the DC and you do not want to wait for the next DC stock report.\n\nUntil a newer stock report is loaded, the quantity is still taken off the current one, exactly as now.', 'Mark dispatched')) run(() => A.rpc('dispatch_lines', { p_lines: [S.o.sel] }), 'Marked dispatched'); },
     closeBal: () => run(() => A.rpc('close_balance', { p_line: S.o.sel }), 'Pending quantity closed'),
+    sapDeduct: (el) => sapDeduct([S.M.byId[+el.dataset.id]].filter(Boolean), el.dataset.on === '1'),
+    sapDeductArt: (el) => { const ar = artPop; if (ar) ar.close(); sapDeduct(S.M.lines.filter((l) => l.article_code === el.dataset.code && l.sap_open > 0), true); },
+    bulkDeduct: () => {
+      const L = Array.from(sec().checked).map((id) => S.M.byId[id]).filter((l) => l && l.sap_open > 0);
+      if (!L.length) return tell('Take off DC stock', 'None of the ticked lines has an approval done in SAP that is not taken off yet. Tick lines that show "In SAP" (filter: approved in SAP).');
+      sapDeduct(L, true);
+    },
     bulkDispatch: async () => {
       const L = Array.from(sec().checked).map((id) => S.M.byId[id]).filter((l) => l && l.approved_open > 0);
       if (!L.length) return tell('Mark dispatched', 'Tick one or more approved lines first ("Tick all shown" ticks every line listed).');
