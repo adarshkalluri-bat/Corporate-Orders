@@ -21,10 +21,11 @@
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
     tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
-    qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
+    qb: { store: '', mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false },
+    qy: { mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 21;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 22;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1250,24 +1251,142 @@
     const rows = qRows();
     if (!rows.length) return `<div class="empty card">${Q.list.length ? 'No query matches the search.' : 'No query logged yet.'}</div>`;
     const tv = rows.reduce((t, r) => t + Number(r.value || 0), 0), tq = rows.reduce((t, r) => t + (r.qty || 0), 0);
-    const shown = rows.slice(0, 500);
-    return `<div class="small" style="margin-bottom:6px">${inr(rows.length)} ${plural(rows.length, 'query', 'queries')}${rows.length < Q.list.length ? ` of ${inr(Q.list.length)}` : ''} &middot; ${inr(tq)} pcs &middot; order value <b>Rs ${inr(Math.round(tv))}</b></div>
-      <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th><th>Remarks</th><th></th></tr></thead><tbody>
-      ${shown.map((r) => `<tr class="${r.id === Q.last ? 'new' : ''}"><td class="nowrap">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div></td>
-        <td><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
+    const shown = rows.slice(0, 500), seen = new Set(), html = [];
+    const one = (r, child) => `<tr class="${r.id === Q.last || (r.grp && r.grp === Q.last) ? 'new' : ''} ${child ? 'qchild' : ''}"><td class="nowrap">${child ? '<span class="muted">&#8627;</span>' : `${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div>`}</td>
+        <td>${child ? '' : `<b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div>`}</td>
         <td class="artcell"><b class="nowrap">${esc(r.article_code)}</b><div class="small">${esc(r.description || '')}</div><div class="small muted">${esc(r.mc_name || '')}</div></td>
         <td class="right">${r.mrp == null ? '-' : inr2(Number(r.mrp))}</td><td class="right">${r.discount == null ? '-' : (Number(r.discount) * 100).toFixed(2) + '%'}</td>
         <td class="right b">${inr2(Number(r.price))}</td><td class="right b">${inr(r.qty)}</td><td class="right b">${inr2(Number(r.value))}</td>
-        <td class="w small">${esc(r.remarks || '')}</td><td>${r.mine || ed ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query">Remove</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+        <td class="w small">${child ? '' : esc(r.remarks || '')}</td><td>${!child && (r.mine || ed) ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query">Remove</button>` : ''}</td></tr>`;
+    for (const r of shown) {
+      if (r.grp == null) { html.push(one(r)); continue; }
+      if (seen.has(r.grp)) continue;
+      seen.add(r.grp);
+      const g = rows.filter((x) => x.grp === r.grp), val = g.reduce((t, x) => t + Number(x.value || 0), 0), q = g.reduce((t, x) => t + (x.qty || 0), 0), atMrp = g.reduce((t, x) => t + (x.mrp == null ? Number(x.price) : Number(x.mrp)) * x.qty, 0);
+      html.push(`<tr class="qgrp ${r.grp === Q.last ? 'new' : ''}"><td class="nowrap">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div></td>
+        <td><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
+        <td><b>Query of ${g.length} articles</b><div class="small muted">${esc(Array.from(new Set(g.map((x) => x.mc_name).filter(Boolean))).join(', '))}</div></td><td class="right">-</td>
+        <td class="right">${atMrp ? (Math.max(0, 1 - val / atMrp) * 100).toFixed(2) + '%' : '-'}</td><td class="right">-</td><td class="right b">${inr(q)}</td><td class="right b">${inr2(val)}</td>
+        <td class="w small">${esc(r.remarks || '')}</td><td>${r.mine || ed ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)">Remove</button>` : ''}</td></tr>`);
+      g.forEach((x) => html.push(one(x, true)));
+    }
+    const nq = (L) => L.filter((x) => x.grp == null).length + new Set(L.filter((x) => x.grp != null).map((x) => x.grp)).size;
+    return `<div class="small" style="margin-bottom:6px">${inr(nq(rows))} ${plural(nq(rows), 'query', 'queries')}${rows.length < Q.list.length ? ` of ${inr(nq(Q.list))}` : ''} &middot; ${inr(tq)} pcs &middot; order value <b>Rs ${inr(Math.round(tv))}</b></div>
+      <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th><th>Remarks</th><th></th></tr></thead><tbody>
+      ${html.join('')}</tbody></table></div>
       ${rows.length > shown.length ? `<p class="small">Showing the newest 500; Export to Excel has all ${inr(rows.length)}.</p>` : ''}`;
+  }
+  /* ----- a query with several articles: pick the MC and the MRP, add the articles, and see the whole deal ----- */
+  const QB_BLANK = () => ({ store: '', mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false });
+  const qbArts = () => Object.values(S.M.articles);
+  const qbMcs = () => Array.from(new Set(qbArts().map((a) => (a.mc_name || '').trim()).filter(Boolean))).sort();
+  function qbPickList() {
+    const B = S.qb, words = B.find.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!B.mc && !words.length) return [];
+    return qbArts().filter((a) => (!B.mc || (a.mc_name || '').trim() === B.mc) && (!B.mrp || mrpKey(a.mrp) === B.mrp)
+      && words.every((w) => [a.article_code, a.description, a.mc_name].join(' ').toLowerCase().includes(w)))
+      .sort((x, y) => (Number(x.mrp) || 0) - (Number(y.mrp) || 0) || String(x.article_code).localeCompare(String(y.article_code)));
+  }
+  function qbMrpHtml() {
+    const B = S.qb, cnt = new Map();
+    for (const a of qbArts()) if (B.mc && (a.mc_name || '').trim() === B.mc) { const k = mrpKey(a.mrp); cnt.set(k, (cnt.get(k) || 0) + 1); }
+    return `<select id="qb-mrp" aria-label="MRP" ${B.mc ? '' : 'disabled'}><option value="">${B.mc ? 'All MRPs' : 'Choose the MC first'}</option>${Array.from(cnt.keys()).sort((x, y) => x - y).map((k) => `<option value="${k}" ${B.mrp === k ? 'selected' : ''}>MRP ${inr2(+k)} (${cnt.get(k)})</option>`).join('')}</select>`;
+  }
+  function qbPicksHtml() {
+    const list = qbPickList(), have = new Set(S.qb.rows.map((r) => r.a));
+    if (!list.length) return `<div class="small muted">${S.qb.mc || S.qb.find.trim() ? 'No article matches.' : 'Choose an MC (and an MRP), or type a code or name, to list the articles.'}</div>`;
+    return `<div class="tablewrap qbpicks"><table class="tight"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Balance<br>DC qty</th><th class="right">Pack</th><th></th></tr></thead><tbody>
+      ${list.slice(0, 80).map((a) => { const free = C.freeOf(S.M, a.article_code);
+        return `<tr><td class="artcell"><b class="pick" data-act="art" data-code="${esc(a.article_code)}">${esc(a.article_code)}</b> <span class="small">${esc(a.description || '')}</span>${a.status === 'In-Active' ? ' <span class="badge bad">In-Active</span>' : ''}</td>
+          <td class="right">${inr2(Number(a.mrp) || 0)}</td><td class="right ${free > 0 ? 'good' : 'bad'} b">${inr(free)}</td><td class="right">${C.packOf(a)}</td>
+          <td class="right">${have.has(a.article_code) ? '<span class="small good b">Added</span>' : `<button class="btn sm" data-act="qbAdd" data-code="${esc(a.article_code)}">Add</button>`}</td></tr>`; }).join('')}</tbody></table></div>
+      ${list.length > 80 ? `<div class="small">${inr(list.length - 80)} more - choose an MRP or type more of the name.</div>` : ''}`;
+  }
+  /* one row worked out: price from the discount or the other way round, value, margin */
+  function qbCalc(r) {
+    const a = artOf(r.a) || {}, mrp = Number(a.mrp) || 0, qty = Math.max(0, Math.round(+r.qty || 0));
+    const price = r.price !== '' ? +r.price : (r.disc !== '' && mrp ? Math.round(mrp * (1 - (+r.disc || 0) / 100) * 100) / 100 : 0);
+    const gst = a.gst == null ? null : Number(a.gst), cost = Number(a.cost) || 0, net = gst == null ? null : price / (1 + gst);
+    const per = net != null && cost > 0 ? net - cost : null;
+    return { a, mrp, qty, price, value: price * qty, disc: mrp ? 1 - price / mrp : null, mval: per == null ? null : per * qty, net: net == null ? null : net * qty, over: mrp > 0 && price > mrp + 0.004, free: C.freeOf(S.M, r.a) };
+  }
+  function qbTotHtml() {
+    const xs = S.qb.rows.map(qbCalc), ok = xs.filter((x) => x.qty > 0 && x.price > 0);
+    const qty = ok.reduce((t, x) => t + x.qty, 0), val = ok.reduce((t, x) => t + x.value, 0), atMrp = ok.reduce((t, x) => t + x.mrp * x.qty, 0);
+    const known = ok.filter((x) => x.mval != null), mv = known.reduce((t, x) => t + x.mval, 0), nv = known.reduce((t, x) => t + x.net, 0);
+    if (!S.qb.rows.length) return '';
+    return `<div class="qbtot"><div><span>Articles</span><b>${inr(S.qb.rows.length)}</b></div><div><span>Total qty</span><b>${inr(qty)} pcs</b></div><div><span>Total deal value</span><b>${rupees(val)}</b></div>
+      <div><span>Total discount</span><b>${rupees(Math.max(0, atMrp - val))}</b><small>${atMrp ? pct(Math.max(0, 1 - val / atMrp)) + ' off MRP value ' + rupees(atMrp) : ''}</small></div>
+      <div><span>Total margin</span><b class="${mv < 0 ? 'bad' : ''}">${known.length ? rupees(mv) : '-'}</b><small>${known.length && nv ? pct(mv / nv) + (known.length < ok.length ? ` (${ok.length - known.length} without cost)` : '') : 'cost not on file'}</small></div></div>`;
+  }
+  function qbRowsHtml() {
+    const B = S.qb;
+    if (!B.rows.length) return '<div class="small muted">No article added yet.</div>';
+    return `<div class="tablewrap fitwrap"><table class="tight qbrows resp"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Discount %</th><th class="right">Final price</th><th class="right">Qty (pcs)</th><th class="right">Value</th><th class="right">Margin</th><th></th></tr></thead><tbody>
+      ${B.rows.map((r, i) => { const x = qbCalc(r);
+        return `<tr><td class="artcell"><b>${esc(r.a)}</b><div class="small">${esc(x.a.description || '')}</div><div class="small muted">Balance DC qty <b class="${x.free > 0 ? 'good' : 'bad'}">${inr(x.free)}</b> &middot; pack of ${C.packOf(x.a)}</div></td>
+          <td class="right" data-l="MRP">${inr2(x.mrp)}</td>
+          <td class="right" data-l="Discount %"><input class="qbd" data-i="${i}" type="number" min="0" max="100" step="0.01" inputmode="decimal" value="${esc(r.disc)}"></td>
+          <td class="right" data-l="Final price"><input class="qbp" data-i="${i}" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(r.price)}"></td>
+          <td class="right" data-l="Qty"><input class="qbq" data-i="${i}" type="number" min="1" step="1" inputmode="numeric" value="${esc(r.qty)}"></td>
+          <td class="right b" data-l="Value" id="qb-v-${i}">${qbValCell(x)}</td><td class="right" data-l="Margin" id="qb-m-${i}">${qbMarCell(x)}</td>
+          <td class="right"><button class="btn sm ghost" data-act="qbDel" data-i="${i}" title="Take this article out">Remove</button></td></tr>`; }).join('')}</tbody></table></div>`;
+  }
+  const qbValCell = (x) => (x.over ? '<span class="bad">above MRP</span>' : x.price && x.qty ? inr2(x.value) : '-');
+  const qbMarCell = (x) => (x.mval == null || !x.price ? '<span class="muted">-</span>' : `<span class="${x.mval < 0 ? 'bad' : ''}">${pct(x.mval / x.net)}</span><div class="small">Rs ${inr(Math.round(x.mval))}</div>`);
+  function qbStoreInfo() {
+    const sc = S.qb.store.trim().toUpperCase(), st = sc && S.M.stores[sc];
+    if (!sc) return '';
+    return st ? `<b>${esc(st.store_name || '')}</b>${st.state ? ', ' + esc(st.state) : ''}${st.lead_time != null ? ` &middot; lead time ${st.lead_time} ${plural(st.lead_time, 'day')}` : ''}` : '<span class="bad">Not in the store list</span>';
+  }
+  function qbHtml() {
+    const B = S.qb;
+    return `<div class="card stack qform"><h2>Log a query with several articles</h2>
+      <div class="qgrid"><label class="f">Store code<input id="qb-store" type="text" list="qf-stores" autocomplete="off" value="${esc(B.store)}" placeholder="e.g. HD02"></label><div class="qinfo" id="qb-sinfo">${qbStoreInfo()}</div></div>
+      <div class="qbpick"><label class="f">MC<select id="qb-mc" aria-label="MC"><option value="">Choose the MC ...</option>${qbMcs().map((m) => `<option ${B.mc === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+        <label class="f">MRP<span id="qb-mrpbox">${qbMrpHtml()}</span></label>
+        <label class="f">Or type a code / name<input id="qb-find" type="search" value="${esc(B.find)}" placeholder="e.g. bowl, 1212013789"></label></div>
+      <div id="qb-picks">${qbPicksHtml()}</div>
+      <h3 style="margin:6px 0 0">In this query</h3>
+      <div id="qb-rows">${qbRowsHtml()}</div>
+      <div id="qb-tot">${qbTotHtml()}</div>
+      <label class="f">Remarks (optional)<input id="qb-rem" type="text" maxlength="500" value="${esc(B.remarks)}" placeholder="Customer, delivery date, anything else ..."></label>
+      <div class="row wrap"><span class="small grow">Logged as one query in your name (${esc(S.me.name || S.me.email)}), with the date and time.</span>
+        <button class="btn" data-act="qbClear">Clear</button><button class="btn primary" id="qb-go" data-act="qbLog">Log query</button></div></div>`;
+  }
+  function qbTyped(t) {
+    const i = +t.dataset.i, r = S.qb.rows[i]; if (!r) return;
+    const mrp = Number((artOf(r.a) || {}).mrp) || 0;
+    if (t.classList.contains('qbd')) { r.disc = t.value; r.price = t.value !== '' && mrp ? String(Math.round(mrp * (1 - (+t.value || 0) / 100) * 100) / 100) : ''; const p = document.querySelector(`.qbp[data-i="${i}"]`); if (p) p.value = r.price; }
+    else if (t.classList.contains('qbp')) { r.price = t.value; r.disc = t.value !== '' && mrp ? String(Math.round((1 - (+t.value || 0) / mrp) * 10000) / 100) : ''; const d = document.querySelector(`.qbd[data-i="${i}"]`); if (d) d.value = r.disc; }
+    else r.qty = t.value;
+    const x = qbCalc(r); setHtml('qb-v-' + i, qbValCell(x)); setHtml('qb-m-' + i, qbMarCell(x)); setHtml('qb-tot', qbTotHtml());
+  }
+  async function qbLog() {
+    const B = S.qb, sc = B.store.trim().toUpperCase();
+    if (B.saving) return;
+    if (!S.M.stores[sc]) return tell('Log query', sc ? `Store ${sc} is not in the store list.` : 'Type the store code first.');
+    if (!B.rows.length) return tell('Log query', 'Add at least one article.');
+    const bad = B.rows.map((r) => [r, qbCalc(r)]).filter(([, x]) => !(x.price > 0) || !(x.qty > 0) || x.over);
+    if (bad.length) return tell('Log query', 'Give a discount or final price (not above MRP) and a quantity for every article:\n' + bad.map(([r]) => r.a).join(', '));
+    B.saving = true;
+    try {
+      const r = await A.rpc('query_add_many', { p: { store: sc, remarks: B.remarks, lines: B.rows.map((x) => { const c = qbCalc(x); return { article: x.a, price: String(Math.round(c.price * 100) / 100), qty: String(c.qty) }; }) } });
+      S.qy.last = r.grp; S.qb = Object.assign(QB_BLANK(), { store: sc, mc: B.mc, mrp: B.mrp });
+      toast(`Query logged: ${r.store_code}, ${r.n} ${plural(r.n, 'article')}, Rs ${inr2(Number(r.value))}`);
+      await reload(); await qLoad(true);
+    } catch (e) { await tell('Query not logged', e.message); } finally { S.qb.saving = false; }
   }
   function vQueries() {
     const Q = S.qy, f = Q.form;
     if (!qOn()) return `<div class="head"><h1>Queries</h1></div><div class="card"><div class="note warn">Queries need the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.</div></div>`;
     setTimeout(qInfo, 0);
     const stores = Object.values(S.M.stores);
+    const many = S.qy.mode === 'many' && S.M.schema >= 22;
+    const modes = S.M.schema >= 22 ? `<div class="segs" style="margin-bottom:10px">${[['one', 'One article'], ['many', 'Several articles (pick by MC and MRP)']].map(([k, t]) => `<button class="${(many ? 'many' : 'one') === k ? 'on' : ''}" data-act="qMode" data-v="${k}">${t}</button>`).join('')}</div>` : '';
     return `<div class="head"><h1>Queries</h1><span class="sub">What the stores ask for. Everyone on the team can log a query here, view-only too.</span></div>
-      <div class="card stack qform"><h2>Log a query</h2>
+      ${modes}${many ? qbHtml() : ''}
+      <div class="card stack qform" ${many ? 'hidden' : ''}><h2>Log a query</h2>
         <div class="qgrid">
           <label class="f">Store code<input id="qf-store" type="text" list="qf-stores" autocomplete="off" value="${esc(f.store)}" placeholder="e.g. HD02"></label>
           <div class="qinfo" id="qf-store-info"></div>
@@ -1292,10 +1411,10 @@
     if (!Q.list || !Q.list.length) return tell('Export', 'There are no queries to export.');
     const rows = qRows();
     return excelFile('Store_Queries', false, (sheet) => {
-      sheet('Queries', ['Logged on', 'Time', 'Logged by', 'Store Code', 'Store Name', 'State', 'Lead Time (days)', 'Article Code', 'Description', 'MC Name', 'MRP', 'Discount %', 'Final Price', 'Qty', 'Order Value', 'Remarks'],
+      sheet('Queries', ['Logged on', 'Time', 'Logged by', 'Store Code', 'Store Name', 'State', 'Lead Time (days)', 'Article Code', 'Description', 'MC Name', 'MRP', 'Discount %', 'Final Price', 'Qty', 'Order Value', 'Remarks', 'Query No', 'Articles in Query'],
         rows.map((r) => { const d = new Date(r.created_at), p2 = (n) => String(n).padStart(2, '0');
           return [`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`, `${p2(d.getHours())}:${p2(d.getMinutes())}`, r.by_name, r.store_code, r.store_name, r.state, r.lead_time, r.article_code, r.description, r.mc_name,
-            r.mrp == null ? null : Number(r.mrp), r.discount == null ? null : Math.round(Number(r.discount) * 10000) / 100, Number(r.price), r.qty, Number(r.value), r.remarks || '']; }));
+            r.mrp == null ? null : Number(r.mrp), r.discount == null ? null : Math.round(Number(r.discount) * 10000) / 100, Number(r.price), r.qty, Number(r.value), r.remarks || '', r.grp || r.id, r.grp ? Q.list.filter((x) => x.grp === r.grp).length : 1]; }));
       return `Exported ${inr(rows.length)} ${plural(rows.length, 'query', 'queries')}` + (rows.length < Q.list.length ? ' (the search you have on was applied)' : '');
     });
   }
@@ -2993,6 +3112,12 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     labelOrders: (el) => { if (labelPop) labelPop.close(); ACT.go({ dataset: { view: 'orders', q: el.dataset.code } }); },
     labelQuery: (el) => { if (labelPop) labelPop.close(); S.qy.form = Object.assign(QBLANK(), { art: el.dataset.code }); S.view = 'queries'; render(); const i = $('#qf-store'); if (i) i.focus(); },
     qSubmit: () => qSubmit(),
+    qMode: (el) => { S.qy.mode = el.dataset.v; render(); },
+    qbAdd: (el) => { if (!S.qb.rows.some((r) => r.a === el.dataset.code)) S.qb.rows.push({ a: el.dataset.code, disc: '', price: '', qty: '' }); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qb-tot', qbTotHtml());
+      const i = document.querySelector(`.qbd[data-i="${S.qb.rows.length - 1}"]`); if (i) i.focus(); },
+    qbDel: (el) => { S.qb.rows.splice(+el.dataset.i, 1); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qb-tot', qbTotHtml()); },
+    qbClear: () => { S.qb = { store: S.qb.store, mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false }; render(); },
+    qbLog: () => qbLog(),
     expAdd: (el) => {
       const q = Math.round(+$('#exp-qty').value || 0), eta = $('#exp-eta').value, note = $('#exp-note').value;
       if (!(q > 0)) return tell('Expected stock', 'Type the expected quantity.');
@@ -3063,7 +3188,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     qClear: () => { S.qy.form = QBLANK(); render(); const i = $('#qf-store'); if (i) i.focus(); },
     qDel: async (el) => {
       const r = (S.qy.list || []).find((x) => String(x.id) === el.dataset.id); if (!r) return;
-      if (!(await confirmBox('Remove this query?', `${r.store_code} ${r.store_name || ''}\n${r.article_code} ${r.description || ''}\n${inr(r.qty)} pcs at Rs ${inr2(Number(r.price))}, logged by ${r.by_name} on ${when(r.created_at)}`, 'Remove', true))) return;
+      const nGrp = r.grp ? S.qy.list.filter((x) => x.grp === r.grp).length : 0;
+      if (!(await confirmBox('Remove this query?', `${r.store_code} ${r.store_name || ''}\n${nGrp ? `A query of ${nGrp} articles - all of them are removed` : `${r.article_code} ${r.description || ''}`}\n${nGrp ? '' : `${inr(r.qty)} pcs at Rs ${inr2(Number(r.price))}, `}logged by ${r.by_name} on ${when(r.created_at)}`, 'Remove', true))) return;
       await run(() => A.rpc('query_delete', { p_id: r.id }), 'Query removed'); await qLoad(true);
     },
     lyArt: (el, e) => { if (e) e.preventDefault(); const o = $('#modal').lastElementChild; if (o) o.remove(); S.view = 'lastyear'; S.ly.lq = el.dataset.code; render(); lyFind(); },
@@ -3377,6 +3503,10 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'skmrpmin' || t.id === 'skmrpmax') { S.sk[t.id === 'skmrpmin' ? 'mrp_min' : 'mrp_max'] = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 500); }
     else if (t.id === 'stq') { S.st.q = t.value; S.st.limit = 300; setHtml('stlist', stTableHtml()); setHtml('stchips', stChips()); }
     else if (/^qf-/.test(t.id)) qTyped(t);
+    else if (t.id === 'qb-store') { S.qb.store = t.value; setHtml('qb-sinfo', qbStoreInfo()); }
+    else if (t.id === 'qb-find') { S.qb.find = t.value; setHtml('qb-picks', qbPicksHtml()); }
+    else if (t.id === 'qb-rem') S.qb.remarks = t.value;
+    else if (t.classList.contains('qbd') || t.classList.contains('qbp') || t.classList.contains('qbq')) qbTyped(t);
     else if (t.id === 'qq') { S.qy.q = t.value; setHtml('qlist', qListHtml()); }
     else if (t.id === 'dl-disc') dealCalc('disc');
     else if (t.id === 'dl-price') dealCalc('price');
@@ -3398,6 +3528,8 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'scover') { S.s.cover = t.value; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
     else if (t.classList.contains('tkr')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: null, lines: {} }; (d.lines[t.dataset.line] = d.lines[t.dataset.line] || {}).response = t.value; }
+    else if (t.id === 'qb-mc') { S.qb.mc = t.value; S.qb.mrp = ''; setHtml('qb-mrpbox', qbMrpHtml()); setHtml('qb-picks', qbPicksHtml()); }
+    else if (t.id === 'qb-mrp') { S.qb.mrp = t.value; setHtml('qb-picks', qbPicksHtml()); }
     else if (t.id === 'tkperson') { S.tk.person = t.value; render(); }
     else if (t.dataset.opt) { const v = t.value.trim(); if (v) run(() => A.rpc('task_opt_save', { p: { id: +t.dataset.opt, label: v } }), 'Saved'); }
     else if (['skgroup', 'sksort', 'skonly', 'skstate'].includes(t.id)) { S.sk[t.id.slice(2)] = t.value; S.sk.limit = 300; render(); }

@@ -447,3 +447,13 @@ table.fitcols td.sold .stbar { width: 40px; margin-right: 5px; } table.fitcols t
 .tkopt input { flex: 1; min-width: 0; } .tlist { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px; } .tlpick { padding: 4px 0; font-size: 13px; align-items: flex-start; gap: 8px; }
 .pop.wide { max-width: 760px; width: calc(100vw - 32px); }
 @media (max-width: 760px) { table.tktable.resp td.artcell { grid-column: 1 / -1; } table.tktable.resp tr { grid-template-columns: repeat(4, minmax(0, 1fr)); } .tkresp { min-width: 0; } }
+/* Queries: several articles in one */
+.qbpick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; } @media (min-width: 960px) { .qbpick { grid-template-columns: 1.4fr 1fr 1.4fr; } }
+.qbpick select, .qbpick input, #qb-mrpbox select { width: 100%; }
+.qbpicks { max-height: 320px; overflow: auto; } .qbpicks td.artcell { white-space: normal; }
+.qbrows input { width: 90px; text-align: right; } .qbrows td { vertical-align: top; } .qbrows td.artcell { white-space: normal; min-width: 180px; }
+.qbtot { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } @media (min-width: 960px) { .qbtot { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.qbtot > div { background: #F6F2FF; border: 1px solid #E2D9FB; border-radius: 12px; padding: 8px 12px; display: flex; flex-direction: column; }
+.qbtot span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); } .qbtot b { font-size: 18px; } .qbtot small { font-size: 12px; color: var(--muted); }
+.qtable tr.qgrp td { background: #F6F2FF; border-top: 2px solid #D9CCFB; } .qtable tr.qchild td { font-size: 13px; } .qtable tr.qchild td:first-child { text-align: right; }
+@media (max-width: 760px) { table.qbrows.resp td.artcell { grid-column: 1 / -1; } table.qbrows.resp tr { grid-template-columns: repeat(3, minmax(0, 1fr)); } .qbrows input { width: 100%; text-align: left; } }
