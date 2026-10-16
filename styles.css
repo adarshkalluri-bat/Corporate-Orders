@@ -399,3 +399,31 @@ table.fit { font-size: 12.5px; } table.fit th, table.fit td { padding: 6px 5px; 
 .sktable tr.skg > td { cursor: pointer; } .sktable tr.skg:hover > td { background: #F6F2FF; }
 #skbusy { margin-left: 8px; }
 .dlq { align-items: flex-end; gap: 8px; margin-top: 8px; } .dlq .btn { margin-bottom: 1px; }
+/* Sell-through and Store stock: every column in view (no sideways scrolling); the header stays on top while scrolling */
+table.fitcols { table-layout: fixed; width: 100%; }
+table.fitcols col.c-mrp { width: 58px; } table.fitcols col.c-n { width: 70px; } table.fitcols col.c-sold { width: 104px; } table.fitcols col.c-spread { width: 104px; }
+table.fitcols col.c-art { width: 31%; } table.fitcols col.c-glabel { width: auto; }
+table.fitcols th { white-space: normal; line-height: 1.2; vertical-align: bottom; font-size: 12.5px; padding: 8px 6px; }
+table.fitcols td { padding: 7px 6px; vertical-align: top; overflow-wrap: anywhere; }
+table.fitcols td.right { overflow-wrap: normal; white-space: nowrap; } table.fitcols tr.tot td.big { font-size: 14px; }
+table.fitcols td.stcell, table.fitcols td.artcell { white-space: normal; min-width: 0; }
+table.fitcols .mcline { color: #5B3FD1; font-weight: 600; margin-top: 1px; }
+table.fitcols .thsub { font-weight: 500; font-size: 11px; color: var(--muted); }
+table.fitcols td.sold .stbar { width: 40px; margin-right: 5px; } table.fitcols td.sold .pill { margin-top: 3px; }
+@media (min-width: 960px) { .fitwrap { overflow: visible; } .fitwrap > table.fitcols > thead th { top: -18px; } }
+@media (min-width: 761px) and (max-width: 1180px) {
+  table.fitcols col.c-mrp { width: 50px; } table.fitcols col.c-n { width: 63px; } table.fitcols col.c-sold { width: 90px; } table.fitcols col.c-spread { width: 88px; }
+  table.fitcols { font-size: 13px; } table.fitcols td.big { font-size: 14px; } table.fitcols tr.tot td.right { font-size: 12.5px; } table.fitcols th { font-size: 11.5px; padding: 7px 4px; } table.fitcols td { padding: 6px 4px; }
+}
+/* phones: each line becomes a small card - store and article on top, the numbers below with their names */
+@media (max-width: 760px) {
+  .fitwrap { border: 0; background: transparent; overflow: visible; }
+  table.resp, table.resp tbody { display: block; } table.resp colgroup, table.resp thead { display: none; }
+  table.resp tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 10px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+  table.resp td { display: block; padding: 0; border: 0; text-align: left; white-space: normal; }
+  table.resp td.stcell, table.resp td.artcell, table.resp td.glabel { grid-column: 1 / -1; }
+  table.resp td[data-l]::before { content: attr(data-l); display: block; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  table.resp td.big { font-size: 16px; } table.resp tr.tot { background: var(--lilac); } table.resp tr.tot td, table.resp tr.stg td { background: transparent; border: 0; }
+  table.resp tr.stg { background: #F3EEFF; border-color: #D9CCFB; }
+  table.sktable.resp tr { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 8px; } table.sktable.resp td[data-l]::before { font-size: 10px; letter-spacing: 0; }
+}

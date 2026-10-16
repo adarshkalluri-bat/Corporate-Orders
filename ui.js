@@ -780,13 +780,15 @@
       <button class="btn link" data-act="stClearAll">Clear all filters</button>` : ''; };
   const stBadge = (r) => { const p = stPct(r);
     return r.mtd <= 0 ? '<span class="pill REJECTED">No sale yet</span>' : p >= 1 ? '<span class="pill APPROVED">Sold all</span>' : p >= 0.5 ? '<span class="pill PARTIAL">Selling</span>' : '<span class="pill AWAITING">Slow</span>'; };
-  const stPctCell = (r) => { const p = stPct(r); return `<td class="right nowrap"><div class="stbar"><i style="width:${Math.min(100, Math.round((p || 0) * 100))}%"></i></div><b>${p == null ? '-' : Math.round(p * 100) + '%'}</b></td>`; };
+  const stPctCell = (r, badge) => { const p = stPct(r); return `<td class="right nowrap sold" data-l="Sold"><div class="stbar"><i style="width:${Math.min(100, Math.round((p || 0) * 100))}%"></i></div><b>${p == null ? '-' : Math.round(p * 100) + '%'}</b>${badge ? `<div>${stBadge(r)}</div>` : ''}</td>`; };
+  /* the store and the article cells, used by Sell-through and Store stock: MC sits under the article to keep every column in view */
+  const storeCellHtml = (code, name, state) => `<b>${esc(code)}</b> <span class="small">${esc(name || '')}</span>${state ? `<div class="small muted">${esc(state)}</div>` : ''}`;
+  const artCellHtml = (code, desc, mc) => `<b class="nowrap pick" data-act="art" data-code="${esc(code)}">${esc(code)}</b><div class="small">${esc(desc || '')}</div>${mc ? `<div class="small mcline">${esc(mc)}</div>` : ''}`;
   function stTableHtml() {
     const T = S.st, rows = stFiltered(), G = ST_GROUPS[T.group] || ST_GROUPS.none;
     if (!rows.length) return `<div class="empty card">${stRows().length ? 'Nothing matches these filters. <button class="btn sm" data-act="stClearAll">Clear all filters</button>' : 'Nothing is approved yet.'}</div>`;
-    const tot = stSum(rows), nums = (x) => `<td class="right b big">${inr(x.appr)}</td><td class="right">${inr(x.closing)}</td><td class="right">${inr(x.transit)}</td><td class="right b big">${inr(x.mtd)}</td>${stPctCell(x)}`;
-    const row = (r) => `<tr><td><b>${esc(r.store)}</b> <span class="small">${esc(r.sname)}</span>${r.state ? `<div class="small muted">${esc(r.state)}</div>` : ''}</td><td class="small">${esc(r.mc)}</td>
-      <td class="artcell"><b class="nowrap pick" data-act="art" data-code="${esc(r.art)}">${esc(r.art)}</b><div class="small">${esc(r.desc)}</div></td><td class="right">${inr2(r.mrp)}</td>${nums(r)}<td>${stBadge(r)}</td></tr>`;
+    const tot = stSum(rows), nums = (x, badge) => `<td class="right b big" data-l="Approved qty">${inr(x.appr)}</td><td class="right" data-l="Closing">${inr(x.closing)}</td><td class="right" data-l="In transit">${inr(x.transit)}</td><td class="right b big" data-l="MTD sale">${inr(x.mtd)}</td>${stPctCell(x, badge)}`;
+    const row = (r) => `<tr><td class="stcell">${storeCellHtml(r.store, r.sname, r.state)}</td><td class="artcell">${artCellHtml(r.art, r.desc, r.mc)}</td><td class="right" data-l="MRP">${inr2(r.mrp)}</td>${nums(r, true)}</tr>`;
     let body = '', shown = 0, hidden = 0;
     if (!G[1]) {
       const part = rows.slice(0, T.limit); shown = part.length; hidden = rows.length - shown; body = part.map(row).join('');
@@ -801,12 +803,13 @@
         const closed = T.collapsed !== T.toggled.has(g.key), [big, name, small] = g.head;
         const nSt = new Set(g.rs.map((r) => r.store)).size, nArt = new Set(g.rs.map((r) => r.art)).size;
         const counts = [T.group === 'store' ? '' : `${nSt} ${plural(nSt, 'store')}`, T.group === 'article' ? '' : `${nArt} ${plural(nArt, 'article')}`].filter(Boolean).join(' &middot; ');
-        body += `<tr class="stg ${closed ? 'closed' : ''}" data-act="stToggle" data-key="${esc(g.key)}" title="${closed ? 'Show' : 'Hide'} the lines under this heading"><td colspan="4"><span class="chev">${closed ? '&#9656;' : '&#9662;'}</span> <b>${esc(big)}</b>${name ? ` <span class="sname">${esc(name)}</span>` : ''}${small ? ` <span class="small muted">${esc(small)}</span>` : ''} <span class="small muted">&middot; ${counts}</span></td>${nums(g)}<td></td></tr>`;
+        body += `<tr class="stg ${closed ? 'closed' : ''}" data-act="stToggle" data-key="${esc(g.key)}" title="${closed ? 'Show' : 'Hide'} the lines under this heading"><td colspan="3" class="glabel"><span class="chev">${closed ? '&#9656;' : '&#9662;'}</span> <b>${esc(big)}</b>${name ? ` <span class="sname">${esc(name)}</span>` : ''}${small ? ` <span class="small muted">${esc(small)}</span>` : ''} <span class="small muted">&middot; ${counts}</span></td>${nums(g)}</tr>`;
         if (!closed) { body += g.rs.map(row).join(''); shown += g.rs.length; }
       }
     }
-    return `<div class="tablewrap"><table class="tight sttable"><thead><tr><th>Store</th><th>MC</th><th>Article</th><th class="right">MRP</th><th class="right">Approved<br>order qty</th><th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th><th class="right">Sold<br>(MTD sale / approved)</th><th></th></tr></thead><tbody>
-      <tr class="tot"><td colspan="4"><b>Total</b> <span class="small">${inr(rows.length)} store-article ${plural(rows.length, 'line')}, ${inr(new Set(rows.map((r) => r.store)).size)} stores</span></td>${nums(tot)}<td></td></tr>${body}</tbody></table></div>
+    return `<div class="tablewrap fitwrap"><table class="tight sttable fitcols resp"><colgroup><col class="c-store"><col class="c-art"><col class="c-mrp"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-sold"></colgroup>
+      <thead><tr><th>Store</th><th>Article <span class="thsub">&middot; MC</span></th><th class="right">MRP</th><th class="right">Approved<br>order qty</th><th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th><th class="right">Sold<br><span class="thsub">MTD &divide; approved</span></th></tr></thead><tbody>
+      <tr class="tot"><td colspan="3" class="glabel"><b>Total</b> <span class="small">${inr(rows.length)} store-article ${plural(rows.length, 'line')}, ${inr(new Set(rows.map((r) => r.store)).size)} stores</span></td>${nums(tot)}</tr>${body}</tbody></table></div>
       ${hidden ? `<div class="row" style="margin-top:8px"><span class="small grow">${inr(hidden)} more ${plural(hidden, 'line')} not shown.</span><button class="btn sm" data-act="stMore">Show more</button></div>` : ''}`;
   }
   function vSellThrough() {
@@ -860,8 +863,8 @@
   /* ================= Store stock (search) =================
      Every store + article in the latest store stock report, and every store + article with an order: closing stock, in transit,
      MTD sale, qty ordered (raised by the store) and qty approved. Searched and summed on the server, as the report is large. */
-  const SK_GROUPS = { rows: 'No grouping (store + article)', store: 'Store', state: 'State', mc: 'MC', mc_mrp: 'MC, then MRP', article: 'Article' };
-  const SK_SORTS = { stock: 'Stock at store (most first)', sale: 'MTD sale (most first)', ordered: 'Qty ordered (most first)', approved: 'Qty approved (most first)',
+  const SK_GROUPS = { rows: 'None (store + article)', store: 'Store', state: 'State', mc: 'MC', mc_mrp: 'MC, then MRP', article: 'Article' };
+  const SK_SORTS = { stock: 'Stock (most first)', sale: 'MTD sale (most first)', ordered: 'Ordered (most first)', approved: 'Approved (most first)',
     mrp: 'MRP (high to low)', store: 'Store code', article: 'Article code', mc: 'MC name' };
   const SK_ONLY = { orders: 'Ordered by the store', orders_nostock: 'Ordered, no stock at the store', stock: 'Has stock at the store', sale: 'Has MTD sale' };
   const SK_BLANK = { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '' };
@@ -916,31 +919,32 @@
     if (T.err) return `<div class="card note bad">${esc(T.err)}</div>`;
     if (!r) return '<div class="card empty">Searching ...</div>';
     if (!r.rows.length) return `<div class="empty card">${skActive().length ? 'Nothing matches these filters. <button class="btn sm" data-act="skClearAll">Clear all filters</button>' : 'The store stock report has no rows.'}</div>`;
-    const nums = (x) => `<td class="right">${inr(x.closing)}</td><td class="right">${inr(x.transit)}</td><td class="right b big">${inr(x.closing + x.transit)}</td><td class="right b big">${inr(x.mtd)}</td>
-      <td class="right">${x.ordered ? `<b>${inr(x.ordered)}</b>${T.group === 'rows' && x.lines > 1 ? `<div class="small muted">${x.lines} lines</div>` : ''}` : '<span class="muted">-</span>'}</td><td class="right">${x.approved ? `<b class="good">${inr(x.approved)}</b>` : '<span class="muted">-</span>'}</td>`;
+    const nums = (x) => `<td class="right" data-l="Closing">${inr(x.closing)}</td><td class="right" data-l="In transit">${inr(x.transit)}</td><td class="right b big" data-l="At store">${inr(x.closing + x.transit)}</td><td class="right b big" data-l="MTD sale">${inr(x.mtd)}</td>
+      <td class="right" data-l="Ordered">${x.ordered ? `<b>${inr(x.ordered)}</b>${T.group === 'rows' && x.lines > 1 ? `<div class="small muted">${x.lines} lines</div>` : ''}` : '<span class="muted">-</span>'}</td><td class="right" data-l="Approved">${x.approved ? `<b class="good">${inr(x.approved)}</b>` : '<span class="muted">-</span>'}</td>`;
     const numHead = '<th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">Total at<br>store</th><th class="right">MTD<br>sale</th><th class="right">Qty<br>ordered</th><th class="right">Qty<br>approved</th>';
-    const store = (x) => `<b>${esc(x.s)}</b> <span class="small">${esc(x.sname || '')}</span>${x.state ? `<div class="small muted">${esc(x.state)}</div>` : ''}`;
-    const art = (x) => `<b class="nowrap pick" data-act="art" data-code="${esc(x.a)}">${esc(x.a)}</b><div class="small">${esc(x.descr || '')}</div>`;
+    const numCols = '<col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n">';
     const mrp = (x) => (x.mrp == null ? '-' : inr2(x.mrp)), cnt = (n, w) => `${inr(n)} ${plural(n, w)}`;
-    let head, body;
+    let head, body, cols, lead;
     if (T.group === 'rows') {
-      head = `<th>Store</th><th>MC</th><th>Article</th><th class="right">MRP</th>${numHead}`;
-      body = r.rows.map((x) => `<tr><td>${store(x)}</td><td class="small">${esc(x.mc || '')}</td><td class="artcell">${art(x)}</td><td class="right">${mrp(x)}</td>${nums(x)}</tr>`).join('');
+      cols = `<col class="c-store"><col class="c-art"><col class="c-mrp">${numCols}`; lead = 3;
+      head = `<th>Store</th><th>Article <span class="thsub">&middot; MC</span></th><th class="right">MRP</th>${numHead}`;
+      body = r.rows.map((x) => `<tr><td class="stcell">${storeCellHtml(x.s, x.sname, x.state)}</td><td class="artcell">${artCellHtml(x.a, x.descr, x.mc)}</td><td class="right" data-l="MRP">${mrp(x)}</td>${nums(x)}</tr>`).join('');
     } else {
       const lab = {
-        store: (x) => [store(x), cnt(x.articles, 'article')],
-        state: (x) => [`<b>${esc(x.key || '(state not on file)')}</b>`, cnt(x.stores, 'store') + ' &middot; ' + cnt(x.articles, 'article')],
-        mc: (x) => [`<b>${esc(x.key || '(MC not given)')}</b>`, cnt(x.stores, 'store') + ' &middot; ' + cnt(x.articles, 'article')],
-        mc_mrp: (x) => [`<b>${esc((x.mc || '(MC not given)').toUpperCase())}</b> <span class="small">MRP ${mrp(x)}</span>`, cnt(x.stores, 'store') + ' &middot; ' + cnt(x.articles, 'article')],
-        article: (x) => [`${art(x)}<div class="small muted">${esc(x.mc || '')}${x.mrp != null ? ' &middot; MRP ' + inr2(x.mrp) : ''}</div>`, cnt(x.stores, 'store')]
+        store: (x) => [storeCellHtml(x.s, x.sname, x.state), cnt(x.articles, 'article')],
+        state: (x) => [`<b>${esc(x.key || '(state not on file)')}</b>`, cnt(x.stores, 'store') + '<br>' + cnt(x.articles, 'article')],
+        mc: (x) => [`<b>${esc(x.key || '(MC not given)')}</b>`, cnt(x.stores, 'store') + '<br>' + cnt(x.articles, 'article')],
+        mc_mrp: (x) => [`<b>${esc((x.mc || '(MC not given)').toUpperCase())}</b> <span class="small">MRP ${mrp(x)}</span>`, cnt(x.stores, 'store') + '<br>' + cnt(x.articles, 'article')],
+        article: (x) => [`${artCellHtml(x.a, x.descr, x.mc)}${x.mrp != null ? `<div class="small muted">MRP ${inr2(x.mrp)}</div>` : ''}`, cnt(x.stores, 'store')]
       }[T.group];
+      cols = `<col class="c-glabel"><col class="c-spread">${numCols}`; lead = 2;
       head = `<th>${esc(SK_GROUPS[T.group])}</th><th class="right">Spread</th>${numHead}`;
       body = r.rows.map((x) => { const [a, b] = lab(x);
-        return `<tr class="skg pick" data-act="skDrill" data-key="${esc(x.key)}" data-mrp="${x.mrp == null ? '' : x.mrp}" title="Show the stores and articles under this"><td class="artcell">${a}</td><td class="right small">${b}</td>${nums(x)}</tr>`; }).join('');
+        return `<tr class="skg pick" data-act="skDrill" data-key="${esc(x.key)}" data-mrp="${x.mrp == null ? '' : x.mrp}" title="Show the stores and articles under this"><td class="artcell glabel">${a}</td><td class="right small" data-l="Spread">${b}</td>${nums(x)}</tr>`; }).join('');
     }
-    const t = r.total, cols = T.group === 'rows' ? 4 : 2;
-    return `<div class="tablewrap"><table class="tight sktable"><thead><tr>${head}</tr></thead><tbody>
-      <tr class="tot"><td colspan="${cols}"><b>Total</b> <span class="small">${cnt(t.n, 'store-article line')}, ${cnt(t.stores, 'store')}, ${cnt(t.articles, 'article')}${T.group !== 'rows' ? ', ' + cnt(r.groups, 'group') : ''}</span></td>${nums(Object.assign({ lines: 0 }, t, { transit: t.transit }))}</tr>${body}</tbody></table></div>
+    const t = r.total;
+    return `<div class="tablewrap fitwrap"><table class="tight sktable fitcols resp"><colgroup>${cols}</colgroup><thead><tr>${head}</tr></thead><tbody>
+      <tr class="tot"><td colspan="${lead}" class="glabel"><b>Total</b> <span class="small">${cnt(t.n, 'store-article line')}, ${cnt(t.stores, 'store')}, ${cnt(t.articles, 'article')}${T.group !== 'rows' ? ', ' + cnt(r.groups, 'group') : ''}</span></td>${nums(Object.assign({ lines: 0 }, t))}</tr>${body}</tbody></table></div>
       ${r.more ? `<div class="row" style="margin-top:8px"><span class="small grow">Showing the first ${inr(r.rows.length)} of ${inr(r.groups)}.</span><button class="btn sm" data-act="skMore">Show more</button></div>` : ''}`;
   }
   function vStoreStock() {
@@ -960,7 +964,7 @@
         <input type="search" id="skstore" list="skstores" placeholder="Store code" value="${esc(T.store)}" aria-label="Store code" title="Type a store code, then press Enter">
         <select id="skstate" aria-label="State">${opt('', 'All states', T.state)}${(T.state && !states.includes(T.state) ? states.concat([T.state]) : states).map((s) => opt(s, s, T.state)).join('')}</select>
         <input type="search" id="skmc" list="skmcs" placeholder="MC name" value="${esc(T.mc)}" aria-label="MC name" title="Pick or type an MC name">
-        <span class="row mrprange"><input type="number" id="skmrpmin" min="0" step="1" inputmode="numeric" placeholder="MRP from" value="${esc(T.mrp_min)}" aria-label="MRP from"><input type="number" id="skmrpmax" min="0" step="1" inputmode="numeric" placeholder="MRP to" value="${esc(T.mrp_max)}" aria-label="MRP to"></span>
+        <span class="row mrprange"><input type="number" id="skmrpmin" min="0" step="1" inputmode="numeric" placeholder="MRP &ge;" title="MRP from" value="${esc(T.mrp_min)}" aria-label="MRP from"><input type="number" id="skmrpmax" min="0" step="1" inputmode="numeric" placeholder="MRP &le;" title="MRP up to" value="${esc(T.mrp_max)}" aria-label="MRP to"></span>
       </div>
       <datalist id="skstores">${Object.values(M.stores).map((s) => `<option value="${esc(s.store_code)}">${esc(s.store_name || '')}</option>`).join('')}</datalist>
       <datalist id="skmcs">${skMcOptions()}</datalist>
