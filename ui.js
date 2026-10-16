@@ -23,7 +23,7 @@
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 18;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 19;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1557,6 +1557,9 @@
     l.ss.alts.forEach((x) => L.push(`${x.code} ${(S.M.articles[x.code] || {}).description || ''}: ${x.total} (closing ${x.closing}, in transit ${x.transit}), MTD sale ${x.mtd}`));
     return L.join('\n');
   }
+  /* the store's remark on the article (from "Article Remarks" in the orders file): a one-liner on the line when there is one */
+  const remOn = () => !!S.M && S.M.schema >= 19;
+  const remLine = (l) => (l.art_remarks ? `<div class="aremark" title="${esc('Remark from the store: ' + l.art_remarks)}"><span>Store remark:</span> ${esc(l.art_remarks)}</div>` : '');
   const lineTags = (l) => [dupBadge(l), l.orig_article ? `<span class="badge alt" title="${esc('The store ordered ' + l.orig_article + ' ' + l.orig_desc)}">In place of ${esc(l.orig_article)}</span>` : '',
     l.art_status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '',
     l.late ? '<span class="badge bad" title="The allocate-by date has passed">Late</span>' : l.tight ? '<span class="badge warn">Allocate now</span>' : '',
@@ -1573,7 +1576,7 @@
     const meta = [c.mcIn ? esc(l.mc_name || '') : '', c.mrpIn ? 'MRP ' + inr(l.mrp) : ''].filter(Boolean).join(' &middot; ');
     const cells = (c.chk ? `<td class="chk"><input type="checkbox" data-act="chk" data-id="${l.id}" ${o.checked.has(l.id) ? 'checked' : ''} aria-label="Tick this line"></td>` : '') +
       (c.so ? `<td class="so"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}<div class="ordno">${esc(ref(l))}</div>${dates}</td>` : '') +
-      (c.art ? `<td class="art ${l.dup_count > 0 ? 'dup' : ''}"><div class="acode">${esc(l.article_code)}</div><div class="adesc">${esc(l.description || '(article details not on file)')}</div>${meta ? `<div class="ameta">${meta}</div>` : ''}${tags ? `<div class="atags">${tags}</div>` : ''}</td>` : '') +
+      (c.art ? `<td class="art ${l.dup_count > 0 ? 'dup' : ''}"><div class="acode">${esc(l.article_code)}</div><div class="adesc">${esc(l.description || '(article details not on file)')}</div>${meta ? `<div class="ameta">${meta}</div>` : ''}${tags ? `<div class="atags">${tags}</div>` : ''}${remLine(l)}</td>` : '') +
       (c.so ? '' : `<td class="dates">${dates}${c.art || !tags ? '' : `<div class="atags">${tags}</div>`}</td>`) +
       `<td class="big right"><b>${inr(l.req_qty)}</b>${l.pack > 1 ? `<div class="small">packs of ${l.pack}</div>` : ''}</td>` +
       (view === 'approved' && l.appr_price != null
@@ -1603,7 +1606,7 @@
     const free = C.freeOf(S.M, l.article_code), short = l.balance > 0 && free < l.balance, note = noteOf(l), tags = lineTags(l);
     return `<div class="ocard ${S.o.sel === l.id ? 'sel' : ''}" data-act="sel" data-id="${l.id}">${thumb(l.article_code, 's')}
       <div class="grow"><div class="row"><span class="mcname grow">${esc(l.mc_name || '-')}</span>${pill(l.status)}</div>
-      <div><b>${esc(l.description || '(article details not on file)')}</b> <span class="muted">${esc(l.article_code)}</span> ${tags}</div>
+      <div><b>${esc(l.description || '(article details not on file)')}</b> <span class="muted">${esc(l.article_code)}</span> ${tags}</div>${remLine(l)}
       <div class="small"><b>${esc(l.store_code)}</b> ${esc(l.store_name)} &middot; ${esc(ref(l))} &middot; booked ${when(l.order_date)}${l.del_date ? ` &middot; <span class="${l.late ? 'bad' : l.tight ? 'warn' : ''}">delivery ${when(l.del_date)}</span>` : ''}</div>
       <div class="nums"><span>MRP <b>${inr(l.mrp)}</b></span><span>Price wanted <b>${inr(l.req_price)}</b>${l.discount > 0.0005 ? ` <span class="warn">-${pct(l.discount)}</span>` : ''}</span><span>Qty wanted <b>${inr(l.req_qty)}</b></span>
         <span>Approved <b class="${l.approved ? 'good' : ''}">${l.approved ? inr(l.approved) : '-'}</b></span>${view === 'approved' ? '' : `<span>Balance DC qty <b class="${short ? 'bad' : ''}">${inr(free)}</b></span>`}</div>
@@ -1758,6 +1761,7 @@
       <div class="row"><h2 class="grow">Order ${esc(ref(l))}</h2>${pill(l.status)}</div>
       <div class="small"><b>${esc(l.store_code)} ${esc(l.store_name)}</b>${l.city ? ', ' + esc(l.city) : ''}${l.state ? ', ' + esc(l.state) : ''}${l.customer ? ' &nbsp;|&nbsp; ' + esc(l.customer) : ''} &nbsp;|&nbsp; booked ${when(l.order_date)}</div>
       ${contact ? `<div class="small">Booked by: ${contact}</div>` : ''}
+      ${remOn() ? `<div class="storerem ${l.art_remarks ? 'has' : ''}">${l.art_remarks ? `<b>Store remark:</b> ${esc(l.art_remarks)}` : 'No remarks from the store.'}</div>` : ''}
       <div class="row top">${thumb(l.article_code, 'l', true)}<div class="grow"><h2>${esc(l.description || '(article details not on file)')}</h2>
         <div class="small">${esc(l.article_code)} &nbsp;|&nbsp; MC ${esc([l.mc_code, l.mc_name].filter(Boolean).join(' ') || '-')}${l.buyer ? ' &nbsp;|&nbsp; ' + esc(l.buyer) : ''}${l.category ? ' &nbsp;|&nbsp; ' + esc(l.category) : ''}</div>
         <div class="small">Pack of ${pack}${a.vendor_name ? ' &nbsp;|&nbsp; ' + esc(a.vendor_name) : ''}</div>${badges ? `<div style="margin-top:4px">${badges}</div>` : ''}</div></div>
@@ -2315,16 +2319,18 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
       } else if (kind === 'orders') {
         const shaped = C.shape.orders(rows), parts = chunks(shaped, 1000);
         if (!shaped.length) throw new Error('No order lines were found in this file.');
-        let added = 0, skipped = 0, flagged = 0, noPrice = 0, gone = 0, notes = [];
+        let added = 0, skipped = 0, flagged = 0, noPrice = 0, gone = 0, remChanged = 0, notes = [];
+        const remCol = rows.fields.includes('art_remarks'), withRem = shaped.filter((o) => o.art_remarks).length;
         for (let i = 0; i < parts.length; i++) {
           prog.set(`Checking ${inr(Math.min((i + 1) * 1000, shaped.length))} of ${inr(shaped.length)} order lines ...`);
           const r = await A.rpc('import_orders', { p_rows: parts[i], p_file: file.name, p_log: false });
-          added += r.added; skipped += r.skipped; flagged += r.flagged; noPrice += r.no_price || 0; gone += r.deleted || 0; notes = notes.concat(r.notes || []);
+          added += r.added; skipped += r.skipped; flagged += r.flagged; noPrice += r.no_price || 0; gone += r.deleted || 0; remChanged += r.remarks || 0; notes = notes.concat(r.notes || []);
         }
         await A.rpc('log_import', { p_detail: `Orders '${file.name}': added ${added}, already here ${skipped}, quantity changed in SAP ${flagged}` + (shaped.extraRows ? `, duplicate article in order ${Array.from(new Set(shaped.filter((o) => o.dups).map((o) => o.order_no))).join(', ')}` : '') });
         const dupOrders = Array.from(new Set(shaped.filter((o) => o.dups).map((o) => o.order_no)));
         msg = `${where}Rows in the file: ${inr(shaped.length + shaped.extraRows)}\nNew order lines added: ${inr(added)}\nAlready in the tracker (skipped): ${inr(skipped)}\nQuantity changed in SAP (flagged for review): ${inr(flagged)}` +
-          (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') + (gone ? `\nDeleted by you earlier (not added again): ${inr(gone)}` : '') +
+          (noPrice ? `\nNew lines without a price (MRP used): ${inr(noPrice)}` : '') +
+          (remCol && remOn() ? `\nLines with a store remark (Article Remarks): ${inr(withRem)}${remChanged ? `; remark new or changed on ${inr(remChanged)} ${plural(remChanged, 'line')} already in the tracker` : ''}` : '') + (gone ? `\nDeleted by you earlier (not added again): ${inr(gone)}` : '') +
           (dupOrders.length ? `\n\nDUPLICATE ARTICLE in ${dupOrders.length} ${plural(dupOrders.length, 'order')}: ${dupOrders.join(', ')}\nThe same article is entered more than once in the order. Each is taken once${S.M.schema >= 3 ? ' and marked on the Orders screen (filter: "Duplicate article in the order")' : ''}:` + firstFew(shaped.repeats, 15).replace(/^\n\n/, '\n') +
             (S.M.schema >= 3 ? '' : '\n(To keep these marked on the Orders screen, run the newest supabase-setup.sql once in Supabase. Your data stays as it is.)') : '') + firstFew(Array.from(new Set(notes)), 12);
       } else if (kind === 'sapappr') {
@@ -2610,7 +2616,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'Total DC Qty (stock report + inwards)', 'of which inwards since the report', 'Balance DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending PO', 'Store Closing Stock', 'Store In Transit (incl. CLA)', 'Store Total Stock', 'Store MTD Sale', 'Store Stock in Alternates', 'Alternates Held by Store',
       'SAP Approval Status', 'SAP Qty Allocated', 'SAP Price Given', 'SAP Approved By', 'SAP Approval Date', 'SAP PO', 'SAP Remarks', 'Differs From SAP',
-      'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File']);
+      'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File', 'Store Remark (Article Remarks)']);
   function orderRow(l, ex, byLine) {
     const M = S.M, mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), p = M.pos[l.article_code] || NOPOS, a = M.articles[l.article_code] || {};
     return [C.STATUS_LABEL[l.status], l.store_code, l.store_name, l.order_no, l.mc_code, l.mc_name, l.article_code, l.description, +l.mrp, l.req_qty, l.order_date, l.del_date || '', +l.req_price,
@@ -2621,7 +2627,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0),
       l.ss ? l.ss.own.closing : '', l.ss ? l.ss.own.transit : '', l.ss ? l.ss.own.total : '', l.ss ? l.ss.own.mtd : '', l.ss ? l.ss.altTotal : '', l.ss ? l.ss.alts.filter((x) => x.total > 0).map((x) => `${x.code} (${x.total})`).join(', ') : '',
       ...(() => { const x = l.sap_appr || {}; return [x.label || '', x.qty || '', x.price || '', x.by || '', x.at ? when(x.at) : '', x.po || '', x.remarks || '', x.conflict || '']; })(),
-      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file]);
+      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file, l.art_remarks || '']);
   }
   const STOCK_HEAD = ['MC Name', 'MRP', 'Article', 'Description', 'Buyer', 'Same design group', 'Same price group', 'Pack', 'Stock report qty (Total MSA)', 'Inwards since the report', 'Total DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => t + ' (report + inwards)'), ['Allocated to orders', 'Balance DC Qty'], C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO', 'Balance in same design', 'Balance in other designs', 'Expected Qty', 'Next Arrival', 'Expected deliveries']);

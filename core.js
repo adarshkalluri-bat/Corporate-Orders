@@ -240,6 +240,7 @@
     phone: ['ph no.', 'ph no', 'phone', 'phone no', 'mobile', 'mobile no', 'contact no', 'contact number'],
     poc_name: ['booked by', 'poc name', 'contact person', 'contact name', 'store poc'],
     req_price: ['price wanted', 'required price', 'requested price', 'price required', 'offer price', 'order price', 'net price', 'selling price', 'rate', 'price'],
+    art_remarks: ['article remarks', 'article remark', 'art remarks', 'artremarks', 'store remarks', 'storeremarks', 'store remark', 'item remarks'],
     req_qty: ['quantity wanted', 'qty wanted', 'order qty', 'order quantity', 'required qty', 'required quantity', 'req qty', 'qty required', 'quantity', 'qty'],
     // articles
     article_code: ['material', 'art code', 'article code', 'article', 'article no', 'article number', 'material number', 'sku', 'artcode'],
@@ -323,7 +324,7 @@
     data: { required: ['article_code', 'mrp'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'status', 'bogo_count', 'ppo_cm', 'ppo_nm', 'store_stock', 'intransit'] },
     stores: { required: ['store_code'], optional: ['store_name', 'city', 'state', 'email', 'lead_time', 'dc'], need: ['store_name', 'email', 'lead_time'] },
     stock: { required: ['article_code', 'total'], optional: ['site_code', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'] },
-    orders: { required: ['order_no', 'store_code', 'article_code', 'req_qty'], optional: ['line_no', 'order_date', 'del_date', 'customer', 'phone', 'poc_name', 'description', 'mc_name', 'mrp', 'req_price', 'pack_size', 'store_name'] },
+    orders: { required: ['order_no', 'store_code', 'article_code', 'req_qty'], optional: ['line_no', 'order_date', 'del_date', 'customer', 'phone', 'poc_name', 'description', 'mc_name', 'mrp', 'req_price', 'pack_size', 'store_name', 'art_remarks'] },
     /* Inwards: either one row per receipt (article, quantity, and if the file has them: GRN number, date, time, storage location, DC),
        or the layout of the DC stock report with the received quantity under each location. */
     inward: { required: ['article_code'], optional: ['in_qty', 'doc_no', 'in_date', 'in_time', 'sloc', 'site_code', 'description', 'mc_name', 'mvt', 'total', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'],
@@ -468,7 +469,7 @@
        line item. The same article entered again in the same order is a mistake at the store:
        the line is taken once and marked (dups = times entered, dup_qty = the quantities). */
     orders: (rows) => {
-      const seen = new Map(), out = [];
+      const seen = new Map(), out = [], hasRem = (rows.fields || []).includes('art_remarks');
       let extra = 0;
       for (const r of rows) {
         const o = {
@@ -478,6 +479,7 @@
           mc_name: txt(r.mc_name), mrp: numOrNull(r.mrp), req_price: numOrNull(r.req_price), pack_size: int(r.pack_size),
           req_qty: Math.round(num(r.req_qty)), dups: 0, dup_qty: ''
         };
+        if (hasRem) o.art_remarks = txt(r.art_remarks).replace(/\s+/g, ' ').slice(0, 500);      // '' = the file has the column, no remark on this line
         if (!o.order_no || !o.article_code || !/\d/.test(o.article_code)) continue;
         const key = o.order_no + '|' + (o.line_no || o.article_code), first = seen.get(key);
         if (first) { first.qtys.push(o.req_qty); extra++; continue; }       // same article again in the same order: taken once, marked
@@ -644,7 +646,7 @@
       ['Site', 'Yes', 'Store (site) code', 'VM101'], ['Name', '', 'Store name', 'Gurugram Sector 14'], ['OrderNo', 'Yes', 'Order number', 'TW26000121'], ['MerchandiseCategory', '', 'For reference only (the MC code is taken from the article files)', 'TH101'],
       ['MC Desc', '', 'MC name', 'Casserole'], ['ArticleCode', 'Yes', 'Article code', '1005107'], ['ArticleDesc', '', 'Article description', 'Casserole 1500ml Red'], ['MRP', '', 'MRP', 499],
       ['Quantity Wanted', 'Yes', 'Pieces the store wants', 500], ['Book Date', '', 'Booking date (DD.MM.YYYY)', '05.10.2026'], ['DeliveryDate', '', 'Delivery date wanted (DD.MM.YYYY)', '14.10.2026'],
-      ['Price Wanted', '', 'Price per piece the store asks for (blank or 0 = MRP)', 439], ['Pak Size', '', 'Pieces in one pack', 12], ['Contact Number', '', 'Mobile number of the person who booked', '9000000201'],
+      ['Price Wanted', '', 'Price per piece the store asks for (blank or 0 = MRP)', 439], ['Pak Size', '', 'Pieces in one pack', 12], ['Article Remarks', '', 'Remark from the store on this article (optional)', 'Need by 20 Oct, gift packing'], ['Contact Number', '', 'Mobile number of the person who booked', '9000000201'],
       ['Booked By', '', 'Name of the person who booked', 'Test Contact F']] }
   };
 

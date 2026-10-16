@@ -427,3 +427,7 @@ table.fitcols td.sold .stbar { width: 40px; margin-right: 5px; } table.fitcols t
   table.resp tr.stg { background: #F3EEFF; border-color: #D9CCFB; }
   table.sktable.resp tr { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 8px; } table.sktable.resp td[data-l]::before { font-size: 10px; letter-spacing: 0; }
 }
+/* the store's remark on an article: a one-liner under the article */
+.aremark { margin-top: 3px; font-size: 12px; color: #7A4A00; background: #FFF6DB; border: 1px solid #FFE3A0; border-radius: 6px; padding: 1px 6px; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+.aremark span { font-weight: 700; }
+.storerem { font-size: 13px; color: var(--muted); } .storerem.has { color: #7A4A00; background: #FFF6DB; border: 1px solid #FFE3A0; border-radius: 8px; padding: 6px 10px; }
