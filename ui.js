@@ -1300,7 +1300,7 @@
     return [disc[0], disc[1], notes.join('; ')];
   }
   const qmCell = (r, id) => { const [c, t, n] = qmText(r);
-    return `<button class="qmcell ${c}" data-act="qmOpen" data-id="${id}" title="See the order(s) behind it${editor() ? ', or set it by hand' : ''}"><b>${esc(t)}</b>${n ? `<span>${esc(n)}</span>` : ''}${r && r.manual ? '<i>set by hand</i>' : ''}</button>`; };
+    return `<button class="qmcell ${c}" data-act="qmOpen" data-id="${id}" title="See the order(s) behind it${editor() ? ', or set it by hand' : ''}"><b>${esc(t)}</b>${n ? `<span>${esc(n)}</span>` : ''}</button>`; };
   const QM_FILTERS = { notyet: ['Not received yet / not received', (r) => r && (r.state === 'waiting' || r.state === 'not_received')], not_received: ['Not received (5 days passed)', (r) => r && r.state === 'not_received'],
     agreed: ['Received as agreed', (r) => r && r.state === 'received' && r.discFlag === 'agreed' && r.qtyFlag === 'agreed'], more: ['Received with more discount', (r) => r && r.state === 'received' && r.discFlag === 'more'],
     qty: ['Received, qty differs', (r) => r && r.state === 'received' && r.qtyFlag !== 'agreed'], alt: ['Received as another article', (r) => r && r.state === 'received' && r.kind !== 'exact'],
@@ -1381,27 +1381,25 @@
     if (!rows.length) return `<div class="empty card">${Q.list.length ? 'No query matches the search.' : 'No query logged yet.'}</div>`;
     const tv = rows.reduce((t, r) => t + Number(r.value || 0), 0), tq = rows.reduce((t, r) => t + (r.qty || 0), 0);
     const shown = rows.slice(0, 500), seen = new Set(), html = [];
-    const one = (r, child) => `<tr class="${r.id === Q.last || (r.grp && r.grp === Q.last) ? 'new' : ''} ${child ? 'qchild' : ''}"><td class="nowrap">${child ? '<span class="muted">&#8627;</span>' : `${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div>`}</td>
-        <td>${child ? '' : `<b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div>`}</td>
+    const one = (r, child) => `<tr class="${r.id === Q.last || (r.grp && r.grp === Q.last) ? 'new' : ''} ${child ? 'qchild' : ''}"><td class="qlog ${child ? 'qsub' : ''}">${child ? '<span class="muted">&#8627;</span>' : `${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div>`}</td>
+        <td class="qstore ${child ? 'qsub' : ''}">${child ? '' : `<b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div>`}</td>
         <td class="artcell"><b class="nowrap">${esc(r.article_code)}</b><div class="small">${esc(r.description || '')}</div><div class="small muted">${esc(r.mc_name || '')}</div></td>
-        <td class="right">${r.mrp == null ? '-' : inr2(Number(r.mrp))}</td><td class="right">${r.discount == null ? '-' : (Number(r.discount) * 100).toFixed(2) + '%'}</td>
-        <td class="right b">${inr2(Number(r.price))}</td><td class="right b">${inr(r.qty)}</td><td class="right b">${inr2(Number(r.value))}</td>
-        ${qmOn() ? `<td class="qmtd">${qmCell(qmOf(r), r.id)}</td>` : ''}<td class="w small">${child ? '' : esc(r.remarks || '')}</td><td>${!child && (r.mine || ed) ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query">Remove</button>` : ''}</td></tr>`;
+        <td class="right qprice" data-l="Final price"><b>${inr2(Number(r.price))}</b><div class="small">${r.discount == null ? '' : (Number(r.discount) * 100).toFixed(2) + '% off'}</div><div class="small muted">MRP ${r.mrp == null ? '-' : inr2(Number(r.mrp))}</div></td><td class="right b" data-l="Qty">${inr(r.qty)}</td><td class="right b" data-l="Order value">${inr2(Number(r.value))}</td>
+        ${qmOn() ? `<td class="qmtd">${qmCell(qmOf(r), r.id)}</td>` : ''}<td class="small qrem ${child || !r.remarks ? 'qsub' : ''}" data-l="Remarks">${child ? '' : esc(r.remarks || '')}</td><td class="qact">${!child && (r.mine || ed) ? `<button class="btn sm ghost qdel" data-act="qDel" data-id="${r.id}" title="Remove this query" aria-label="Remove this query">&#10005;</button>` : ''}</td></tr>`;
     for (const r of shown) {
       if (r.grp == null) { html.push(one(r)); continue; }
       if (seen.has(r.grp)) continue;
       seen.add(r.grp);
       const g = rows.filter((x) => x.grp === r.grp), val = g.reduce((t, x) => t + Number(x.value || 0), 0), q = g.reduce((t, x) => t + (x.qty || 0), 0), atMrp = g.reduce((t, x) => t + (x.mrp == null ? Number(x.price) : Number(x.mrp)) * x.qty, 0);
-      html.push(`<tr class="qgrp ${r.grp === Q.last ? 'new' : ''}"><td class="nowrap">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div></td>
-        <td><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
-        <td><b>Query of ${g.length} articles</b><div class="small muted">${esc(Array.from(new Set(g.map((x) => x.mc_name).filter(Boolean))).join(', '))}</div></td><td class="right">-</td>
-        <td class="right">${atMrp ? (Math.max(0, 1 - val / atMrp) * 100).toFixed(2) + '%' : '-'}</td><td class="right">-</td><td class="right b">${inr(q)}</td><td class="right b">${inr2(val)}</td>
-        ${qmOn() ? `<td class="small">${(() => { const ms = g.map(qmOf).filter((x) => x && x.state !== 'replaced'), n = ms.filter((x) => x.state === 'received').length; return `<b>${n} of ${ms.length} received</b>`; })()}</td>` : ''}<td class="w small">${esc(r.remarks || '')}</td><td>${r.mine || ed ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)">Remove</button>` : ''}</td></tr>`);
+      html.push(`<tr class="qgrp ${r.grp === Q.last ? 'new' : ''}"><td class="qlog">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div></td>
+        <td class="qstore"><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
+        <td class="artcell"><b>Query of ${g.length} articles</b><div class="small muted">${esc(Array.from(new Set(g.map((x) => x.mc_name).filter(Boolean))).join(', '))}</div></td><td class="right qprice" data-l="Discount"><div class="small">${atMrp ? (Math.max(0, 1 - val / atMrp) * 100).toFixed(2) + '% off' : ''}</div><div class="small muted">overall</div></td><td class="right b" data-l="Qty">${inr(q)}</td><td class="right b" data-l="Order value">${inr2(val)}</td>
+        ${qmOn() ? `<td class="small qmtd">${(() => { const ms = g.map(qmOf).filter((x) => x && x.state !== 'replaced'), n = ms.filter((x) => x.state === 'received').length; return `<b>${n} of ${ms.length} received</b>`; })()}</td>` : ''}<td class="small qrem ${r.remarks ? '' : 'qsub'}" data-l="Remarks">${esc(r.remarks || '')}</td><td class="qact">${r.mine || ed ? `<button class="btn sm ghost qdel" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)" aria-label="Remove this query">&#10005;</button>` : ''}</td></tr>`);
       g.forEach((x) => html.push(one(x, true)));
     }
     const nq = (L) => L.filter((x) => x.grp == null).length + new Set(L.filter((x) => x.grp != null).map((x) => x.grp)).size;
     return `<div class="small" style="margin-bottom:6px">${inr(nq(rows))} ${plural(nq(rows), 'query', 'queries')}${rows.length < Q.list.length ? ` of ${inr(nq(Q.list))}` : ''} &middot; ${inr(tq)} pcs &middot; order value <b>Rs ${inr(Math.round(tv))}</b></div>
-      <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th>${qmOn() ? '<th>Order received?</th>' : ''}<th>Remarks</th><th></th></tr></thead><tbody>
+      <div class="tablewrap fitwrap"><table class="tight qtable fitcols resp"><colgroup><col class="c-qlog"><col class="c-qstore"><col><col class="c-qprice"><col class="c-qty"><col class="c-val">${qmOn() ? '<col class="c-qm">' : ''}<col class="c-qrem"><col class="c-qact"></colgroup><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">Final price<br><span class="thsub">discount, MRP</span></th><th class="right">Qty</th><th class="right">Order value</th>${qmOn() ? '<th>Order received?</th>' : ''}<th>Remarks</th><th></th></tr></thead><tbody>
       ${html.join('')}</tbody></table></div>
       ${rows.length > shown.length ? `<p class="small">Showing the newest 500; Export to Excel has all ${inr(rows.length)}.</p>` : ''}`;
   }
