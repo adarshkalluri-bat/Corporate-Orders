@@ -650,6 +650,81 @@
       ['Booked By', '', 'Name of the person who booked', 'Test Contact F']] }
   };
 
+  /* ---------------- queries against the orders received ----------------
+     For every query article: the store's order lines booked from the query day to 5 days after, matched best first -
+     the same article, the same design (another colour), the same price in another design, or the same MC at the same MRP.
+     Each order line answers one query only (split orders are added up); when the store asked about the same article again,
+     the latest query is the agreement and the earlier one is "replaced". The editor can set the match by hand (m_state).
+     queries: rows of queries_list; today: 'YYYY-MM-DD'. Returns {byQuery: {id: result}, byLine: {line id: result}}. */
+  const QM_DAYS = 5;
+  const QM_KIND = { exact: 'Same article', same: 'Same design (another colour)', diff: 'Same price, another design', mcmrp: 'Same MC and MRP', manual: 'Linked by hand' };
+  function localDay(ts) { const d = new Date(ts); if (isNaN(d)) return ''; const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; }
+  function matchQueries(M, queries, today) {
+    const byQuery = {}, byLine = {}, used = new Set();
+    const ordArt = (l) => l.orig_article || l.article_code;
+    const qs = (queries || []).slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)) || a.id - b.id);
+    const linesByStore = {};
+    for (const l of M.lines) if (!l.parent_id) (linesByStore[l.store_code] = linesByStore[l.store_code] || []).push(l);
+    /* the editor's own choices first: their lines are taken out of the automatic matching */
+    for (const q of qs) {
+      if (q.m_state === 'linked') { const ls = (q.m_lines || []).map((id) => M.byId[id]).filter(Boolean); ls.forEach((l) => used.add(l.id)); byQuery[q.id] = { q, state: ls.length ? 'received' : 'none', kind: 'manual', lines: ls, manual: true }; }
+      else if (q.m_state === 'none' || q.m_state === 'dropped') byQuery[q.id] = { q, state: q.m_state, lines: [], manual: true };
+    }
+    /* the same store asking about the same article again: the latest query is the agreement */
+    const lastOf = {};
+    for (const q of qs) lastOf[q.store_code + '|' + q.article_code] = q;
+    for (const q of qs) { const last = lastOf[q.store_code + '|' + q.article_code]; if (!byQuery[q.id] && last.id !== q.id) byQuery[q.id] = { q, state: 'replaced', replacedBy: last, lines: [] }; }
+    const open = qs.filter((q) => !byQuery[q.id]);
+    const pairs = [];
+    for (const q of open) {
+      const day = localDay(q.created_at), end = addDays(day, QM_DAYS), alt = alternates(M, q.article_code);
+      const same = new Set(alt.same.map((a) => a.article_code)), diff = new Set(alt.diff.map((a) => a.article_code));
+      const mc = norm(q.mc_name), mrp = Number(q.mrp);
+      for (const l of linesByStore[q.store_code] || []) {
+        if (used.has(l.id) || !l.order_date || l.order_date < day || l.order_date > end) continue;
+        const a = ordArt(l);
+        const lvl = a === q.article_code ? 1 : same.has(a) ? 2 : diff.has(a) ? 3 : (mc && norm(l.mc_name) === mc && mrp && Number(l.mrp) === mrp) ? 4 : 0;
+        if (lvl) pairs.push({ q, l, lvl });
+      }
+    }
+    pairs.sort((x, y) => x.lvl - y.lvl || String(x.q.created_at).localeCompare(String(y.q.created_at)) || String(x.l.order_date).localeCompare(String(y.l.order_date)) || x.l.id - y.l.id);
+    const got = {};
+    for (const p of pairs) {
+      if (used.has(p.l.id)) continue;
+      const cur = got[p.q.id];
+      if (!cur) { got[p.q.id] = { lvl: p.lvl, art: ordArt(p.l), lines: [p.l] }; used.add(p.l.id); }
+      else if (cur.lvl === p.lvl && cur.art === ordArt(p.l)) { cur.lines.push(p.l); used.add(p.l.id); }   // the same article split over lines / orders
+    }
+    for (const q of open) {
+      const g = got[q.id];
+      if (g) byQuery[q.id] = { q, state: 'received', kind: ['', 'exact', 'same', 'diff', 'mcmrp'][g.lvl], lines: g.lines };
+      else { const end = addDays(localDay(q.created_at), QM_DAYS); byQuery[q.id] = { q, state: today <= end ? 'waiting' : 'not_received', lines: [], until: end }; }
+    }
+    /* what was received against what was agreed */
+    for (const r of Object.values(byQuery)) {
+      if (r.state !== 'received') continue;
+      const q = r.q, ls = r.lines;
+      r.qty = ls.reduce((t, l) => t + (l.req_qty || 0), 0);
+      const val = ls.reduce((t, l) => t + (l.req_qty || 0) * Number(l.req_price || 0), 0), atMrp = ls.reduce((t, l) => t + (l.req_qty || 0) * Number(l.mrp || 0), 0);
+      r.price = r.qty ? val / r.qty : (ls[0] ? Number(ls[0].req_price) : 0);
+      r.mrp = r.qty ? atMrp / r.qty : (ls[0] ? Number(ls[0].mrp) : 0);
+      r.disc = r.mrp ? 1 - r.price / r.mrp : null;
+      r.agreedDisc = q.discount != null ? Number(q.discount) : (Number(q.mrp) ? 1 - Number(q.price) / Number(q.mrp) : null);
+      r.noPrice = ls.some((l) => l.price_missing);
+      const sameMrp = Math.abs(r.mrp - Number(q.mrp)) < 0.005;
+      if (r.noPrice) r.discFlag = 'noprice';
+      else if (sameMrp) { r.priceDiff = r.price - Number(q.price); r.discFlag = Math.abs(r.priceDiff) < 0.005 ? 'agreed' : r.priceDiff < 0 ? 'more' : 'less'; }
+      else if (r.disc != null && r.agreedDisc != null) { const d = r.disc - r.agreedDisc; r.discFlag = Math.abs(d) < 0.00005 ? 'agreed' : d > 0 ? 'more' : 'less'; }
+      else r.discFlag = 'agreed';
+      r.discDiff = r.disc != null && r.agreedDisc != null ? r.disc - r.agreedDisc : null;
+      r.qtyFlag = r.qty === q.qty ? 'agreed' : r.qty > q.qty ? 'more' : 'less';
+      r.apprQty = ls.reduce((t, l) => t + (l.approved || 0), 0);
+      r.apprValue = ls.reduce((t, l) => t + (l.value || 0), 0);
+      for (const l of ls) byLine[l.id] = r;
+    }
+    return { byQuery, byLine };
+  }
+
   /* ---------------- this year against last year, by D-day ----------------
      D-30 is a booking day in each season (by default 20 Sep 2025 and 9 Oct 2026, 30 days before Diwali). Day k of a season
      is D-(30-k). Lines booked before D-30 count on D-30. Returns, for k = 0..30, each season's day and cumulative figures:
@@ -744,7 +819,7 @@
     return L.join('\r\n');
   }
 
-  root.Core = { SEASON, season, growth, TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
+  root.Core = { QM_DAYS, QM_KIND, localDay, matchQueries, SEASON, season, growth, TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
     packOf, roundPack, floorPack, marginAt, discountOf, pct, addDays, today, dayDiff, inr, rupees, when, whenLong,
     norm, ALIASES, SPECS, code, num, dateStr, findHeader, readTable, shape, offerSubject, offerText, reorderSubject, reorderText, mailHtml,
     buildEml, esc, b64utf8 };

@@ -23,10 +23,10 @@
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
     qp: { mc: '', mcText: '', mrp: '', q: '', res: null, mcs: null, mcsLoading: false, seq: 0, err: '' },
     qb: { store: '', mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false },
-    qy: { mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
+    qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 23;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 24;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -328,7 +328,7 @@
     if (S.view === 'shortages') tally();
     if (S.view === 'catalogue' && S.c.scope === 'all') searchAll();
     if (S.view === 'lastyear') lyLoad();
-    if (S.view === 'queries') qLoad();
+    if (S.view === 'queries' || qmOn()) qLoad();
     if (S.view === 'storestk') skLoad();
     wireCharts();
   }
@@ -463,6 +463,7 @@
     return `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>
       ${tkDashCard()}
       <div class="tiles">${tiles}</div>
+      ${qmOn() ? `<div id="qmcard" style="margin-top:12px">${qmDashHtml()}</div>` : ''}
       <div class="grid2">
         <div class="card stack"><h2>Needs attention</h2>
           ${items.length ? items.map(([tone, text, btn]) => `<div class="attn"><div class="note ${tone || 'info'}">${text}</div>${btn}</div>`).join('') : '<div class="note good">Nothing needs attention.</div>'}</div>
@@ -1197,6 +1198,8 @@
     try { Q.list = await A.rpc('queries_list', { p_limit: 50000 }) || []; Q.err = ''; } catch (e) { Q.err = e.message; }
     finally { Q.loading = false; }
     if (S.view === 'queries') setHtml('qlist', qListHtml());
+    setHtml('qmcard', qmDashHtml());
+    if (S.o.sel && S.M.byId[S.o.sel]) setHtml('qmline', qmLineHtml(S.M.byId[S.o.sel]));
   }
   /* the article for a code: the everyday data first, then anything looked up on the server */
   const qArt = (code) => (code ? artOf(code) || (S.qy.found[code] === undefined ? undefined : S.qy.found[code]) : null);
@@ -1268,9 +1271,108 @@
       const a = $('#qf-art'); if (a) a.focus();
     } catch (e) { Q.saving = false; qInfo(); await tell('Query not logged', e.message); }
   }
+  /* ================= Queries against the orders received =================
+     Worked out in Core.matchQueries: for every query article, the order line(s) of that store booked from the query day to 5 days
+     after - the same article, the same design, the same price in another design, or the same MC and MRP - and how they compare. */
+  const qmOn = () => qOn() && !!S.M && S.M.schema >= 24;
+  let qmMemo = null;
+  function qmAll() {
+    if (!qmOn() || !S.qy.list) return null;
+    if (qmMemo && qmMemo.M === S.M && qmMemo.L === S.qy.list) return qmMemo.R;
+    qmMemo = { M: S.M, L: S.qy.list, R: C.matchQueries(S.M, S.qy.list, C.today()) };
+    return qmMemo.R;
+  }
+  const qmOf = (q) => { const R = qmAll(); return R ? R.byQuery[q.id] : null; };
+  const pctDiff = (d) => (Math.abs(d * 100) < 0.005 ? '0%' : (d * 100).toFixed(2) + '%');
+  /* one line of text for a result: [css class, label, note] */
+  function qmText(r) {
+    if (!r) return ['muted', '-', ''];
+    if (r.state === 'waiting') return ['muted', 'Not received yet', `looking until ${when(r.until)}`];
+    if (r.state === 'not_received') return ['bad', 'Not received', `no order in the 5 days to ${when(r.until)}`];
+    if (r.state === 'replaced') return ['muted', 'Replaced', `by the query of ${when(r.replacedBy.created_at)}`];
+    if (r.state === 'dropped') return ['muted', 'Store dropped it', r.q.m_by ? `set by ${r.q.m_by}` : ''];
+    if (r.state === 'none') return ['muted', 'No order', r.q.m_by ? `set by ${r.q.m_by}` : ''];
+    const notes = [];
+    if (r.kind !== 'exact') notes.push(`as ${Array.from(new Set(r.lines.map((l) => l.orig_article || l.article_code))).join(', ')} (${C.QM_KIND[r.kind].toLowerCase()})`);
+    if (r.qtyFlag !== 'agreed') notes.push(r.qtyFlag === 'more' ? `${inr(r.qty)} ordered, +${inr(r.qty - r.q.qty)} extra` : `${inr(r.qty)} ordered, ${inr(r.q.qty - r.qty)} less`);
+    const disc = r.discFlag === 'more' ? ['bad', `Received - ${pctDiff(r.discDiff)} more discount`] : r.discFlag === 'less' ? ['good', `Received - ${pctDiff(-r.discDiff)} less discount`]
+      : r.discFlag === 'noprice' ? ['warn', 'Received - no price in the order'] : [r.qtyFlag === 'agreed' ? 'good' : 'warn', r.qtyFlag === 'agreed' ? 'Received - as agreed' : 'Received - qty differs'];
+    return [disc[0], disc[1], notes.join('; ')];
+  }
+  const qmCell = (r, id) => { const [c, t, n] = qmText(r);
+    return `<button class="qmcell ${c}" data-act="qmOpen" data-id="${id}" title="See the order(s) behind it${editor() ? ', or set it by hand' : ''}"><b>${esc(t)}</b>${n ? `<span>${esc(n)}</span>` : ''}${r && r.manual ? '<i>set by hand</i>' : ''}</button>`; };
+  const QM_FILTERS = { notyet: ['Not received yet / not received', (r) => r && (r.state === 'waiting' || r.state === 'not_received')], not_received: ['Not received (5 days passed)', (r) => r && r.state === 'not_received'],
+    agreed: ['Received as agreed', (r) => r && r.state === 'received' && r.discFlag === 'agreed' && r.qtyFlag === 'agreed'], more: ['Received with more discount', (r) => r && r.state === 'received' && r.discFlag === 'more'],
+    qty: ['Received, qty differs', (r) => r && r.state === 'received' && r.qtyFlag !== 'agreed'], alt: ['Received as another article', (r) => r && r.state === 'received' && r.kind !== 'exact'],
+    replaced: ['Replaced by a later query', (r) => r && r.state === 'replaced'], dropped: ['Dropped / no order (set by hand)', (r) => r && (r.state === 'dropped' || r.state === 'none')] };
+  /* the comparison, for the pop-up and the line details */
+  function qmCompareHtml(r) {
+    const q = r.q, agreedDisc = q.discount != null ? Number(q.discount) : null;
+    const head = `<div class="kv"><span>Query</span><b>${esc(q.store_code)} ${esc(q.store_name || '')} &middot; ${when(q.created_at)} by ${esc(q.by_name || '')}</b>
+      <span>Agreed</span><b>${esc(q.article_code)} ${esc(q.description || '')}: ${inr(q.qty)} pcs at Rs ${inr2(Number(q.price))}${agreedDisc != null ? ` (${pctDiff(agreedDisc)} off MRP ${inr2(Number(q.mrp))})` : ''}</b>${q.remarks ? `<span>Remarks</span><b>${esc(q.remarks)}</b>` : ''}</div>`;
+    if (r.state !== 'received') { const [c, t, n] = qmText(r); return head + `<div class="note ${c === 'bad' ? 'bad' : 'info'}"><b>${esc(t)}</b>${n ? ' - ' + esc(n) : ''}</div>`; }
+    const rows = r.lines.map((l) => `<tr><td><b>${esc(l.order_no)}</b><div class="small">booked ${when(l.order_date)}</div></td><td class="artcell"><b>${esc(l.orig_article || l.article_code)}</b><div class="small">${esc(l.description || '')}</div></td>
+      <td class="right">${inr2(Number(l.mrp))}</td><td class="right b">${inr(l.req_qty)}</td><td class="right">${l.price_missing ? '<span class="warn">not given</span>' : inr2(Number(l.req_price))}</td>
+      <td class="right">${l.price_missing ? '-' : pctDiff(1 - Number(l.req_price) / Number(l.mrp || 1))}</td><td>${pill(l.status)}${l.approved ? `<div class="small good">${inr(l.approved)} approved${l.appr_price != null && Math.abs(Number(l.appr_price) - Number(l.req_price)) > 0.004 ? ' at ' + inr2(Number(l.appr_price)) : ''}</div>` : ''}</td></tr>`).join('');
+    const [c, t, n] = qmText(r);
+    return head + `<div class="note ${c === 'bad' ? 'bad' : c === 'good' ? 'good' : 'info'}"><b>${esc(t)}</b>${n ? ' - ' + esc(n) : ''}${r.kind !== 'manual' ? ` <span class="small">(${esc(C.QM_KIND[r.kind])})</span>` : ''}</div>
+      ${r.discFlag !== 'noprice' && r.discDiff != null ? `<div class="small">Order asks <b>Rs ${inr2(r.price)}</b> (${pctDiff(r.disc)}) against the agreed <b>Rs ${inr2(Number(q.price))}</b> (${pctDiff(r.agreedDisc)}): ${r.discFlag === 'agreed' ? 'the same' : `${pctDiff(Math.abs(r.discDiff))} ${r.discFlag === 'more' ? 'more' : 'less'} discount${r.priceDiff != null ? ` (Rs ${inr2(Math.abs(r.priceDiff))} a piece)` : ''}`}.</div>` : ''}
+      <div class="tablewrap"><table class="tight"><thead><tr><th>Order</th><th>Article ordered</th><th class="right">MRP</th><th class="right">Qty</th><th class="right">Price</th><th class="right">Discount</th><th>Now</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }
+  async function qmOpen(id) {
+    const q = (S.qy.list || []).find((x) => String(x.id) === String(id)), r = q && qmOf(q);
+    if (!q || !r) return;
+    const ed = editor(), day = C.localDay(q.created_at);
+    const cands = S.M.lines.filter((l) => !l.parent_id && l.store_code === q.store_code && l.order_date && l.order_date >= day).sort((a, b) => a.order_date.localeCompare(b.order_date) || a.id - b.id);
+    const on = new Set(r.lines.map((l) => l.id)), R = qmAll();
+    const pick = ed ? `<h3 style="margin:10px 0 4px">Set it by hand</h3>${cands.length ? `<div class="tlist">${cands.map((l) => { const other = R.byLine[l.id] && R.byLine[l.id].q.id !== q.id ? R.byLine[l.id].q : null;
+        return `<label class="row tlpick"><input type="checkbox" name="ln_${l.id}" ${on.has(l.id) ? 'checked' : ''}><span class="grow"><b>${esc(l.order_no)}</b> ${when(l.order_date)} &middot; ${esc(l.orig_article || l.article_code)} ${esc(l.description || '')} &middot; ${inr(l.req_qty)} pcs at ${inr2(Number(l.req_price))}${other ? ` <i class="muted">(now with the query of ${when(other.created_at)} for ${esc(other.article_code)})</i>` : ''}</span></label>`; }).join('')}</div>`
+        : '<div class="small muted">This store has no order line booked on or after the query day.</div>'}
+      <div class="row wrap" style="margin-top:8px"><label class="row"><input type="radio" name="how" value="linked" ${r.kind === 'manual' ? 'checked' : ''}> The ticked line(s)</label><label class="row"><input type="radio" name="how" value="none" ${r.state === 'none' ? 'checked' : ''}> No order for it</label>
+        <label class="row"><input type="radio" name="how" value="dropped" ${r.state === 'dropped' ? 'checked' : ''}> Store dropped it</label><label class="row"><input type="radio" name="how" value="auto" ${!r.manual ? 'checked' : ''}> Match by itself</label></div>` : '';
+    const v = await ask('Query and its order', qmCompareHtml(r) + pick, ed ? 'Save' : 'Close', { cls: 'wide', noFocus: true });
+    if (!v || !ed) return;
+    const lines = cands.filter((l) => v['ln_' + l.id]).map((l) => l.id), how = v.how || 'auto';
+    if (how === 'auto' && !r.manual) return;
+    if (how === 'linked' && !lines.length) return tell('Query and its order', 'Tick the order line(s) first.');
+    await run(() => A.rpc('query_link', { p_query: q.id, p_state: how, p_lines: how === 'linked' ? lines : [] }), how === 'auto' ? 'Matched by the app again' : 'Saved');
+    await qLoad(true);
+  }
+  /* in a line's details: the query this order line answers */
+  function qmLineHtml(l) {
+    const R = qmAll(), r = R && R.byLine[l.id];
+    if (!r) return '';
+    const q = r.q, warn = r.discFlag === 'more';
+    return `<div class="qmline ${warn ? 'bad' : ''}"><div class="row wrap"><b class="grow">From a query of ${when(q.created_at)} (logged by ${esc(q.by_name || '')})</b><button class="btn sm" data-act="qmOpen" data-id="${q.id}">Open the query</button></div>
+      <div class="small">Agreed: ${esc(q.article_code)}, ${inr(q.qty)} pcs at <b>Rs ${inr2(Number(q.price))}</b> (${pctDiff(r.agreedDisc)}).${r.discFlag === 'noprice' ? ' The order gives no price.' : ` This order asks <b>Rs ${inr2(Number(l.req_price))}</b> (${pctDiff(1 - Number(l.req_price) / Number(l.mrp || 1))})${warn ? ` - <b>${pctDiff(r.discDiff)} more discount than agreed</b>` : r.discFlag === 'less' ? ' - less discount than agreed' : ' - as agreed'}.`}${r.qtyFlag !== 'agreed' ? ` Qty: ${inr(r.qty)} ordered against ${inr(q.qty)} agreed.` : ''}</div></div>`;
+  }
+  /* before approving: a line whose order asks more discount than its query */
+  async function qmApproveOk(l, price) {
+    const R = qmAll(), r = R && R.byLine[l.id];
+    if (!r || r.discFlag === 'noprice') return true;
+    const p = price != null ? price : Number(l.req_price), q = r.q;
+    const agreed = Math.abs(Number(l.mrp) - Number(q.mrp)) < 0.005 ? Number(q.price) : Number(l.mrp) * (1 - r.agreedDisc);
+    if (p >= agreed - 0.004) return true;
+    return confirmBox('More discount than agreed', `${l.store_code} ${l.store_name}, order ${l.order_no}\n${l.article_code} ${l.description}\n\nThe query of ${when(q.created_at)} (logged by ${q.by_name}) agreed Rs ${inr2(Number(q.price))} (${pctDiff(r.agreedDisc)} off).\nYou are approving at Rs ${inr2(p)} (${pctDiff(1 - p / Number(l.mrp || 1))} off).\n\nTo approve at the agreed price, cancel and type ${inr2(agreed)} in the price box.`, 'Approve anyway');
+  }
+  /* the Dashboard card */
+  function qmDashHtml() {
+    const R = qmAll();
+    if (!R) return '';
+    const rs = Object.values(R.byQuery).filter((r) => r.state !== 'replaced');
+    if (!rs.length) return '';
+    const got = rs.filter((r) => r.state === 'received'), cnt = (f) => rs.filter(f).length;
+    const askVal = rs.filter((r) => r.state !== 'dropped' && r.state !== 'none').reduce((t, r) => t + Number(r.q.value || 0), 0), gotVal = got.reduce((t, r) => t + Number(r.q.value || 0), 0);
+    const lead = (k, t, v, cls) => `<button class="qmtile ${cls || ''}" data-act="qmFilter" data-k="${k}"><b>${v}</b><span>${t}</span></button>`;
+    return `<div class="card stack"><div class="row wrap"><h2 class="grow">Queries against orders</h2><button class="btn sm" data-act="nav" data-view="queries">Open Queries</button></div>
+      <div class="qmtiles">${lead('', 'query articles', inr(rs.length))}${lead('agreed', 'received as agreed', inr(cnt((r) => QM_FILTERS.agreed[1](r))), 'good')}${lead('more', 'received with more discount', inr(cnt((r) => QM_FILTERS.more[1](r))), 'bad')}
+        ${lead('qty', 'received, qty differs', inr(cnt((r) => QM_FILTERS.qty[1](r))), 'warn')}${lead('notyet', 'not received yet', inr(cnt((r) => r.state === 'waiting')))}${lead('not_received', 'not received in 5 days', inr(cnt((r) => r.state === 'not_received')), 'bad')}</div>
+      <div class="small">Converted: <b>${askVal ? Math.round(gotVal / askVal * 100) : 0}%</b> of the value asked (Rs ${inr(Math.round(gotVal))} of Rs ${inr(Math.round(askVal))}). Received = the same article, the same design, the same price in another design, or the same MC and MRP, booked within 5 days of the query.</div></div>`;
+  }
   function qRows() {
     const Q = S.qy, words = Q.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    return (Q.list || []).filter((r) => !words.length || words.every((w) => [r.store_code, r.store_name, r.state, r.article_code, r.description, r.mc_name, r.by_name, r.remarks].join(' ').toLowerCase().includes(w)));
+    const f = Q.mstat && QM_FILTERS[Q.mstat] && qmAll() ? QM_FILTERS[Q.mstat][1] : null;
+    return (Q.list || []).filter((r) => (!words.length || words.every((w) => [r.store_code, r.store_name, r.state, r.article_code, r.description, r.mc_name, r.by_name, r.remarks].join(' ').toLowerCase().includes(w))) && (!f || f(qmOf(r))));
   }
   function qListHtml() {
     const Q = S.qy, ed = editor();
@@ -1284,7 +1386,7 @@
         <td class="artcell"><b class="nowrap">${esc(r.article_code)}</b><div class="small">${esc(r.description || '')}</div><div class="small muted">${esc(r.mc_name || '')}</div></td>
         <td class="right">${r.mrp == null ? '-' : inr2(Number(r.mrp))}</td><td class="right">${r.discount == null ? '-' : (Number(r.discount) * 100).toFixed(2) + '%'}</td>
         <td class="right b">${inr2(Number(r.price))}</td><td class="right b">${inr(r.qty)}</td><td class="right b">${inr2(Number(r.value))}</td>
-        <td class="w small">${child ? '' : esc(r.remarks || '')}</td><td>${!child && (r.mine || ed) ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query">Remove</button>` : ''}</td></tr>`;
+        ${qmOn() ? `<td class="qmtd">${qmCell(qmOf(r), r.id)}</td>` : ''}<td class="w small">${child ? '' : esc(r.remarks || '')}</td><td>${!child && (r.mine || ed) ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query">Remove</button>` : ''}</td></tr>`;
     for (const r of shown) {
       if (r.grp == null) { html.push(one(r)); continue; }
       if (seen.has(r.grp)) continue;
@@ -1294,12 +1396,12 @@
         <td><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
         <td><b>Query of ${g.length} articles</b><div class="small muted">${esc(Array.from(new Set(g.map((x) => x.mc_name).filter(Boolean))).join(', '))}</div></td><td class="right">-</td>
         <td class="right">${atMrp ? (Math.max(0, 1 - val / atMrp) * 100).toFixed(2) + '%' : '-'}</td><td class="right">-</td><td class="right b">${inr(q)}</td><td class="right b">${inr2(val)}</td>
-        <td class="w small">${esc(r.remarks || '')}</td><td>${r.mine || ed ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)">Remove</button>` : ''}</td></tr>`);
+        ${qmOn() ? `<td class="small">${(() => { const ms = g.map(qmOf).filter((x) => x && x.state !== 'replaced'), n = ms.filter((x) => x.state === 'received').length; return `<b>${n} of ${ms.length} received</b>`; })()}</td>` : ''}<td class="w small">${esc(r.remarks || '')}</td><td>${r.mine || ed ? `<button class="btn sm ghost" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)">Remove</button>` : ''}</td></tr>`);
       g.forEach((x) => html.push(one(x, true)));
     }
     const nq = (L) => L.filter((x) => x.grp == null).length + new Set(L.filter((x) => x.grp != null).map((x) => x.grp)).size;
     return `<div class="small" style="margin-bottom:6px">${inr(nq(rows))} ${plural(nq(rows), 'query', 'queries')}${rows.length < Q.list.length ? ` of ${inr(nq(Q.list))}` : ''} &middot; ${inr(tq)} pcs &middot; order value <b>Rs ${inr(Math.round(tv))}</b></div>
-      <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th><th>Remarks</th><th></th></tr></thead><tbody>
+      <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th>${qmOn() ? '<th>Order received?</th>' : ''}<th>Remarks</th><th></th></tr></thead><tbody>
       ${html.join('')}</tbody></table></div>
       ${rows.length > shown.length ? `<p class="small">Showing the newest 500; Export to Excel has all ${inr(rows.length)}.</p>` : ''}`;
   }
@@ -1492,7 +1594,7 @@
         <div class="qsum" id="qf-sum"></div>
         <div class="row wrap"><span class="small grow">Logged in your name (${esc(S.me.name || S.me.email)}), with the date and time, when you press Submit.</span>
           <button class="btn" data-act="qClear">Clear</button><button class="btn primary" id="qf-go" data-act="qSubmit" disabled>Submit</button></div></div>
-      <div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">All queries</h2><input type="search" id="qq" placeholder="Search store, article, MC, person ..." value="${esc(Q.q)}" style="max-width:300px"><button class="btn sm" data-act="qExport">Export to Excel</button></div>
+      <div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">All queries</h2><input type="search" id="qq" placeholder="Search store, article, MC, person ..." value="${esc(Q.q)}" style="max-width:300px">${qmOn() ? `<select id="qmstat" aria-label="Order received?" style="max-width:260px"><option value="">Order received? any</option>${Object.keys(QM_FILTERS).map((k) => `<option value="${k}" ${Q.mstat === k ? 'selected' : ''}>${QM_FILTERS[k][0]}</option>`).join('')}</select>` : ''}<button class="btn sm" data-act="qExport">Export to Excel</button></div>
         <div id="qlist">${qListHtml()}</div></div>`;
   }
   function exportQueries() {
@@ -1500,10 +1602,14 @@
     if (!Q.list || !Q.list.length) return tell('Export', 'There are no queries to export.');
     const rows = qRows();
     return excelFile('Store_Queries', false, (sheet) => {
-      sheet('Queries', ['Logged on', 'Time', 'Logged by', 'Store Code', 'Store Name', 'State', 'Lead Time (days)', 'Article Code', 'Description', 'MC Name', 'MRP', 'Discount %', 'Final Price', 'Qty', 'Order Value', 'Remarks', 'Query No', 'Articles in Query'],
+      sheet('Queries', ['Logged on', 'Time', 'Logged by', 'Store Code', 'Store Name', 'State', 'Lead Time (days)', 'Article Code', 'Description', 'MC Name', 'MRP', 'Discount %', 'Final Price', 'Qty', 'Order Value', 'Remarks', 'Query No', 'Articles in Query', 'Order Received?', 'Order Note', 'Match', 'Order No(s)', 'Article(s) Ordered', 'Ordered Qty', 'Order Price', 'Order Discount %', 'Discount Difference %', 'Approved Qty'],
         rows.map((r) => { const d = new Date(r.created_at), p2 = (n) => String(n).padStart(2, '0');
           return [`${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`, `${p2(d.getHours())}:${p2(d.getMinutes())}`, r.by_name, r.store_code, r.store_name, r.state, r.lead_time, r.article_code, r.description, r.mc_name,
-            r.mrp == null ? null : Number(r.mrp), r.discount == null ? null : Math.round(Number(r.discount) * 10000) / 100, Number(r.price), r.qty, Number(r.value), r.remarks || '', r.grp || r.id, r.grp ? Q.list.filter((x) => x.grp === r.grp).length : 1]; }));
+            r.mrp == null ? null : Number(r.mrp), r.discount == null ? null : Math.round(Number(r.discount) * 10000) / 100, Number(r.price), r.qty, Number(r.value), r.remarks || '', r.grp || r.id, r.grp ? Q.list.filter((x) => x.grp === r.grp).length : 1].concat((() => { const m = qmOf(r); if (!m) return [];
+            const [, t, n] = qmText(m), got = m.state === 'received';
+            return [t, n, got ? C.QM_KIND[m.kind] : '', got ? Array.from(new Set(m.lines.map((l) => l.order_no))).join(', ') : '', got ? Array.from(new Set(m.lines.map((l) => l.orig_article || l.article_code))).join(', ') : '',
+              got ? m.qty : '', got && m.discFlag !== 'noprice' ? Math.round(m.price * 100) / 100 : '', got && m.disc != null && m.discFlag !== 'noprice' ? Math.round(m.disc * 10000) / 100 : '',
+              got && m.discDiff != null && m.discFlag !== 'noprice' ? Math.round(m.discDiff * 10000) / 100 : '', got ? m.apprQty : '']; })()); }));
       return `Exported ${inr(rows.length)} ${plural(rows.length, 'query', 'queries')}` + (rows.length < Q.list.length ? ' (the search you have on was applied)' : '');
     });
   }
@@ -2148,6 +2254,7 @@
       <div class="small"><b>${esc(l.store_code)} ${esc(l.store_name)}</b>${l.city ? ', ' + esc(l.city) : ''}${l.state ? ', ' + esc(l.state) : ''}${l.customer ? ' &nbsp;|&nbsp; ' + esc(l.customer) : ''} &nbsp;|&nbsp; booked ${when(l.order_date)}</div>
       ${contact ? `<div class="small">Booked by: ${contact}</div>` : ''}
       ${taskBoxHtml(l)}
+      ${qmOn() ? `<div id="qmline">${qmLineHtml(l)}</div>` : ''}
       ${remOn() ? `<div class="storerem ${l.art_remarks ? 'has' : ''}">${l.art_remarks ? `<b>Store remark:</b> ${esc(l.art_remarks)}` : 'No remarks from the store.'}</div>` : ''}
       <div class="row top">${thumb(l.article_code, 'l', true)}<div class="grow"><h2>${esc(l.description || '(article details not on file)')}</h2>
         <div class="small">${esc(l.article_code)} &nbsp;|&nbsp; MC ${esc([l.mc_code, l.mc_name].filter(Boolean).join(' ') || '-')}${l.buyer ? ' &nbsp;|&nbsp; ' + esc(l.buyer) : ''}${l.category ? ' &nbsp;|&nbsp; ' + esc(l.category) : ''}</div>
@@ -3205,6 +3312,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     labelOrders: (el) => { if (labelPop) labelPop.close(); ACT.go({ dataset: { view: 'orders', q: el.dataset.code } }); },
     labelQuery: (el) => { if (labelPop) labelPop.close(); S.qy.form = Object.assign(QBLANK(), { art: el.dataset.code }); S.view = 'queries'; render(); const i = $('#qf-store'); if (i) i.focus(); },
     qSubmit: () => qSubmit(),
+    qmOpen: (el, e) => { if (e) e.preventDefault(); qmOpen(el.dataset.id); },
+    qmFilter: (el) => { S.qy.mstat = el.dataset.k; S.view = 'queries'; render(); window.scrollTo(0, 0); },
     qMode: (el) => { S.qy.mode = el.dataset.v; render(); },
     qbAdd: (el) => { if (!S.qb.rows.some((r) => r.a === el.dataset.code)) S.qb.rows.push({ a: el.dataset.code, disc: '', price: '', qty: '' }); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qp-list', qpListHtml()); setHtml('qb-tot', qbTotHtml());
       const i = document.querySelector(`.qbd[data-i="${S.qb.rows.length - 1}"]`); if (i) i.focus(); },
@@ -3335,6 +3444,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       /* The approval is sent with exactly the locations the row shows, so what is recorded is what was on screen. */
       const pr = priceFrom(l, $(`.rowp[data-id="${el.dataset.id}"]`));
       if (!pr.ok) return tell('Approve', pr.msg);
+      if (!(await qmApproveOk(l, pr.price))) return;
       if (!(await overOk(l, f))) return;
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
       if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price, true);     // part of it sits only in a location set aside: ask where to take it from
@@ -3384,6 +3494,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       if (f > (+i.max || 0)) return tell('Approve', `${inr(f)} pcs (${inr(q)} rounded up to full packs of ${l.pack}) is more than the balance DC quantity allows: ${inr(+i.max || 0)} pcs.`);
       const pr = priceFrom(l, $('#ap-price'));
       if (!pr.ok) return tell('Approve', pr.msg);
+      if (!(await qmApproveOk(l, pr.price))) return;
       if (!(await overOk(l, f))) return;
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
       if (sp && sp.left > 0) return approveWithLocs(l, q, pr.price, true);
@@ -3630,6 +3741,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'scover') { S.s.cover = t.value; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
     else if (t.classList.contains('tkr')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: null, lines: {} }; (d.lines[t.dataset.line] = d.lines[t.dataset.line] || {}).response = t.value; }
+    else if (t.id === 'qmstat') { S.qy.mstat = t.value; setHtml('qlist', qListHtml()); }
     else if (t.id === 'qp-mrp') { S.qp.mrp = t.value; qpLoad(); }
     else if (t.id === 'qb-mc') { S.qb.mc = t.value; S.qb.mrp = ''; setHtml('qb-mrpbox', qbMrpHtml()); setHtml('qb-picks', qbPicksHtml()); }
     else if (t.id === 'qb-mrp') { S.qb.mrp = t.value; setHtml('qb-picks', qbPicksHtml()); }
