@@ -19,11 +19,12 @@
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
     ly: { dash: (() => { try { return localStorage.getItem('allocdesk.lydash') || 'ordered'; } catch (_) { return 'ordered'; } })(), basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
+    tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 20;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 21;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -50,10 +51,11 @@
     sales: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><rect x="5" y="11" width="3" height="7" rx="1"/><rect x="10.5" y="7" width="3" height="11" rx="1"/><rect x="16" y="4" width="3" height="14" rx="1"/></svg>',
     label: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
     queries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.2v.3"/></svg>',
+    tasks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 9 2 2 4-4"/><path d="M8 15h8"/></svg>',
     storestk: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 5 4h14l2 5.5"/><path d="M4 9.5V20h16V9.5"/><path d="M3 9.5h18"/><circle cx="11" cy="14.5" r="2.5"/><path d="m13 16.5 2 2"/></svg>',
     lastyear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="m4 15 5-5 4 3 7-7"/><path d="m4 17 5-3 4 1 7-4" stroke-dasharray="2 3"/></svg>'
   };
-  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['shortages', 'Shortages'], ['sales', 'Sell-through'], ['storestk', 'Store stock'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
+  const NAV = [['dashboard', 'Dashboard'], ['orders', 'Pending'], ['approved', 'Approved'], ['tasks', 'Tasks'], ['shortages', 'Shortages'], ['sales', 'Sell-through'], ['storestk', 'Store stock'], ['catalogue', 'Articles'], ['lastyear', 'Last year'], ['queries', 'Queries'], ['data', 'Data']];
   const NAV_LONG = { orders: 'Pending orders', approved: 'Approved orders', lastyear: 'This year vs last year', sales: 'Sell-through' };
 
   /* ================= small building blocks ================= */
@@ -294,12 +296,13 @@
   /* ================= frame ================= */
   const inwardTotal = (M) => Object.values(M.pos).reduce((t, p) => t + p.inward, 0);
   const stockLine = (M) => (M.meta.stock_asof ? 'DC stock as of ' + when(M.meta.stock_asof) + (inwardTotal(M) ? '<br>+ ' + inr(inwardTotal(M)) + ' pcs inwards since' : '') : 'No DC stock report loaded');
+  const navBadge = (k) => { if (k !== 'tasks' || !taskOn()) return ''; const n = myOpenTasks().length; return n ? `<span class="navbadge" title="Tasks assigned to you">${n}</span>` : ''; };
   function render() {
     if (!S.M) return;
     const keep = {};
     $$('[data-keep]').forEach((e) => { keep[e.dataset.keep] = e.scrollTop; });
     const y = window.scrollY, M = S.M;
-    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), shortages: vShortages, sales: vSellThrough, storestk: vStoreStock, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
+    const views = { dashboard: vDashboard, orders: () => vOrders('orders'), approved: () => vOrders('approved'), tasks: vTasks, shortages: vShortages, sales: vSellThrough, storestk: vStoreStock, catalogue: vCatalogue, lastyear: vLastYear, queries: vQueries, data: vData };
     const role = editor() ? '' : '<span class="pill view">VIEW ONLY</span>';
     app.innerHTML = `<div class="shell">
       <aside class="side">
@@ -307,13 +310,13 @@
         ${role ? `<div style="margin-bottom:10px">${role}</div>` : ''}
         <input type="search" id="find" placeholder="Find any article ..." aria-label="Find article">
         <button class="btn sm labelbtn" data-act="label" title="Choose a photo of an article label (for example one a store sent on WhatsApp); the app reads the article code and shows its stock and orders">${ICON.label} Check a label</button>
-        ${NAV.map(([k, t]) => `<button class="nav ${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${NAV_LONG[k] || t}</button>`).join('')}
+        ${NAV.map(([k, t]) => `<button class="nav ${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${NAV_LONG[k] || t}${navBadge(k)}</button>`).join('')}
         <div class="foot">${stockLine(M)}<br>${inr(M.lines.length)} order lines<br>
           ${esc(S.me.name || S.me.email)} (${editor() ? 'editor' : 'viewer'})<br><span data-sync data-act="refresh" style="cursor:pointer">${esc(syncText())}</span></div>
       </aside>
       <div class="topbar"><span class="brand">Allocation Desk</span>${role}<span class="grow"></span><button class="iconbtn" data-act="label" title="Check a label" aria-label="Check a label">${ICON.label}</button><span class="sync" data-sync data-act="refresh">${esc(syncText())}</span></div>
       <main data-keep="main">${views[S.view]()}</main>
-      <nav class="tabs">${NAV.map(([k, t]) => `<button class="${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${t}</button>`).join('')}</nav>
+      <nav class="tabs">${NAV.map(([k, t]) => `<button class="${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${t}${navBadge(k)}</button>`).join('')}</nav>
     </div>`;
     $$('[data-keep]').forEach((e) => { if (keep[e.dataset.keep]) e.scrollTop = keep[e.dataset.keep]; });
     window.scrollTo(0, y);
@@ -456,6 +459,7 @@
         <td class="right bad b">${inr(gap)}</td><td class="right">${ppo ? inr(ppo) : '-'}</td><td class="right">${inr(sf)}</td><td class="right">${inr(df)}</td><td class="right">${sf + df >= gap ? 'Yes' : sf + df ? 'Partly' : 'No'}</td></tr>`;
     }).join('');
     return `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>
+      ${tkDashCard()}
       <div class="tiles">${tiles}</div>
       <div class="grid2">
         <div class="card stack"><h2>Needs attention</h2>
@@ -989,6 +993,176 @@
         sheet(('By ' + SK_GROUPS[T.group]).replace(',', '').slice(0, 31), first.concat(['Stores', 'Articles'], numHead), r.rows.map((x) => vals(x).concat([x.stores, x.articles], nums(x))));
       }
       return `Exported ${inr(r.rows.length)} ${plural(r.rows.length, 'line')}` + (r.more ? ' (the first 1,00,000)' : '') + (skActive().length ? ' (the filters you have on were applied)' : '');
+    });
+  }
+
+  /* ================= Tasks for the team =================
+     The editor gives a teammate a store to call: one task per store, with the order lines in it, a reason, an instruction and a due date.
+     The teammate writes the store's response for each line and marks it done; the editor then approves or rejects as usual.
+     A task is "Open" until done, "Done" while any of its lines still waits for a decision, "Closed" when all are decided. */
+  const taskOn = () => !!S.M && S.M.schema >= 21;
+  const taskOpts = (kind) => (S.M.task_opts || []).filter((o) => o.kind === kind && o.active);
+  let taskMemo = null;
+  function taskByLine() {
+    if (taskMemo && taskMemo.M === S.M) return taskMemo.map;
+    const map = {};
+    for (const t of (S.M.tasks || [])) for (const x of t.lines) { const cur = map[x.line_id]; if (!cur || (t.status === 'OPEN' && cur.status !== 'OPEN') || (t.status === cur.status && t.id > cur.id)) map[x.line_id] = t; }
+    taskMemo = { M: S.M, map };
+    return map;
+  }
+  const taskOfLine = (id) => (taskOn() ? taskByLine()[id] || null : null);
+  const taskLines = (t) => t.lines.map((x) => Object.assign({ x }, { l: S.M.byId[x.line_id] })).filter((r) => r.l);
+  function taskState(t) {
+    if (t.status === 'OPEN') return 'open';
+    return taskLines(t).some((r) => NEEDS.includes(r.l.status)) ? 'done' : 'closed';
+  }
+  const TASK_STATE = { open: ['Open', 'AWAITING'], done: ['Done - your decision', 'PARTIAL'], closed: ['Closed', 'APPROVED'] };
+  const taskPill = (t) => { const [txt, cls] = TASK_STATE[taskState(t)]; return `<span class="pill ${cls}">${txt}</span>`; };
+  const taskLate = (t) => t.status === 'OPEN' && t.due && t.due < C.today();
+  const mineTask = (t) => S.me && t.assignee === S.me.user_id;
+  const canAnswer = (t) => t.status === 'OPEN' && (mineTask(t) || editor());
+  const myOpenTasks = () => (taskOn() ? (S.M.tasks || []).filter((t) => mineTask(t) && t.status === 'OPEN') : []);
+  const taskChip = (l) => { const t = taskOfLine(l.id); if (!t) return '';
+    const st = taskState(t); return `<span class="badge task ${st}" title="${esc(`${t.reason}${t.note ? ' - ' + t.note : ''} (assigned to ${t.assignee_name})`)}">Task: ${esc(t.assignee_name)} &middot; ${st === 'open' ? (taskLate(t) ? 'overdue' : 'open') : st === 'done' ? 'done' : 'closed'}</span>`; };
+  /* the box in a line's details */
+  function taskBoxHtml(l) {
+    if (!taskOn()) return '';
+    const t = taskOfLine(l.id), ed = editor();
+    if (!t) return ed && NEEDS.includes(l.status) ? `<div class="row wrap taskbox"><span class="small grow">No task for this store's lines.</span><button class="btn sm" data-act="taskNew" data-store="${esc(l.store_code)}" data-line="${l.id}">Assign a task for ${esc(l.store_code)} ...</button></div>` : '';
+    const x = t.lines.find((y) => y.line_id === l.id) || {};
+    return `<div class="taskbox stack"><div class="row wrap"><b class="grow">Task: ${esc(t.reason)}</b>${taskPill(t)}</div>
+      <div class="small">Assigned to <b>${esc(t.assignee_name)}</b> by ${esc(t.created_by || '')}, ${when(t.created_at)}${t.due ? ` &middot; due <span class="${taskLate(t) ? 'bad b' : ''}">${when(t.due)}</span>` : ''}${t.note ? `<br>Instruction: ${esc(t.note)}` : ''}</div>
+      ${x.response ? `<div><b>Store's response:</b> ${esc(x.response)}${x.remarks ? ` - ${esc(x.remarks)}` : ''}</div>` : '<div class="small muted">No response yet for this line.</div>'}
+      ${t.remarks ? `<div class="small"><b>Remarks:</b> ${esc(t.remarks)}${t.done_by ? ` <span class="muted">(${esc(t.done_by)}, ${when(t.done_at)})</span>` : ''}</div>` : ''}
+      <div><button class="btn sm" data-act="taskGo" data-id="${t.id}">Open the task</button></div></div>`;
+  }
+  /* assigning: from a line (that store's waiting lines, all ticked) or from the ticked lines (grouped by store) */
+  async function taskAssign(ids, store, focusId) {
+    if (!taskOn()) return tell('Assign a task', 'Tasks need the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
+    let team;
+    try { team = await A.rpc('team'); } catch (e) { return tell('Assign a task', e.message); }
+    const reasons = taskOpts('reason');
+    if (!reasons.length) return tell('Assign a task', 'Add a reason first: Tasks > Reasons and responses.');
+    const busy = (id) => { const t = taskOfLine(id); return t && t.status === 'OPEN'; };
+    let lines;
+    if (store) lines = S.M.lines.filter((l) => l.store_code === store && NEEDS.includes(l.status));
+    else lines = ids.map((i) => S.M.byId[i]).filter(Boolean);
+    if (!lines.length) return tell('Assign a task', 'There is no waiting line to put in a task.');
+    const stores = Array.from(new Set(lines.map((l) => l.store_code)));
+    const list = lines.map((l) => `<label class="row tlpick ${busy(l.id) ? 'muted' : ''}"><input type="checkbox" name="ln_${l.id}" ${busy(l.id) ? 'disabled' : 'checked'}>
+      <span class="grow"><b>${esc(l.store_code)}</b> ${esc(l.order_no)} &middot; ${esc(l.article_code)} ${esc(l.description || '')} &middot; ${inr(l.req_qty)} pcs${busy(l.id) ? ' <i>(already in an open task)</i>' : ''}</span></label>`).join('');
+    const today = C.today();
+    const v = await ask(store ? `Task for ${store} ${(S.M.stores[store] || {}).store_name || ''}` : `Tasks for ${stores.length} ${plural(stores.length, 'store')} (one each)`, `
+      <div class="formgrid"><label class="f">Teammate<select name="user" required>${team.map((m) => `<option value="${m.user_id}">${esc(m.name || m.email)}${m.role === 'editor' ? ' (editor)' : ''}</option>`).join('')}</select></label>
+        <label class="f">Reason<select name="reason">${reasons.map((o) => `<option>${esc(o.label)}</option>`).join('')}</select></label>
+        <label class="f">Due date (optional)<input type="date" name="due" min="${today}"></label></div>
+      <label class="f">Instruction (optional)<input type="text" name="note" maxlength="300" placeholder="e.g. offer 1005110 instead; ask if 25 Oct works"></label>
+      <div class="small" style="margin:8px 0 4px">Lines in the task${store ? '' : ' (grouped by store, one task per store)'}:</div><div class="tlist">${list}</div>`, 'Assign', { cls: 'wide' });
+    if (!v) return;
+    const pick = lines.filter((l) => v['ln_' + l.id]).map((l) => l.id);
+    if (!pick.length) return tell('Assign a task', 'Tick at least one line.');
+    run(() => A.rpc('task_assign', { p_lines: pick, p_user: v.user, p_reason: v.reason, p_note: v.note, p_due: v.due }),
+      (r) => `${r.tasks} ${plural(r.tasks, 'task')} assigned (${r.lines} ${plural(r.lines, 'line')})` + (r.busy ? `; ${r.busy} already in an open task, left out` : ''));
+  }
+  /* the Tasks screen */
+  const TK_SEGS = { mine: 'My tasks', open: 'All open', done: 'Done - your decision', closed: 'Closed', all: 'All' };
+  function tkList() {
+    const T = S.tk, words = T.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return (S.M.tasks || []).filter((t) => {
+      const st = taskState(t);
+      if (T.seg === 'mine' && !(mineTask(t) && st === 'open')) return false;
+      if (T.seg === 'open' && st !== 'open') return false;
+      if (T.seg === 'done' && st !== 'done') return false;
+      if (T.seg === 'closed' && st !== 'closed') return false;
+      if (T.person && t.assignee !== T.person) return false;
+      if (!words.length) return true;
+      const s = S.M.stores[t.store_code] || {}, txt = [t.store_code, s.store_name, s.state, t.reason, t.note, t.assignee_name, t.remarks].concat(taskLines(t).map((r) => r.l.order_no + ' ' + r.l.article_code + ' ' + (r.l.description || ''))).join(' ').toLowerCase();
+      return words.every((w) => txt.includes(w));
+    }).sort((a, b) => (taskLate(b) - taskLate(a)) || String(a.due || '9').localeCompare(String(b.due || '9')) || b.id - a.id);
+  }
+  const tkDraft = (t) => { const d = (S.tk.draft[t.id] = S.tk.draft[t.id] || { remarks: null, lines: {} }); if (d.remarks == null) d.remarks = t.remarks || ''; return d; };
+  function tkCardHtml(t) {
+    const s = S.M.stores[t.store_code] || {}, rows = taskLines(t), ans = canAnswer(t), d = tkDraft(t), ed = editor(), resp = taskOpts('response');
+    const phones = Array.from(new Map(rows.filter((r) => r.l.phone).map((r) => [r.l.phone, r.l.poc_name])).entries());
+    const opt = (cur) => { const labels = resp.map((o) => o.label); if (cur && !labels.includes(cur)) labels.push(cur);
+      return `<option value="">- choose -</option>${labels.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('')}`; };
+    const lineRow = (r) => { const dl = d.lines[r.l.id] || {}, cur = dl.response != null ? dl.response : r.x.response || '', rem = dl.remarks != null ? dl.remarks : r.x.remarks || '';
+      return `<tr><td class="glabel"><b>${esc(r.l.order_no)}</b><div class="small">booked ${when(r.l.order_date)}${r.l.del_date ? `, delivery ${when(r.l.del_date)}` : ''}</div></td>
+        <td class="artcell"><b class="nowrap pick" data-act="art" data-code="${esc(r.l.article_code)}">${esc(r.l.article_code)}</b><div class="small">${esc(r.l.description || '')}</div>${remLine(r.l)}</td>
+        <td class="right" data-l="MRP">${inr(r.l.mrp)}</td><td class="right b" data-l="Qty wanted">${inr(r.l.req_qty)}</td><td class="right" data-l="Price wanted">${inr2(r.l.req_price)}</td><td data-l="Now">${pill(r.l.status)}${r.l.approved ? `<div class="small good">${inr(r.l.approved)} approved</div>` : ''}</td>
+        <td class="tkresp glabel">${ans ? `<select class="tkr" data-task="${t.id}" data-line="${r.l.id}" aria-label="Store's response">${opt(cur)}</select><input type="text" class="tkrem" data-task="${t.id}" data-line="${r.l.id}" maxlength="500" placeholder="Remarks (optional)" value="${esc(rem)}">`
+          : (r.x.response ? `<b>${esc(r.x.response)}</b>${r.x.remarks ? `<div class="small">${esc(r.x.remarks)}</div>` : ''}` : '<span class="muted">-</span>')}</td></tr>`; };
+    return `<div class="card stack tkcard ${S.tk.focus === t.id ? 'focus' : ''}" id="task-${t.id}">
+      <div class="row wrap"><h2 class="grow" style="margin:0">${esc(t.store_code)} <span class="sname">${esc(s.store_name || '')}</span> <span class="small muted">${esc(s.state || '')}${s.lead_time != null ? ` &middot; lead time ${s.lead_time} ${plural(s.lead_time, 'day')}` : ''}</span></h2>${taskPill(t)}</div>
+      <div class="row wrap tkmeta"><span class="tkreason">${esc(t.reason)}</span><span>Assigned to <b>${esc(t.assignee_name)}</b></span><span class="small muted">by ${esc(t.created_by || '')}, ${when(t.created_at)}</span>${t.due ? `<span class="${taskLate(t) ? 'bad b' : ''}">Due ${when(t.due)}${taskLate(t) ? ' (overdue)' : ''}</span>` : ''}</div>
+      ${t.note ? `<div class="note info"><b>Instruction:</b> ${esc(t.note)}</div>` : ''}
+      ${phones.length ? `<div class="small">Call: ${phones.map(([ph, who]) => `<a href="tel:${esc(ph.replace(/\D/g, ''))}">${esc(ph)}</a>${who ? ' (' + esc(who) + ')' : ''}`).join(' &middot; ')}${s.email ? ` &middot; <a href="mailto:${esc(s.email)}">${esc(s.email)}</a>` : ''}</div>` : ''}
+      <div class="tablewrap fitwrap"><table class="tight tktable resp"><thead><tr><th>Order</th><th>Article</th><th class="right">MRP</th><th class="right">Qty<br>wanted</th><th class="right">Price<br>wanted</th><th>Now</th><th>Store's response</th></tr></thead><tbody>${rows.map(lineRow).join('')}</tbody></table></div>
+      ${ans ? `<label class="f">Remarks for the editor<textarea class="tkall" data-task="${t.id}" rows="2" maxlength="1000" placeholder="What the store said, who you spoke to ...">${esc(d.remarks)}</textarea></label>
+        <div class="row wrap"><button class="btn" data-act="tkSave" data-id="${t.id}">Save</button><button class="btn primary" data-act="tkDone" data-id="${t.id}">Mark done</button><span class="grow"></span>${ed ? tkEdBtns(t) : ''}</div>`
+        : `${t.remarks ? `<div><b>Remarks:</b> ${esc(t.remarks)}</div>` : ''}${t.done_by ? `<div class="small muted">Done by ${esc(t.done_by)}, ${when(t.done_at)}</div>` : ''}
+        <div class="row wrap">${ed ? `<button class="btn primary" data-act="tkToOrders" data-store="${esc(t.store_code)}">Approve / reject in Pending orders</button><span class="grow"></span>${tkEdBtns(t)}` : ''}</div>`}</div>`;
+  }
+  const tkEdBtns = (t) => `${t.status === 'OPEN' ? `<button class="btn sm" data-act="tkReassign" data-id="${t.id}">Change ...</button>` : `<button class="btn sm" data-act="tkReopen" data-id="${t.id}">Reopen</button>`}<button class="btn sm danger" data-act="tkCancel" data-id="${t.id}">Cancel task</button>`;
+  function tkManageHtml() {
+    const row = (o) => `<div class="row tkopt"><input type="text" value="${esc(o.label)}" data-opt="${o.id}" maxlength="120" aria-label="Rename"><button class="btn sm ghost" data-act="tkOptDel" data-id="${o.id}" title="Remove from the list (tasks that used it keep their text)">Remove</button></div>`;
+    const col = (k, h) => `<div class="stack"><h3 style="margin:0">${h}</h3>${taskOpts(k).map(row).join('')}<div class="row tkopt"><input type="text" id="tknew-${k}" maxlength="120" placeholder="Add a new one ..."><button class="btn sm" data-act="tkOptAdd" data-kind="${k}">Add</button></div></div>`;
+    return `<div class="card stack"><div class="row"><h2 class="grow" style="margin:0">Reasons and responses</h2><button class="btn sm" data-act="tkManage">Close</button></div>
+      <p class="small">Change the text and click outside the box to save it. Removing one takes it out of the lists; tasks that already use it keep their text.</p>
+      <div class="grid2">${col('reason', 'Reasons for a task')}${col('response', "The store's response")}</div></div>`;
+  }
+  function vTasks() {
+    const head = `<div class="head"><h1>Tasks</h1><span class="sub">Stores to call: ${editor() ? 'you assign them' : 'the editor assigns them'}; the teammate writes what the store said</span></div>`;
+    if (!taskOn()) return head + `<div class="card note warn">${editor() ? 'Tasks need the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.' : 'Tasks need a database update. Ask the editor to run the newest setup script.'}</div>`;
+    if (!S.tk.init) { S.tk.init = true; if (editor() && !myOpenTasks().length) S.tk.seg = 'open'; }
+    const T = S.tk, all = S.M.tasks || [], cnt = (k) => all.filter((t) => (k === 'mine' ? mineTask(t) && taskState(t) === 'open' : k === 'all' ? true : taskState(t) === k)).length;
+    const people = Array.from(new Map(all.map((t) => [t.assignee, t.assignee_name])).entries()).sort((a, b) => String(a[1]).localeCompare(String(b[1])));
+    const list = tkList();
+    return head + `<div class="segs">${Object.keys(TK_SEGS).map((k) => `<button class="${T.seg === k ? 'on' : ''}" data-act="tkSeg" data-seg="${k}">${TK_SEGS[k]} <b>${inr(cnt(k))}</b></button>`).join('')}</div>
+      <div class="toolbar two" style="margin-top:10px"><input type="search" id="tkq" placeholder="Search store, order, article, reason ..." value="${esc(T.q)}" aria-label="Search tasks">
+        <select id="tkperson" aria-label="Teammate"><option value="">Everyone</option>${people.map(([u, n]) => `<option value="${u}" ${T.person === u ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+      <div class="row wrap bulkbar">${editor() ? '<button class="btn sm" data-act="tkManage">Reasons and responses ...</button>' : ''}<button class="btn sm" data-act="tkExport">Export to Excel</button></div>
+      ${T.manage && editor() ? tkManageHtml() : ''}
+      ${editor() ? '<p class="small" style="margin:0 0 8px">To assign: open a line in Pending orders and use "Assign a task" in its details, or tick lines (any number of stores) and click "Assign task ...". One task per store.</p>' : ''}
+      <div id="tklist">${list.length ? list.map(tkCardHtml).join('') : `<div class="empty card">${T.seg === 'mine' ? 'No open task for you.' : 'No task here.'}</div>`}</div>`;
+  }
+  /* the Dashboard card: my open tasks; for the editor also how the team is doing */
+  function tkDashCard() {
+    if (!taskOn()) return '';
+    const mine = myOpenTasks(), all = S.M.tasks || [];
+    const openAll = all.filter((t) => taskState(t) === 'open'), done = all.filter((t) => taskState(t) === 'done');
+    if (!mine.length && !(editor() && (openAll.length || done.length))) return '';
+    const item = (t) => { const s = S.M.stores[t.store_code] || {}, n = taskLines(t).length;
+      return `<tr class="pick" data-act="taskGo" data-id="${t.id}"><td><b>${esc(t.store_code)}</b> <span class="small">${esc(s.store_name || '')}</span></td><td>${esc(t.reason)}${t.note ? `<div class="small muted">${esc(t.note)}</div>` : ''}</td>
+        <td class="right">${n}</td><td class="${taskLate(t) ? 'bad b' : ''}">${t.due ? when(t.due) : '-'}</td>${editor() ? `<td>${esc(t.assignee_name)}</td>` : ''}</tr>`; };
+    const byPerson = Array.from(openAll.reduce((m, t) => m.set(t.assignee_name, (m.get(t.assignee_name) || 0) + 1), new Map()).entries());
+    return `<div class="card stack tkdash"><div class="row wrap"><h2 class="grow">${mine.length ? `My tasks: ${mine.length} ${plural(mine.length, 'store')} to call` : 'Tasks'}</h2><button class="btn sm" data-act="nav" data-view="tasks">Open Tasks</button></div>
+      ${editor() ? `<div class="row wrap expsum"><span><b>${inr(openAll.length)}</b> open${byPerson.length ? ' (' + byPerson.map(([n, c]) => `${esc(n)} ${c}`).join(', ') + ')' : ''}</span><span class="${done.length ? 'good' : ''}"><b>${inr(done.length)}</b> done, waiting for your decision</span>${openAll.filter(taskLate).length ? `<span class="bad"><b>${openAll.filter(taskLate).length}</b> overdue</span>` : ''}</div>` : ''}
+      ${mine.length ? `<div class="tablewrap"><table class="tight"><thead><tr><th>Store</th><th>Reason</th><th class="right">Lines</th><th>Due</th>${editor() ? '<th>Teammate</th>' : ''}</tr></thead><tbody>${mine.slice(0, 8).map(item).join('')}</tbody></table></div>` : ''}
+      ${editor() && done.length ? `<div class="small"><b>Done, waiting for you:</b> ${done.slice(0, 10).map((t) => `<a href="#" data-act="taskGo" data-id="${t.id}">${esc(t.store_code)}</a>`).join(', ')}${done.length > 10 ? ' ...' : ''}</div>` : ''}</div>`;
+  }
+  async function tkSend(id, doneFlag) {
+    const t = (S.M.tasks || []).find((x) => x.id === id); if (!t) return;
+    const d = tkDraft(t), lines = taskLines(t).map((r) => { const dl = d.lines[r.l.id] || {};
+      return { line: r.l.id, response: dl.response != null ? dl.response : r.x.response || '', remarks: dl.remarks != null ? dl.remarks : r.x.remarks || '' }; });
+    if (doneFlag) { const left = lines.filter((x) => !x.response).length;
+      if (left) return tell('Mark done', `Choose the store's response for every line first (${left} ${plural(left, 'line')} left).`); }
+    S.busy = true;
+    try {
+      await A.rpc('task_respond', { p_task: id, p_lines: lines, p_remarks: d.remarks, p_done: !!doneFlag });
+      delete S.tk.draft[id];
+      toast(doneFlag ? `Task for ${t.store_code} marked done` : 'Saved');
+      await reload();
+    } catch (e) { await tell('Not saved', e.message); } finally { S.busy = false; }
+  }
+  function exportTasks() {
+    const list = tkList();
+    if (!list.length) return tell('Export', 'There is no task here to export.');
+    return excelFile('Tasks', false, (sheet) => {
+      sheet('Tasks', ['Task No', 'Status', 'Store Code', 'Store Name', 'Reason', 'Instruction', 'Assigned To', 'Assigned By', 'Assigned On', 'Due', 'Order No', 'Article Code', 'Description', 'MRP', 'Qty Wanted', 'Price Wanted', 'Line Status', "Store's Response", 'Line Remarks', 'Task Remarks', 'Done By', 'Done On'],
+        list.flatMap((t) => taskLines(t).map((r) => [t.id, TASK_STATE[taskState(t)][0], t.store_code, (S.M.stores[t.store_code] || {}).store_name || '', t.reason, t.note || '', t.assignee_name, t.created_by || '', when(t.created_at), t.due || '',
+          r.l.order_no, r.l.article_code, r.l.description || '', +r.l.mrp, r.l.req_qty, +r.l.req_price, C.STATUS_LABEL[r.l.status], r.x.response || '', r.x.remarks || '', t.remarks || '', t.done_by || '', t.done_at ? when(t.done_at) : ''])));
+      return `Exported ${inr(list.length)} ${plural(list.length, 'task')}`;
     });
   }
 
@@ -1564,7 +1738,7 @@
   /* the store's remark on the article (from "Article Remarks" in the orders file): a one-liner on the line when there is one */
   const remOn = () => !!S.M && S.M.schema >= 19;
   const remLine = (l) => (l.art_remarks ? `<div class="aremark" title="${esc('Remark from the store: ' + l.art_remarks)}"><span>Store remark:</span> ${esc(l.art_remarks)}</div>` : '');
-  const lineTags = (l) => [dupBadge(l), l.orig_article ? `<span class="badge alt" title="${esc('The store ordered ' + l.orig_article + ' ' + l.orig_desc)}">In place of ${esc(l.orig_article)}</span>` : '',
+  const lineTags = (l) => [dupBadge(l), taskChip(l), l.orig_article ? `<span class="badge alt" title="${esc('The store ordered ' + l.orig_article + ' ' + l.orig_desc)}">In place of ${esc(l.orig_article)}</span>` : '',
     l.art_status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '',
     l.late ? '<span class="badge bad" title="The allocate-by date has passed">Late</span>' : l.tight ? '<span class="badge warn">Allocate now</span>' : '',
     l.ss && l.req_qty > 0 && l.ss.family >= l.req_qty && NEEDS.includes(l.status) ? `<span class="badge warn" title="${esc(ssTitle(l))}">Store holds ${inr(l.ss.family)}</span>` : ''].filter(Boolean).join(' ');
@@ -1680,7 +1854,7 @@
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
     const delBtn = '<button class="btn sm danger" data-act="bulkDelete" title="Delete the ticked lines from the tracker (lines added by mistake)">Delete ...</button>';
     const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}${delBtn}` : S.a.seg === 'rej' || delDispOn() ? tick + delBtn : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
-        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>`;
+        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
     const detail = `<div id="odetail" class="detail ${S.o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${S.o.sel ? '' : 'hidden'}>${S.o.sel ? oDetailHtml() : ''}</div>`;
@@ -1765,6 +1939,7 @@
       <div class="row"><h2 class="grow">Order ${esc(ref(l))}</h2>${pill(l.status)}</div>
       <div class="small"><b>${esc(l.store_code)} ${esc(l.store_name)}</b>${l.city ? ', ' + esc(l.city) : ''}${l.state ? ', ' + esc(l.state) : ''}${l.customer ? ' &nbsp;|&nbsp; ' + esc(l.customer) : ''} &nbsp;|&nbsp; booked ${when(l.order_date)}</div>
       ${contact ? `<div class="small">Booked by: ${contact}</div>` : ''}
+      ${taskBoxHtml(l)}
       ${remOn() ? `<div class="storerem ${l.art_remarks ? 'has' : ''}">${l.art_remarks ? `<b>Store remark:</b> ${esc(l.art_remarks)}` : 'No remarks from the store.'}</div>` : ''}
       <div class="row top">${thumb(l.article_code, 'l', true)}<div class="grow"><h2>${esc(l.description || '(article details not on file)')}</h2>
         <div class="small">${esc(l.article_code)} &nbsp;|&nbsp; MC ${esc([l.mc_code, l.mc_name].filter(Boolean).join(' ') || '-')}${l.buyer ? ' &nbsp;|&nbsp; ' + esc(l.buyer) : ''}${l.category ? ' &nbsp;|&nbsp; ' + esc(l.category) : ''}</div>
@@ -2841,6 +3016,34 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     stTile: (el) => { S.st.status = S.st.status === el.dataset.k ? '' : el.dataset.k; S.st.limit = 300; render(); },
     stExport: () => exportSellThrough(),
     lyDash: (el) => { S.ly.dash = el.dataset.v; try { localStorage.setItem('allocdesk.lydash', S.ly.dash); } catch (_) { /* only a convenience */ } render(); },
+    taskNew: (el) => taskAssign(null, el.dataset.store, +el.dataset.line),
+    bulkTask: () => { const ids = Array.from(sec().checked).filter((id) => S.M.byId[id]); if (!ids.length) return tell('Assign task', 'Tick one or more order lines first.'); taskAssign(ids); },
+    taskGo: (el, e) => { if (e) e.preventDefault(); const t = (S.M.tasks || []).find((x) => x.id === +el.dataset.id); if (!t) return;
+      $$('.overlay').forEach((o) => { try { o.close(); } catch (_) { /* gone */ } });
+      const st = taskState(t); S.tk.seg = mineTask(t) && st === 'open' ? 'mine' : st; S.tk.person = ''; S.tk.q = ''; S.tk.focus = t.id; S.view = 'tasks'; S.o.sel = null; render();
+      const c = document.getElementById('task-' + t.id); if (c) c.scrollIntoView({ block: 'start' }); },
+    tkSeg: (el) => { S.tk.seg = el.dataset.seg; S.tk.focus = null; render(); },
+    tkManage: () => { S.tk.manage = !S.tk.manage; render(); },
+    tkOptAdd: (el) => { const i = document.getElementById('tknew-' + el.dataset.kind); const v = i ? i.value.trim() : ''; if (!v) return; run(() => A.rpc('task_opt_save', { p: { kind: el.dataset.kind, label: v } }), 'Added'); },
+    tkOptDel: (el) => run(() => A.rpc('task_opt_save', { p: { id: +el.dataset.id, active: false } }), 'Removed from the list'),
+    tkSave: (el) => tkSend(+el.dataset.id, false),
+    tkDone: (el) => tkSend(+el.dataset.id, true),
+    tkToOrders: (el) => { Object.assign(S.o, { status: '', flag: '', q: el.dataset.store, buyer: '', store: '', mc: '', sel: null, limit: 300 }); S.view = 'orders'; render(); window.scrollTo(0, 0); },
+    tkReopen: (el) => run(() => A.rpc('task_edit', { p_task: +el.dataset.id, p: { status: 'OPEN' } }), 'Task reopened'),
+    tkCancel: async (el) => { if (!(await confirmBox('Cancel this task?', 'It is taken off the lists and the teammate no longer sees it. The order lines stay as they are.', 'Cancel task', true))) return;
+      run(() => A.rpc('task_edit', { p_task: +el.dataset.id, p: { status: 'CANCELLED' } }), 'Task cancelled'); },
+    tkReassign: async (el) => {
+      const t = (S.M.tasks || []).find((x) => x.id === +el.dataset.id); if (!t) return;
+      let team; try { team = await A.rpc('team'); } catch (e) { return tell('Change task', e.message); }
+      const reasons = taskOpts('reason').map((o) => o.label); if (!reasons.includes(t.reason)) reasons.push(t.reason);
+      const v = await ask('Change the task', `<div class="formgrid"><label class="f">Teammate<select name="user">${team.map((m) => `<option value="${m.user_id}" ${m.user_id === t.assignee ? 'selected' : ''}>${esc(m.name || m.email)}</option>`).join('')}</select></label>
+        <label class="f">Reason<select name="reason">${reasons.map((r) => `<option ${r === t.reason ? 'selected' : ''}>${esc(r)}</option>`).join('')}</select></label>
+        <label class="f">Due date<input type="date" name="due" value="${esc(t.due || '')}"></label></div>
+        <label class="f">Instruction<input type="text" name="note" maxlength="300" value="${esc(t.note || '')}"></label>`, 'Save');
+      if (!v) return;
+      run(() => A.rpc('task_edit', { p_task: t.id, p: { user: v.user, reason: v.reason, note: v.note, due: v.due } }), 'Task changed');
+    },
+    tkExport: () => exportTasks(),
     skMore: () => { S.sk.limit += 500; skLoad(true); },
     skClear: (el) => { const k = el.dataset.key; if (k === 'mrp') { S.sk.mrp_min = ''; S.sk.mrp_max = ''; } else S.sk[k] = ''; S.sk.limit = 300; render(); },
     skClearAll: () => { Object.assign(S.sk, SK_BLANK, { limit: 300 }); render(); },
@@ -3167,6 +3370,9 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
     else if (t.id === 'lymq' || t.id === 'lysq') { S.ly[t.id === 'lymq' ? 'q' : 'sq'] = t.value; const pos = t.selectionStart, id = t.id; render(); const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.id === 'lylq') S.ly.lq = t.value;
+    else if (t.id === 'tkq') { S.tk.q = t.value; setHtml('tklist', (() => { const L = tkList(); return L.length ? L.map(tkCardHtml).join('') : '<div class="empty card">No task here.</div>'; })()); }
+    else if (t.classList.contains('tkrem')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: null, lines: {} }; (d.lines[t.dataset.line] = d.lines[t.dataset.line] || {}).remarks = t.value; }
+    else if (t.classList.contains('tkall')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: '', lines: {} }; d.remarks = t.value; }
     else if (t.id === 'skq') { S.sk.q = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 350); }
     else if (t.id === 'skmrpmin' || t.id === 'skmrpmax') { S.sk[t.id === 'skmrpmin' ? 'mrp_min' : 'mrp_max'] = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 500); }
     else if (t.id === 'stq') { S.st.q = t.value; S.st.limit = 300; setHtml('stlist', stTableHtml()); setHtml('stchips', stChips()); }
@@ -3191,6 +3397,9 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'sonly') { S.s.only = t.checked; render(); }
     else if (t.id === 'scover') { S.s.cover = t.value; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
+    else if (t.classList.contains('tkr')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: null, lines: {} }; (d.lines[t.dataset.line] = d.lines[t.dataset.line] || {}).response = t.value; }
+    else if (t.id === 'tkperson') { S.tk.person = t.value; render(); }
+    else if (t.dataset.opt) { const v = t.value.trim(); if (v) run(() => A.rpc('task_opt_save', { p: { id: +t.dataset.opt, label: v } }), 'Saved'); }
     else if (['skgroup', 'sksort', 'skonly', 'skstate'].includes(t.id)) { S.sk[t.id.slice(2)] = t.value; S.sk.limit = 300; render(); }
     else if (t.id === 'skstore' || t.id === 'skmc') { S.sk[t.id.slice(2)] = t.id === 'skstore' ? t.value.trim().toUpperCase() : t.value.trim(); S.sk.limit = 300; render(); }
     else if (['stgroup', 'stsort', 'ststatus', 'ststore', 'ststate', 'stmc', 'stbuyer'].includes(t.id)) { S.st[t.id.slice(2)] = t.value; S.st.limit = 300; if (t.id === 'stgroup') { S.st.collapsed = false; S.st.toggled.clear(); } render(); }

@@ -436,3 +436,14 @@ table.fitcols td.sold .stbar { width: 40px; margin-right: 5px; } table.fitcols t
 .cov { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid; }
 .cov.yes { color: #0F7A55; background: #E3F7EE; border-color: #B9EDD4; } .cov.partly { color: #946600; background: #FFF6DB; border-color: #FFE3A0; } .cov.no { color: #C7366A; background: #FFE8F0; border-color: #FFC6DA; }
 #cmrpbox select { width: 100%; }
+/* Tasks */
+.navbadge { margin-left: auto; background: #C7366A; color: #fff; font-size: 11px; font-weight: 700; border-radius: 999px; padding: 1px 7px; line-height: 1.5; }
+.tabs .navbadge { position: absolute; top: 2px; right: 6px; margin: 0; font-size: 10px; padding: 0 5px; } .tabs button { position: relative; }
+.badge.task { background: #EEF4FF; color: #1F6DB5; border-color: #BFDDFF; } .badge.task.done { background: #E3F7EE; color: #0F7A55; border-color: #B9EDD4; } .badge.task.closed { background: #F2F1F6; color: #6B6785; border-color: #E2E0EA; }
+.taskbox { margin: 4px 0; padding: 8px 10px; border: 1px solid #BFDDFF; background: #F4F8FF; border-radius: 10px; font-size: 13px; }
+.tkcard.focus { border-color: #8E74F0; box-shadow: 0 0 0 3px #E6DEFF; }
+.tkmeta { gap: 12px; font-size: 13px; } .tkreason { font-weight: 700; color: #5B3FD1; background: #F1EBFF; border-radius: 999px; padding: 2px 10px; }
+.tktable td { vertical-align: top; } .tktable td.artcell { white-space: normal; min-width: 170px; } .tkresp { min-width: 210px; } .tkresp select, .tkresp input { width: 100%; margin-bottom: 4px; }
+.tkopt input { flex: 1; min-width: 0; } .tlist { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; padding: 4px 8px; } .tlpick { padding: 4px 0; font-size: 13px; align-items: flex-start; gap: 8px; }
+.pop.wide { max-width: 760px; width: calc(100vw - 32px); }
+@media (max-width: 760px) { table.tktable.resp td.artcell { grid-column: 1 / -1; } table.tktable.resp tr { grid-template-columns: repeat(4, minmax(0, 1fr)); } .tkresp { min-width: 0; } }
