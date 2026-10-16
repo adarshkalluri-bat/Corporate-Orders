@@ -26,7 +26,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 24;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 25;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1421,7 +1421,7 @@
     if (!P.mc && P.q.trim().length < 2) { P.res = null; qpPaint(); return; }
     qpTimer = setTimeout(async () => {
       const seq = ++P.seq;
-      try { const r = await A.rpc('q_pick', { p: { mc: P.mc, mrp: P.mrp, q: P.q.trim(), limit: 150 } }); if (seq !== P.seq) return; P.res = r; P.err = ''; }
+      try { const r = await A.rpc('q_pick', { p: { mc: P.mc, mrp: P.mrp, q: P.q.trim(), limit: 150 } }); if (seq !== P.seq) return; if (r && r.rows) r.rows = r.rows.filter((a) => a.status !== 'In-Active').concat(r.rows.filter((a) => a.status === 'In-Active')); P.res = r; P.err = ''; }
       catch (e) { if (seq !== P.seq) return; P.err = e.message; }
       (P.res ? P.res.rows : []).forEach((a) => { if (!S.M.articles[a.article_code]) S.extra[a.article_code] = a; });
       qpPaint();
@@ -1439,7 +1439,7 @@
     if (!P.res.rows.length) return '<div class="small muted">No article matches.</div>';
     const cur = C.code(S.qy.form.art);
     return `<div class="tablewrap qbpicks"><table class="tight"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Balance<br>DC qty</th><th class="right">Pack</th><th></th></tr></thead><tbody>
-      ${P.res.rows.map((a) => `<tr><td class="artcell"><b class="pick" data-act="art" data-code="${esc(a.article_code)}">${esc(a.article_code)}</b> <span class="small">${esc(a.description || '')}</span>${a.status === 'In-Active' ? ' <span class="badge bad">In-Active</span>' : ''}</td>
+      ${P.res.rows.map((a, i) => (a.status === 'In-Active' && (i === 0 || P.res.rows[i - 1].status !== 'In-Active') ? `<tr class="qpsep"><td colspan="5">In-Active articles</td></tr>` : '') + `<tr class="${a.status === 'In-Active' ? 'qpinact' : ''}"><td class="artcell"><b class="pick" data-act="art" data-code="${esc(a.article_code)}">${esc(a.article_code)}</b> <span class="small">${esc(a.description || '')}</span>${a.status === 'In-Active' ? ' <span class="badge bad">In-Active</span>' : ''}</td>
           <td class="right">${inr2(Number(a.mrp) || 0)}</td><td class="right ${a.free > 0 ? 'good' : 'bad'} b">${inr(a.free)}</td><td class="right">${C.packOf(a)}</td>
           <td class="right">${many ? (have.has(a.article_code) ? '<span class="small good b">Added</span>' : `<button class="btn sm" data-act="qbAdd" data-code="${esc(a.article_code)}">Add</button>`)
             : (cur === a.article_code ? '<span class="small good b">Chosen</span>' : `<button class="btn sm" data-act="qpChoose" data-code="${esc(a.article_code)}">Choose</button>`)}</td></tr>`).join('')}</tbody></table></div>
