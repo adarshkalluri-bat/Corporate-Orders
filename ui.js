@@ -23,7 +23,7 @@
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 17;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 18;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -33,6 +33,7 @@
   const hasLy = () => lyOn() && !!S.M.meta.ly_batch;
   const dedOn = () => !!S.M && S.M.schema >= 16;       // taking SAP approvals off the DC balance by hand needs version 16
   const expOn = () => !!S.M && S.M.schema >= 15;       // expected stock needs database version 15
+  const delDispOn = () => !!S.M && S.M.schema >= 18;   // deleting a line with stock marked dispatched needs version 18
   const qOn = () => !!S.M && S.M.schema >= 14;        // queries from the stores need database version 14
   /* What the SAP approval file said about a line, in one line of text */
   const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
@@ -1390,7 +1391,7 @@
   const LISTS = ['orders', 'approved'];
   const sec = (view) => ((view || S.view) === 'approved' ? S.a : S.o);
   const SEGS = { todo: ['Approved', (l) => l.approved_open > 0], done: ['Dispatched', (l) => l.dispatched > 0], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
-  const ticks = (view) => editor() && S.wide && ((view || S.view) !== 'approved' || S.a.seg === 'todo');   // tick boxes: Pending orders, and Approved (to mark dispatched)
+  const ticks = (view) => editor() && S.wide && ((view || S.view) !== 'approved' || S.a.seg !== 'done' || delDispOn());   // tick boxes: Pending orders, and Approved (to mark dispatched, or delete)
   const baseLines = (view) => (view === 'approved' ? S.M.lines.filter(SEGS[S.a.seg][1]) : S.M.lines.filter((l) => NEEDS.includes(l.status)));
   function ordersFiltered(view) {
     view = view === 'approved' || (!view && S.view === 'approved') ? 'approved' : 'orders';
@@ -1513,7 +1514,7 @@
      then the numbers in large type, each in its own clearly named column. The group heading already carries some details. */
   function columnsFor(view, hide, ed) {
     const h = new Set(hide.split(' '));
-    return { chk: ed && (view !== 'approved' || S.a.seg === 'todo'), so: !h.has('so'), art: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
+    return { chk: ed && (view !== 'approved' || S.a.seg !== 'done' || delDispOn()), so: !h.has('so'), art: !h.has('art'), mcIn: !h.has('mc'), mrpIn: !h.has('mrp'),
       ss: view !== 'approved' && !!S.M.hasStoreStock };
   }
   function tableHead(view, c, ed) {
@@ -1581,7 +1582,7 @@
       return wrap(l.status === 'REJECTED' ? 'rej' : '', `<td class="big right"><b class="${l.approved ? 'good' : 'zero'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
         ${locsOn() ? `<td class="from">${C.locText(l.locs) ? esc(C.locText(l.locs)) + (l.sap_ded ? `<div class="small sapnote">In SAP, taken off the DC balance by hand${ed && l.approved_open > 0 ? ` <button class="btn link" data-act="sapDeduct" data-id="${l.id}" data-on="0" title="Stop taking it off the DC balance">undo</button>` : ''}</div>` : '') : l.sap_appr && l.sap_appr.status === 'APPROVED' ? `<span class="sapnote">In SAP${l.sap_appr.dc ? ' &middot; ' + esc(l.sap_appr.dc) : ''}</span>${l.sap_appr.remarks ? `<div class="small">${esc(l.sap_appr.remarks)}</div>` : ''}${ed && dedOn() && l.sap_open > 0 ? `<div><button class="btn sm" data-act="sapDeduct" data-id="${l.id}" data-on="1" title="Not taken off the DC balance now. Take it off when the latest stock report still has this stock (approved in SAP after the report)">Take off DC stock</button></div>` : ''}` : '<span class="muted">-</span>'}</td>` : ''}
         <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
-        <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() && C.locText(l.locs) ? '>Details / change<' : '>Details<')}</div></td>`);
+        <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() && C.locText(l.locs) ? '>Details / change<' : '>Details<')}${ed && (!l.dispatched || delDispOn()) ? ` <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker (for a line added by mistake)">Delete</button>` : ''}</div></td>`);
     }
     const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack), maxQ = canAct ? canGive(l) : 0;
     const dflt = top ? (need <= top ? l.open_qty : top) : 0, f = C.roundPack(dflt, l.pack);
@@ -1666,7 +1667,8 @@
     const stores = uniqOf(base, (l) => l.store_code).sort(), mcs = uniqOf(base, (l) => l.mc_name).sort(), buyers = Array.from(new Set(base.map((l) => l.buyer || '-'))).sort();
     const keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);          // a chosen filter stays in its list even when it matches nothing now
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
-    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}` : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
+    const delBtn = '<button class="btn sm danger" data-act="bulkDelete" title="Delete the ticked lines from the tracker (lines added by mistake)">Delete ...</button>';
+    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}${delBtn}` : S.a.seg === 'rej' || delDispOn() ? tick + delBtn : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
         <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
@@ -2873,19 +2875,24 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     delLine: async (el) => {
       const l = S.M.byId[+el.dataset.id]; if (!l) return;
       if (S.M.schema < 4) return tell('Delete line', 'Deleting needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
-      if (l.dispatched > 0) return tell('Delete line', 'Stock on this line is already dispatched, so it cannot be deleted.');
+      if (l.dispatched > 0 && !delDispOn()) return tell('Delete line', 'Stock on this line is already dispatched. Deleting it needs the newest database script: in Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
       const held = l.approved_open + l.offered;
       if (!(await confirmBox('Delete this order line?', `Store ${l.store_code} ${l.store_name}\nOrder ${l.order_no}\n${l.article_code}  ${l.description}\nQty wanted ${inr(l.req_qty)}\n\n` + (held ? `The ${inr(held)} pcs approved or offered on it go back to the balance DC quantity.\n` : '') +
+        (l.dispatched ? `${inr(l.dispatched)} pcs on it are marked dispatched. That is cancelled too: use this for a line added by mistake, not for stock that really left the DC.\n` : '') +
         'The line is removed from every screen and stays out when the SAP export is uploaded again. You can bring it back from Data > Deleted order lines.', 'Delete line', true))) return;
       if (S.o.sel === l.id) S.o.sel = null;
-      run(() => A.rpc('delete_lines', { p_lines: [l.id] }), 'Line deleted');
+      run(() => A.rpc('delete_lines', Object.assign({ p_lines: [l.id] }, l.dispatched ? { p_dispatched: true } : {})), 'Line deleted');
     },
     bulkDelete: async () => {
       const ids = Array.from(sec().checked).filter((id) => S.M.byId[id]);
       if (!ids.length) return tell('Delete ticked', 'Tick one or more order lines first.');
       if (S.M.schema < 4) return tell('Delete ticked', 'Deleting needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
-      if (!(await confirmBox(`Delete ${ids.length} ticked ${plural(ids.length, 'line')}?`, 'Anything approved or offered on these lines goes back to the balance DC quantity. Lines with stock already dispatched are left alone.\n\nDeleted lines are removed from every screen and stay out when the SAP export is uploaded again. You can bring them back from Data > Deleted order lines.', 'Delete lines', true))) return;
-      run(async () => { const r = await A.rpc('delete_lines', { p_lines: ids }); sec().checked.clear(); S.o.sel = null; return r; }, (r) => `Deleted ${r.done} ${plural(r.done, 'line')}` + (r.skipped ? `, ${r.skipped} left alone (dispatched)` : ''));
+      const disp = ids.filter((id) => S.M.byId[id].dispatched > 0), withDisp = disp.length > 0 && delDispOn();
+      const dq = disp.reduce((t, id) => t + S.M.byId[id].dispatched, 0);
+      if (!(await confirmBox(`Delete ${ids.length} ticked ${plural(ids.length, 'line')}?`, 'Anything approved or offered on these lines goes back to the balance DC quantity. ' +
+        (!disp.length ? '' : withDisp ? `\n\n${disp.length} of them ${plural(disp.length, 'has', 'have')} stock marked dispatched (${inr(dq)} pcs). That is cancelled too: use this for lines added by mistake, not for stock that really left the DC.` : 'Lines with stock already dispatched are left alone.') +
+        '\n\nDeleted lines are removed from every screen and stay out when the SAP export is uploaded again. You can bring them back from Data > Deleted order lines.', 'Delete lines', true))) return;
+      run(async () => { const r = await A.rpc('delete_lines', Object.assign({ p_lines: ids }, withDisp ? { p_dispatched: true } : {})); sec().checked.clear(); S.o.sel = null; return r; }, (r) => `Deleted ${r.done} ${plural(r.done, 'line')}` + (r.skipped ? `, ${r.skipped} left alone (dispatched)` : ''));
     },
     showDeleted: async () => {
       let rows;
