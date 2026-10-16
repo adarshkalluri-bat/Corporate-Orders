@@ -19,13 +19,14 @@
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
     ly: { dash: (() => { try { return localStorage.getItem('allocdesk.lydash') || 'ordered'; } catch (_) { return 'ordered'; } })(), basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
-    tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false },
+    tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false, opened: new Set(), closed: new Set() },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
+    qp: { mc: '', mcText: '', mrp: '', q: '', res: null, mcs: null, mcsLoading: false, seq: 0, err: '' },
     qb: { store: '', mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false },
     qy: { mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 22;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 23;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -322,8 +323,8 @@
     $$('[data-keep]').forEach((e) => { if (keep[e.dataset.keep]) e.scrollTop = keep[e.dataset.keep]; });
     window.scrollTo(0, y);
     hydrate();
-    if (LISTS.includes(S.view) && S.o.sel && !S.o.detail) loadDetail();
-    if (LISTS.includes(S.view)) packPreview();
+    if ((LISTS.includes(S.view) || S.view === 'tasks') && S.o.sel && !S.o.detail) loadDetail();
+    if (LISTS.includes(S.view) || (S.view === 'tasks' && S.o.sel)) packPreview();
     if (S.view === 'shortages') tally();
     if (S.view === 'catalogue' && S.c.scope === 'all') searchAll();
     if (S.view === 'lastyear') lyLoad();
@@ -1066,7 +1067,7 @@
       (r) => `${r.tasks} ${plural(r.tasks, 'task')} assigned (${r.lines} ${plural(r.lines, 'line')})` + (r.busy ? `; ${r.busy} already in an open task, left out` : ''));
   }
   /* the Tasks screen */
-  const TK_SEGS = { mine: 'My tasks', open: 'All open', done: 'Done - your decision', closed: 'Closed', all: 'All' };
+  const TK_SEGS = { mine: 'My tasks', open: 'Open', done: 'Done - your decision', closed: 'Closed', all: 'All' };
   function tkList() {
     const T = S.tk, words = T.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return (S.M.tasks || []).filter((t) => {
@@ -1081,6 +1082,24 @@
       return words.every((w) => txt.includes(w));
     }).sort((a, b) => (taskLate(b) - taskLate(a)) || String(a.due || '9').localeCompare(String(b.due || '9')) || b.id - a.id);
   }
+  /* the tasks of one store under one heading; click the heading to open or close it */
+  function tkGroupsHtml(list) {
+    const groups = new Map();
+    for (const t of list) { if (!groups.has(t.store_code)) groups.set(t.store_code, []); groups.get(t.store_code).push(t); }
+    const T = S.tk, few = groups.size <= 3;
+    return `<div class="row wrap" style="margin:0 0 8px"><span class="small grow">${inr(groups.size)} ${plural(groups.size, 'store')}, ${inr(list.length)} ${plural(list.length, 'task')}. Click a store to open its task; click an order number for the line's details.</span>
+        <button class="btn sm" data-act="tkAll" data-v="1">Open all</button><button class="btn sm" data-act="tkAll" data-v="0">Close all</button></div>` +
+      Array.from(groups, ([sc, ts]) => {
+        const s = S.M.stores[sc] || {}, open = T.opened.has(sc) || (few && !T.closed.has(sc)) || ts.some((t) => t.id === T.focus);
+        const lines = ts.reduce((n, t) => n + taskLines(t).length, 0), late = ts.some(taskLate);
+        return `<div class="card tkgroup ${open ? 'open' : ''}"><div class="row wrap tkghead pick" data-act="tkGroup" data-store="${esc(sc)}">
+            <span class="chev">${open ? '&#9662;' : '&#9656;'}</span><h2 style="margin:0">${esc(sc)} <span class="sname">${esc(s.store_name || '')}</span></h2>
+            <span class="small muted">${esc(s.state || '')}${s.lead_time != null ? ` &middot; lead time ${s.lead_time} ${plural(s.lead_time, 'day')}` : ''}</span><span class="grow"></span>
+            <span class="small">${ts.map((t) => `${esc(t.reason)} &middot; <b>${esc(t.assignee_name)}</b>${t.due ? ` &middot; <span class="${taskLate(t) ? 'bad b' : ''}">due ${when(t.due)}</span>` : ''}`).join('<br>')}</span>
+            <span class="small">${inr(lines)} ${plural(lines, 'line')}</span>${ts.map(taskPill).join(' ')}${late ? '<span class="pill REJECTED">Overdue</span>' : ''}</div>
+          ${open ? ts.map(tkCardHtml).join('<hr class="tksep">') : ''}</div>`;
+      }).join('');
+  }
   const tkDraft = (t) => { const d = (S.tk.draft[t.id] = S.tk.draft[t.id] || { remarks: null, lines: {} }); if (d.remarks == null) d.remarks = t.remarks || ''; return d; };
   function tkCardHtml(t) {
     const s = S.M.stores[t.store_code] || {}, rows = taskLines(t), ans = canAnswer(t), d = tkDraft(t), ed = editor(), resp = taskOpts('response');
@@ -1088,17 +1107,16 @@
     const opt = (cur) => { const labels = resp.map((o) => o.label); if (cur && !labels.includes(cur)) labels.push(cur);
       return `<option value="">- choose -</option>${labels.map((x) => `<option ${x === cur ? 'selected' : ''}>${esc(x)}</option>`).join('')}`; };
     const lineRow = (r) => { const dl = d.lines[r.l.id] || {}, cur = dl.response != null ? dl.response : r.x.response || '', rem = dl.remarks != null ? dl.remarks : r.x.remarks || '';
-      return `<tr><td class="glabel"><b>${esc(r.l.order_no)}</b><div class="small">booked ${when(r.l.order_date)}${r.l.del_date ? `, delivery ${when(r.l.del_date)}` : ''}</div></td>
+      return `<tr><td class="glabel"><b class="pick tkline" data-act="tkLine" data-id="${r.l.id}" title="Open this line's details">${esc(r.l.order_no)} &#8250;</b><div class="small">booked ${when(r.l.order_date)}${r.l.del_date ? `, delivery ${when(r.l.del_date)}` : ''}</div></td>
         <td class="artcell"><b class="nowrap pick" data-act="art" data-code="${esc(r.l.article_code)}">${esc(r.l.article_code)}</b><div class="small">${esc(r.l.description || '')}</div>${remLine(r.l)}</td>
         <td class="right" data-l="MRP">${inr(r.l.mrp)}</td><td class="right b" data-l="Qty wanted">${inr(r.l.req_qty)}</td><td class="right" data-l="Price wanted">${inr2(r.l.req_price)}</td><td data-l="Now">${pill(r.l.status)}${r.l.approved ? `<div class="small good">${inr(r.l.approved)} approved</div>` : ''}</td>
-        <td class="tkresp glabel">${ans ? `<select class="tkr" data-task="${t.id}" data-line="${r.l.id}" aria-label="Store's response">${opt(cur)}</select><input type="text" class="tkrem" data-task="${t.id}" data-line="${r.l.id}" maxlength="500" placeholder="Remarks (optional)" value="${esc(rem)}">`
+        <td class="tkresp glabel">${ans ? `<select class="tkr" data-task="${t.id}" data-line="${r.l.id}" aria-label="Store's response">${opt(cur)}</select><input type="text" class="tkrem" data-task="${t.id}" data-line="${r.l.id}" maxlength="500" placeholder="Remarks" value="${esc(rem)}">`
           : (r.x.response ? `<b>${esc(r.x.response)}</b>${r.x.remarks ? `<div class="small">${esc(r.x.remarks)}</div>` : ''}` : '<span class="muted">-</span>')}</td></tr>`; };
-    return `<div class="card stack tkcard ${S.tk.focus === t.id ? 'focus' : ''}" id="task-${t.id}">
-      <div class="row wrap"><h2 class="grow" style="margin:0">${esc(t.store_code)} <span class="sname">${esc(s.store_name || '')}</span> <span class="small muted">${esc(s.state || '')}${s.lead_time != null ? ` &middot; lead time ${s.lead_time} ${plural(s.lead_time, 'day')}` : ''}</span></h2>${taskPill(t)}</div>
-      <div class="row wrap tkmeta"><span class="tkreason">${esc(t.reason)}</span><span>Assigned to <b>${esc(t.assignee_name)}</b></span><span class="small muted">by ${esc(t.created_by || '')}, ${when(t.created_at)}</span>${t.due ? `<span class="${taskLate(t) ? 'bad b' : ''}">Due ${when(t.due)}${taskLate(t) ? ' (overdue)' : ''}</span>` : ''}</div>
+    return `<div class="stack tkcard ${S.tk.focus === t.id ? 'focus' : ''}" id="task-${t.id}">
+      <div class="row wrap tkmeta">${taskPill(t)}<span class="tkreason">${esc(t.reason)}</span><span>Assigned to <b>${esc(t.assignee_name)}</b></span><span class="small muted">by ${esc(t.created_by || '')}, ${when(t.created_at)}</span>${t.due ? `<span class="${taskLate(t) ? 'bad b' : ''}">Due ${when(t.due)}${taskLate(t) ? ' (overdue)' : ''}</span>` : ''}</div>
       ${t.note ? `<div class="note info"><b>Instruction:</b> ${esc(t.note)}</div>` : ''}
       ${phones.length ? `<div class="small">Call: ${phones.map(([ph, who]) => `<a href="tel:${esc(ph.replace(/\D/g, ''))}">${esc(ph)}</a>${who ? ' (' + esc(who) + ')' : ''}`).join(' &middot; ')}${s.email ? ` &middot; <a href="mailto:${esc(s.email)}">${esc(s.email)}</a>` : ''}</div>` : ''}
-      <div class="tablewrap fitwrap"><table class="tight tktable resp"><thead><tr><th>Order</th><th>Article</th><th class="right">MRP</th><th class="right">Qty<br>wanted</th><th class="right">Price<br>wanted</th><th>Now</th><th>Store's response</th></tr></thead><tbody>${rows.map(lineRow).join('')}</tbody></table></div>
+      <div class="tablewrap fitwrap"><table class="tight tktable resp fitcols"><colgroup><col class="c-ord"><col><col class="c-mrp"><col class="c-n"><col class="c-n"><col class="c-now"><col class="c-resp"></colgroup><thead><tr><th>Order</th><th>Article</th><th class="right">MRP</th><th class="right">Qty<br>wanted</th><th class="right">Price<br>wanted</th><th>Now</th><th>Store's response <span class="thsub">and remarks (optional)</span></th></tr></thead><tbody>${rows.map(lineRow).join('')}</tbody></table></div>
       ${ans ? `<label class="f">Remarks for the editor<textarea class="tkall" data-task="${t.id}" rows="2" maxlength="1000" placeholder="What the store said, who you spoke to ...">${esc(d.remarks)}</textarea></label>
         <div class="row wrap"><button class="btn" data-act="tkSave" data-id="${t.id}">Save</button><button class="btn primary" data-act="tkDone" data-id="${t.id}">Mark done</button><span class="grow"></span>${ed ? tkEdBtns(t) : ''}</div>`
         : `${t.remarks ? `<div><b>Remarks:</b> ${esc(t.remarks)}</div>` : ''}${t.done_by ? `<div class="small muted">Done by ${esc(t.done_by)}, ${when(t.done_at)}</div>` : ''}
@@ -1125,7 +1143,8 @@
       <div class="row wrap bulkbar">${editor() ? '<button class="btn sm" data-act="tkManage">Reasons and responses ...</button>' : ''}<button class="btn sm" data-act="tkExport">Export to Excel</button></div>
       ${T.manage && editor() ? tkManageHtml() : ''}
       ${editor() ? '<p class="small" style="margin:0 0 8px">To assign: open a line in Pending orders and use "Assign a task" in its details, or tick lines (any number of stores) and click "Assign task ...". One task per store.</p>' : ''}
-      <div id="tklist">${list.length ? list.map(tkCardHtml).join('') : `<div class="empty card">${T.seg === 'mine' ? 'No open task for you.' : 'No task here.'}</div>`}</div>`;
+      <div id="tklist">${list.length ? tkGroupsHtml(list) : `<div class="empty card">${T.seg === 'mine' ? 'No open task for you.' : 'No task here.'}</div>`}</div>
+      ${S.o.sel ? `<div id="odetail" class="detail ${S.wide ? 'drawer' : 'sheetpage'}" data-keep="odetail">${oDetailHtml()}</div>` : ''}`;
   }
   /* the Dashboard card: my open tasks; for the editor also how the team is doing */
   function tkDashCard() {
@@ -1197,6 +1216,14 @@
     const mrp = a ? Number(a.mrp) || 0 : 0, price = +f.price || 0, qty = Math.round(+f.qty || 0);
     return { sc, st, ac, a, mrp, price, qty, value: Math.round(price * qty * 100) / 100, disc: mrp && price ? (1 - price / mrp) * 100 : null };
   }
+  /* margin of the one-article query: at the final price, per piece and on the quantity */
+  function qMarginHtml(x) {
+    if (!x.a || !x.price) return '';
+    const gst = x.a.gst == null ? null : Number(x.a.gst), cost = Number(x.a.cost) || 0;
+    if (gst == null || !cost) return '<span>Margin <b class="muted">cost not on file</b></span>';
+    const net = x.price / (1 + gst), per = net - cost;
+    return `<span>Margin <b class="${per < 0 ? 'bad' : ''}">${pct(per / net)}</b> (Rs ${per.toFixed(2)} a piece${x.qty ? `, Rs ${inr(Math.round(per * x.qty))} on the qty` : ''})</span>`;
+  }
   function qInfo() {
     const x = qCalc(), f = S.qy.form;
     setHtml('qf-store-info', (!x.sc ? '<span class="muted">Type the store code</span>' : x.st
@@ -1208,7 +1235,7 @@
       : `<span class="bad">Article ${esc(x.ac)} is not in the article files</span>`);
     const over = x.mrp && x.price > x.mrp + 0.004;
     setHtml('qf-sum', `<span>Discount <b>${x.disc == null ? '-' : x.disc.toFixed(2) + '%'}</b></span><span>Final price <b>${x.price ? 'Rs ' + inr2(x.price) : '-'}</b></span><span>Quantity <b>${x.qty ? inr(x.qty) + ' pcs' : '-'}</b></span>
-      <span class="big">Order value <b>${x.price && x.qty ? 'Rs ' + inr2(x.value) : '-'}</b></span>${over ? '<span class="bad">The final price is above MRP</span>' : ''}`);
+      <span class="big">Order value <b>${x.price && x.qty ? 'Rs ' + inr2(x.value) : '-'}</b></span>${qMarginHtml(x)}${over ? '<span class="bad">The final price is above MRP</span>' : ''}`);
     const ok = x.st && x.a && x.price > 0 && !over && x.qty > 0;
     const b = $('#qf-go'); if (b) b.disabled = !ok || S.qy.saving;
     if (x.ac && x.a === undefined) qFindArt(x.ac);
@@ -1275,6 +1302,65 @@
       <div class="tablewrap"><table class="tight qtable"><thead><tr><th>Logged</th><th>Store</th><th>Article</th><th class="right">MRP</th><th class="right">Discount</th><th class="right">Final price</th><th class="right">Qty</th><th class="right">Order value</th><th>Remarks</th><th></th></tr></thead><tbody>
       ${html.join('')}</tbody></table></div>
       ${rows.length > shown.length ? `<p class="small">Showing the newest 500; Export to Excel has all ${inr(rows.length)}.</p>` : ''}`;
+  }
+  /* ----- the article picker of both query forms: type part of the MC and choose it, then the MRP (or type a code / name);
+     the articles come from the full article data (DSR) file, with their balance DC qty ----- */
+  let qpTimer = null;
+  async function qpMcs() {
+    const P = S.qp;
+    if (P.mcs || P.mcsLoading || S.M.schema < 23) return;
+    P.mcsLoading = true;
+    try { P.mcs = await A.rpc('q_mcs'); } catch (e) { P.mcs = []; P.err = e.message; } finally { P.mcsLoading = false; }
+    setHtml('qp-mcs', qpMcOptions()); setHtml('qp-mchint', qpMcHint());
+  }
+  const qpMcOptions = () => (S.qp.mcs || []).map((m) => `<option value="${esc(m.mc)}">${inr(m.n)} ${plural(m.n, 'article')}</option>`).join('');
+  const qpMcHint = () => (S.qp.mcs && !S.qp.mcs.length ? '<span class="warn">No MC found: the full article data (DSR) file is not loaded (Data, step 3).</span>' : S.qp.mc ? `MC <b>${esc(S.qp.mc)}</b>` : 'Type 3 or 4 letters of the MC and choose it from the list');
+  function qpLoad(wait) {
+    const P = S.qp;
+    clearTimeout(qpTimer);
+    if (!P.mc && P.q.trim().length < 2) { P.res = null; qpPaint(); return; }
+    qpTimer = setTimeout(async () => {
+      const seq = ++P.seq;
+      try { const r = await A.rpc('q_pick', { p: { mc: P.mc, mrp: P.mrp, q: P.q.trim(), limit: 150 } }); if (seq !== P.seq) return; P.res = r; P.err = ''; }
+      catch (e) { if (seq !== P.seq) return; P.err = e.message; }
+      (P.res ? P.res.rows : []).forEach((a) => { if (!S.M.articles[a.article_code]) S.extra[a.article_code] = a; });
+      qpPaint();
+    }, wait || 0);
+  }
+  function qpPaint() { setHtml('qp-mrpbox', qpMrpHtml()); setHtml('qp-list', qpListHtml()); setHtml('qp-mchint', qpMcHint()); }
+  function qpMrpHtml() {
+    const P = S.qp, ms = P.mc && P.res ? P.res.mrps : [];
+    return `<select id="qp-mrp" aria-label="MRP" ${P.mc ? '' : 'disabled'}><option value="">${P.mc ? 'All MRPs' : 'Choose the MC first'}</option>${ms.map((m) => `<option value="${m.mrp}" ${String(P.mrp) === String(m.mrp) ? 'selected' : ''}>MRP ${inr2(+m.mrp)} (${m.n})</option>`).join('')}${P.mrp && !ms.some((m) => String(m.mrp) === String(P.mrp)) ? `<option value="${esc(P.mrp)}" selected>MRP ${esc(P.mrp)}</option>` : ''}</select>`;
+  }
+  function qpListHtml() {
+    const P = S.qp, many = S.qy.mode === 'many', have = new Set(S.qb.rows.map((r) => r.a));
+    if (P.err) return `<div class="small bad">${esc(P.err)}</div>`;
+    if (!P.res) return `<div class="small muted">${P.mc ? 'Loading ...' : 'Choose an MC (and an MRP), or type an article code or name, to list the articles.'}</div>`;
+    if (!P.res.rows.length) return '<div class="small muted">No article matches.</div>';
+    const cur = C.code(S.qy.form.art);
+    return `<div class="tablewrap qbpicks"><table class="tight"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Balance<br>DC qty</th><th class="right">Pack</th><th></th></tr></thead><tbody>
+      ${P.res.rows.map((a) => `<tr><td class="artcell"><b class="pick" data-act="art" data-code="${esc(a.article_code)}">${esc(a.article_code)}</b> <span class="small">${esc(a.description || '')}</span>${a.status === 'In-Active' ? ' <span class="badge bad">In-Active</span>' : ''}</td>
+          <td class="right">${inr2(Number(a.mrp) || 0)}</td><td class="right ${a.free > 0 ? 'good' : 'bad'} b">${inr(a.free)}</td><td class="right">${C.packOf(a)}</td>
+          <td class="right">${many ? (have.has(a.article_code) ? '<span class="small good b">Added</span>' : `<button class="btn sm" data-act="qbAdd" data-code="${esc(a.article_code)}">Add</button>`)
+            : (cur === a.article_code ? '<span class="small good b">Chosen</span>' : `<button class="btn sm" data-act="qpChoose" data-code="${esc(a.article_code)}">Choose</button>`)}</td></tr>`).join('')}</tbody></table></div>
+      ${P.res.more ? `<div class="small">${inr(P.res.n - P.res.rows.length)} more - choose an MRP or type more of the name.</div>` : ''}`;
+  }
+  function qpHtml() {
+    const P = S.qp;
+    if (S.M.schema < 23) return '';
+    setTimeout(qpMcs, 0);
+    return `<div class="qppick stack"><div class="qbpick"><label class="f">MC<input id="qp-mc" type="search" list="qp-mcs" autocomplete="off" value="${esc(P.mc || P.mcText)}" placeholder="Type part of the MC, e.g. bowl"></label>
+        <label class="f">MRP<span id="qp-mrpbox">${qpMrpHtml()}</span></label>
+        <label class="f">Or type an article code / name<input id="qp-q" type="search" value="${esc(P.q)}" placeholder="e.g. 1212013789, pudding"></label></div>
+      <datalist id="qp-mcs">${qpMcOptions()}</datalist><div class="small muted" id="qp-mchint">${qpMcHint()}</div>
+      <div id="qp-list">${qpListHtml()}</div></div>`;
+  }
+  /* the MC box: a value that is one of the MCs (chosen from the list, or typed in full) selects it */
+  function qpMcTyped(t) {
+    const P = S.qp, v = t.value.trim(), hit = (P.mcs || []).find((m) => m.mc.toUpperCase() === v.toUpperCase());
+    P.mcText = t.value;
+    if (hit && hit.mc !== P.mc) { P.mc = hit.mc; P.mrp = ''; P.res = null; qpPaint(); qpLoad(); }
+    else if (!v && P.mc) { P.mc = ''; P.mrp = ''; P.res = null; qpLoad(); }
   }
   /* ----- a query with several articles: pick the MC and the MRP, add the articles, and see the whole deal ----- */
   const QB_BLANK = () => ({ store: '', mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false });
@@ -1343,10 +1429,10 @@
     const B = S.qb;
     return `<div class="card stack qform"><h2>Log a query with several articles</h2>
       <div class="qgrid"><label class="f">Store code<input id="qb-store" type="text" list="qf-stores" autocomplete="off" value="${esc(B.store)}" placeholder="e.g. HD02"></label><div class="qinfo" id="qb-sinfo">${qbStoreInfo()}</div></div>
-      <div class="qbpick"><label class="f">MC<select id="qb-mc" aria-label="MC"><option value="">Choose the MC ...</option>${qbMcs().map((m) => `<option ${B.mc === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
+      ${S.M.schema >= 23 ? qpHtml() : `<div class="qbpick"><label class="f">MC<select id="qb-mc" aria-label="MC"><option value="">Choose the MC ...</option>${qbMcs().map((m) => `<option ${B.mc === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>
         <label class="f">MRP<span id="qb-mrpbox">${qbMrpHtml()}</span></label>
         <label class="f">Or type a code / name<input id="qb-find" type="search" value="${esc(B.find)}" placeholder="e.g. bowl, 1212013789"></label></div>
-      <div id="qb-picks">${qbPicksHtml()}</div>
+      <div id="qb-picks">${qbPicksHtml()}</div>`}
       <h3 style="margin:6px 0 0">In this query</h3>
       <div id="qb-rows">${qbRowsHtml()}</div>
       <div id="qb-tot">${qbTotHtml()}</div>
@@ -1390,6 +1476,9 @@
         <div class="qgrid">
           <label class="f">Store code<input id="qf-store" type="text" list="qf-stores" autocomplete="off" value="${esc(f.store)}" placeholder="e.g. HD02"></label>
           <div class="qinfo" id="qf-store-info"></div>
+        </div>
+        ${many ? '' : qpHtml()}
+        <div class="qgrid">
           <label class="f">Article code<input id="qf-art" type="text" inputmode="numeric" autocomplete="off" value="${esc(f.art)}" placeholder="e.g. 1212013789"></label>
           <div class="qinfo" id="qf-art-info"></div>
         </div>
@@ -2053,7 +2142,7 @@
     const tel = (l.phone || '').replace(/\D/g, '');
     const contact = [l.poc_name ? esc(l.poc_name) : '', tel ? `<a href="tel:${esc(tel)}">${esc(l.phone)}</a>` : '', l.email ? `<a href="mailto:${esc(l.email)}">${esc(l.email)}</a>` : ''].filter(Boolean).join(' &middot; ');
     const badges = [a.status === 'In-Active' ? '<span class="badge bad">In-Active article</span>' : '', l.in_master ? '' : '<span class="badge">Not in the Diwali range</span>'].join('');
-    out.push(`<div class="back"><button class="btn" data-act="unsel">&#8249; Back to orders</button></div>`);
+    out.push(`<div class="back"><button class="btn" data-act="unsel">&#8249; Back to ${S.view === 'tasks' ? 'the task' : 'orders'}</button></div>`);
     out.push(`<div class="card stack">
       <div class="row"><h2 class="grow">Order ${esc(ref(l))}</h2>${pill(l.status)}</div>
       <div class="small"><b>${esc(l.store_code)} ${esc(l.store_name)}</b>${l.city ? ', ' + esc(l.city) : ''}${l.state ? ', ' + esc(l.state) : ''}${l.customer ? ' &nbsp;|&nbsp; ' + esc(l.customer) : ''} &nbsp;|&nbsp; booked ${when(l.order_date)}</div>
@@ -2278,15 +2367,19 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
     if (!M.meta.stock_asof) list = '<div class="empty card">Shortages appear once a DC stock report is loaded.</div>';
     else if (!rows.length) list = `<div class="empty card">${S.s.only ? 'No article is short. Every pending order line can be covered from free DC stock.' : 'No pending demand.'}</div>`;
     else if (S.wide) {
-      list = `<div class="tablewrap"><table class="twoline"><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Total<br>DC qty</th><th class="right">Allocated<br>to orders</th>
-        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th>${expOn() ? '<th class="right">Expected<br>qty</th><th>Next<br>arrival</th>' : ''}<th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th><th>Covered by<br>alternates?</th></tr></thead><tbody>
+      const ex = expOn(), ncol = ex ? 15 : 13;
+      list = `<div class="tablewrap fitwrap"><table class="twoline fitcols shtable"><colgroup><col class="c-cov"><col class="c-mc"><col class="c-mrp"><col><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-st"><col class="c-n"><col class="c-n"><col class="c-n">${ex ? '<col class="c-n"><col class="c-arr">' : ''}<col class="c-n"></colgroup>
+        <thead><tr><th>Covered by<br>alternates?</th><th>MC</th><th class="right">MRP</th><th>Article</th><th class="right">Total<br>DC qty</th><th class="right">Allo&shy;cated<br>to orders</th>
+        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th>${ex ? '<th class="right">Expec&shy;ted<br>qty</th><th>Next<br>arrival</th>' : ''}<th class="right">Pending<br>PO</th></tr></thead><tbody>
         ${rows.map(({ c, p, a, gap, cover }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff), ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
-          return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td class="w mc"><span class="caret">${S.s.art === c ? '&#9662;' : '&#9656;'}</span> ${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
+          return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td><span class="caret">${S.s.art === c ? '&#9662;' : '&#9656;'}</span> ${coverPill(cover)}</td>
+          <td class="w mc">${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td class="w artcell"><b>${esc(c)}</b><div class="small">${esc(a.description || '')}</div></td>
           <td class="right">${inr(p.dc)}</td><td class="right">${p.reserved ? inr(p.reserved) : '-'}</td><td class="right b ${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</td>
-          <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td><td class="right ${ppo ? '' : 'muted'}" title="${ppo ? `This month ${inr(a.ppo_cm || 0)}, next month ${inr(a.ppo_nm || 0)}` : ''}">${ppo ? inr(ppo) : '-'}</td>
-          ${expOn() ? (() => { const ex = expOpen(c), t = ex.reduce((x, e) => x + e.qty, 0); return `<td class="right ${t ? 'b' : 'muted'}">${t ? inr(t) : '-'}</td><td class="${ex[0] && expLate(ex[0]) ? 'warn b' : ''}">${ex[0] ? when(ex[0].eta) + (ex.length > 1 ? ` <span class="small muted">+${ex.length - 1}</span>` : '') : '<span class="muted">-</span>'}</td>`; })() : ''}
-          <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td><td>${coverPill(cover)}</td></tr>` +
-            (S.s.art === c ? `<tr class="sdrow"><td colspan="${expOn() ? 16 : 14}"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
+          <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td>
+          <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td>
+          ${ex ? (() => { const xs = expOpen(c), t = xs.reduce((x, e) => x + e.qty, 0); return `<td class="right ${t ? 'b' : 'muted'}">${t ? inr(t) : '-'}</td><td class="${xs[0] && expLate(xs[0]) ? 'warn b' : ''}">${xs[0] ? when(xs[0].eta) + (xs.length > 1 ? ` <span class="small muted">+${xs.length - 1}</span>` : '') : '<span class="muted">-</span>'}</td>`; })() : ''}
+          <td class="right ${ppo ? '' : 'muted'}" title="${ppo ? `This month ${inr(a.ppo_cm || 0)}, next month ${inr(a.ppo_nm || 0)}` : ''}">${ppo ? inr(ppo) : '-'}</td></tr>` +
+            (S.s.art === c ? `<tr class="sdrow"><td colspan="${ncol}"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
     } else {
       list = rows.map(({ c, p, a, gap, cover }) => `<div class="ocard" data-act="shortSel" data-code="${esc(c)}">${thumb(c, 's')}<div class="grow">
         <div class="row"><span class="mcname grow">${esc(a.mc_name || '')}</span>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>${cover.k ? `<div class="small">Covered by alternates? ${coverPill(cover)}</div>` : ''}
@@ -3113,11 +3206,12 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     labelQuery: (el) => { if (labelPop) labelPop.close(); S.qy.form = Object.assign(QBLANK(), { art: el.dataset.code }); S.view = 'queries'; render(); const i = $('#qf-store'); if (i) i.focus(); },
     qSubmit: () => qSubmit(),
     qMode: (el) => { S.qy.mode = el.dataset.v; render(); },
-    qbAdd: (el) => { if (!S.qb.rows.some((r) => r.a === el.dataset.code)) S.qb.rows.push({ a: el.dataset.code, disc: '', price: '', qty: '' }); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qb-tot', qbTotHtml());
+    qbAdd: (el) => { if (!S.qb.rows.some((r) => r.a === el.dataset.code)) S.qb.rows.push({ a: el.dataset.code, disc: '', price: '', qty: '' }); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qp-list', qpListHtml()); setHtml('qb-tot', qbTotHtml());
       const i = document.querySelector(`.qbd[data-i="${S.qb.rows.length - 1}"]`); if (i) i.focus(); },
-    qbDel: (el) => { S.qb.rows.splice(+el.dataset.i, 1); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qb-tot', qbTotHtml()); },
+    qbDel: (el) => { S.qb.rows.splice(+el.dataset.i, 1); setHtml('qb-rows', qbRowsHtml()); setHtml('qb-picks', qbPicksHtml()); setHtml('qp-list', qpListHtml()); setHtml('qb-tot', qbTotHtml()); },
     qbClear: () => { S.qb = { store: S.qb.store, mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false }; render(); },
     qbLog: () => qbLog(),
+    qpChoose: (el) => { const i = $('#qf-art'); if (!i) return; i.value = el.dataset.code; qTyped(i); setHtml('qp-list', qpListHtml()); const d = $('#qf-disc'); if (d) d.focus(); },
     expAdd: (el) => {
       const q = Math.round(+$('#exp-qty').value || 0), eta = $('#exp-eta').value, note = $('#exp-note').value;
       if (!(q > 0)) return tell('Expected stock', 'Type the expected quantity.');
@@ -3169,6 +3263,12 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       run(() => A.rpc('task_edit', { p_task: t.id, p: { user: v.user, reason: v.reason, note: v.note, due: v.due } }), 'Task changed');
     },
     tkExport: () => exportTasks(),
+    tkGroup: (el, e) => { if (e && e.target.closest('[data-act]') !== el) return; const sc = el.dataset.store, T = S.tk, isOpen = el.closest('.tkgroup').classList.contains('open');
+      if (isOpen) { T.opened.delete(sc); T.closed.add(sc); if (T.focus && (S.M.tasks || []).some((t) => t.id === T.focus && t.store_code === sc)) T.focus = null; } else { T.closed.delete(sc); T.opened.add(sc); }
+      render(); },
+    tkAll: (el) => { const T = S.tk, scs = Array.from(new Set(tkList().map((t) => t.store_code))); T.opened.clear(); T.closed.clear();
+      if (el.dataset.v === '1') scs.forEach((x) => T.opened.add(x)); else { scs.forEach((x) => T.closed.add(x)); T.focus = null; } render(); },
+    tkLine: (el) => { S.o.sel = +el.dataset.id; S.o.detail = null; render(); },
     skMore: () => { S.sk.limit += 500; skLoad(true); },
     skClear: (el) => { const k = el.dataset.key; if (k === 'mrp') { S.sk.mrp_min = ''; S.sk.mrp_max = ''; } else S.sk[k] = ''; S.sk.limit = 300; render(); },
     skClearAll: () => { Object.assign(S.sk, SK_BLANK, { limit: 300 }); render(); },
@@ -3496,13 +3596,15 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.classList.contains('rowp') || t.id === 'ap-price') { const changed = t.value !== '' && Math.abs(+t.value - +t.dataset.asked) > 0.004; t.classList.toggle('changed', changed); t.title = changed ? `Changed from the price the store asked (Rs ${t.dataset.asked})` : `Price per piece to approve (the store asked Rs ${t.dataset.asked})`; }
     else if (t.id === 'lymq' || t.id === 'lysq') { S.ly[t.id === 'lymq' ? 'q' : 'sq'] = t.value; const pos = t.selectionStart, id = t.id; render(); const n = document.getElementById(id); if (n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.id === 'lylq') S.ly.lq = t.value;
-    else if (t.id === 'tkq') { S.tk.q = t.value; setHtml('tklist', (() => { const L = tkList(); return L.length ? L.map(tkCardHtml).join('') : '<div class="empty card">No task here.</div>'; })()); }
+    else if (t.id === 'tkq') { S.tk.q = t.value; setHtml('tklist', (() => { const L = tkList(); return L.length ? tkGroupsHtml(L) : '<div class="empty card">No task here.</div>'; })()); }
     else if (t.classList.contains('tkrem')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: null, lines: {} }; (d.lines[t.dataset.line] = d.lines[t.dataset.line] || {}).remarks = t.value; }
     else if (t.classList.contains('tkall')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: '', lines: {} }; d.remarks = t.value; }
     else if (t.id === 'skq') { S.sk.q = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 350); }
     else if (t.id === 'skmrpmin' || t.id === 'skmrpmax') { S.sk[t.id === 'skmrpmin' ? 'mrp_min' : 'mrp_max'] = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 500); }
     else if (t.id === 'stq') { S.st.q = t.value; S.st.limit = 300; setHtml('stlist', stTableHtml()); setHtml('stchips', stChips()); }
     else if (/^qf-/.test(t.id)) qTyped(t);
+    else if (t.id === 'qp-mc') qpMcTyped(t);
+    else if (t.id === 'qp-q') { S.qp.q = t.value; qpLoad(350); }
     else if (t.id === 'qb-store') { S.qb.store = t.value; setHtml('qb-sinfo', qbStoreInfo()); }
     else if (t.id === 'qb-find') { S.qb.find = t.value; setHtml('qb-picks', qbPicksHtml()); }
     else if (t.id === 'qb-rem') S.qb.remarks = t.value;
@@ -3528,6 +3630,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'scover') { S.s.cover = t.value; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
     else if (t.classList.contains('tkr')) { const d = S.tk.draft[t.dataset.task] = S.tk.draft[t.dataset.task] || { remarks: null, lines: {} }; (d.lines[t.dataset.line] = d.lines[t.dataset.line] || {}).response = t.value; }
+    else if (t.id === 'qp-mrp') { S.qp.mrp = t.value; qpLoad(); }
     else if (t.id === 'qb-mc') { S.qb.mc = t.value; S.qb.mrp = ''; setHtml('qb-mrpbox', qbMrpHtml()); setHtml('qb-picks', qbPicksHtml()); }
     else if (t.id === 'qb-mrp') { S.qb.mrp = t.value; setHtml('qb-picks', qbPicksHtml()); }
     else if (t.id === 'tkperson') { S.tk.person = t.value; render(); }

@@ -457,3 +457,17 @@ table.fitcols td.sold .stbar { width: 40px; margin-right: 5px; } table.fitcols t
 .qbtot span { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); } .qbtot b { font-size: 18px; } .qbtot small { font-size: 12px; color: var(--muted); }
 .qtable tr.qgrp td { background: #F6F2FF; border-top: 2px solid #D9CCFB; } .qtable tr.qchild td { font-size: 13px; } .qtable tr.qchild td:first-child { text-align: right; }
 @media (max-width: 760px) { table.qbrows.resp td.artcell { grid-column: 1 / -1; } table.qbrows.resp tr { grid-template-columns: repeat(3, minmax(0, 1fr)); } .qbrows input { width: 100%; text-align: left; } }
+/* Tasks grouped by store; the response and its remarks fit in the row */
+.tkgroup { padding: 0; } .tkghead { padding: 12px 14px; gap: 10px; align-items: center; } .tkghead:hover { background: #FAF8FF; border-radius: 16px; }
+.tkghead .chev { width: 14px; color: var(--muted); } .tkgroup.open .tkghead { border-bottom: 1px solid var(--line); border-radius: 16px 16px 0 0; }
+.tkgroup .tkcard { padding: 12px 14px; } hr.tksep { border: 0; border-top: 2px dashed #E2D9FB; margin: 0 14px; }
+.tkline { color: #5B3FD1; text-decoration: underline dotted; cursor: pointer; }
+table.tktable.fitcols col.c-ord { width: 132px; } table.tktable.fitcols col.c-now { width: 108px; } table.tktable.fitcols col.c-resp { width: 32%; }
+table.tktable.fitcols col.c-n { width: 72px; } table.tktable td.tkresp { min-width: 0; } table.tktable td.tkresp select, table.tktable td.tkresp input { width: 100%; box-sizing: border-box; }
+/* Shortages: every column in view */
+table.shtable.fitcols col.c-cov { width: 88px; } table.shtable.fitcols col.c-mc { width: 9%; } table.shtable.fitcols col.c-n { width: 58px; } table.shtable.fitcols col.c-st { width: 50px; } table.shtable.fitcols col.c-arr { width: 66px; } table.shtable.fitcols col.c-mrp { width: 52px; }
+table.shtable.fitcols td.artcell { white-space: normal; } table.shtable td .cov { font-size: 11px; padding: 1px 6px; }
+@media (max-width: 1180px) { table.shtable.fitcols col.c-n { width: 50px; } table.shtable.fitcols col.c-cov { width: 80px; } table.shtable.fitcols th { font-size: 11px; } table.shtable.fitcols { font-size: 12.5px; } }
+table.tktable.fitcols td { white-space: normal; } table.tktable.fitcols td.right { white-space: nowrap; }
+table.shtable.fitcols th { font-size: 11px; padding: 7px 3px; } table.shtable.fitcols td { padding: 7px 4px; }
+table.shtable.fitcols th { hyphens: manual; overflow-wrap: normal; }
