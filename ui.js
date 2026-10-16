@@ -13,17 +13,17 @@
     me: null, M: null, view: 'dashboard', wide: wideMQ.matches, lastSync: null, online: true, stale: false, busy: false,
     /* o = the Pending orders screen, a = the Approved orders screen. The line open in the side panel (o.sel) is shared. */
     o: { q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
-    a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
-    s: { only: true, q: '', art: null, qty: {} },
-    c: { q: '', scope: 'master', cat: '', results: null, loading: false, asked: '' },
+    a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'none', sort: 'latest', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
+    s: { only: true, q: '', art: null, qty: {}, cover: '' },
+    c: { q: '', scope: 'master', cat: '', mrp: '', results: null, loading: false, asked: '' },
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
-    ly: { basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
+    ly: { dash: (() => { try { return localStorage.getItem('allocdesk.lydash') || 'ordered'; } catch (_) { return 'ordered'; } })(), basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
     qy: { list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 19;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 20;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1221,10 +1221,13 @@
     if (u < 0) return `<div class="card stack" style="margin-top:12px"><h2>Orders vs last year</h2><div class="note info">D-30 this year is ${esc(dmy(SE.ty0, true))}. The comparison with last year (from ${esc(dmy(SE.ly0, true))}) starts the day after.</div></div>`;
     const ly = SE.lyCum[u], ty = SE.tyCum[u], r = lyRange(SE, u);
     const big = (t, a, b, f) => `<div class="lybig"><span>${t}</span><b>${f(b)}</b><span class="small">last year ${f(a)}</span><span>${growHtml(b, a)}</span></div>`;
-    return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Orders vs last year, ${SE.label(0)} to ${SE.label(u)}</h2><button class="btn sm" data-act="nav" data-view="lastyear">Open</button></div>
-      <p class="small">Total so far: this year ${esc(r.ty)}, last year ${esc(r.ly)} (the same D-days, up to yesterday). Ordered = qty wanted at the price wanted, rejected lines included.</p>
-      <div class="lybigs">${big('Value ordered', ly.wv, ty.wv, crore)}${big('Qty ordered', ly.wq, ty.wq, pcsShort)}${big('Orders', ly.o, ty.o, inr)}${big('Value approved', ly.fv, ty.fv, crore)}</div>
-      ${seasonChart(SE, 'wv', { h: 190, mini: true })}</div>`;
+    const ap = S.ly.dash === 'approved';
+    const sw = `<div class="segs lydash">${[['ordered', 'Ordered'], ['approved', 'Approved']].map(([k, t]) => `<button class="${(ap ? 'approved' : 'ordered') === k ? 'on' : ''}" data-act="lyDash" data-v="${k}">${t}</button>`).join('')}</div>`;
+    return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Orders vs last year, ${SE.label(0)} to ${SE.label(u)}</h2>${sw}<button class="btn sm" data-act="nav" data-view="lastyear">Open</button></div>
+      <p class="small">Total so far: this year ${esc(r.ty)}, last year ${esc(r.ly)} (the same D-days, up to yesterday). ${ap ? 'Approved = the qty approved and its value (last year: final qty to store and order value).' : 'Ordered = qty wanted at the price wanted, rejected lines included.'}</p>
+      <div class="lybigs">${ap ? big('Value approved', ly.fv, ty.fv, crore) + big('Qty approved', ly.fq, ty.fq, pcsShort) + big('Orders', ly.o, ty.o, inr) + big('Value ordered', ly.wv, ty.wv, crore)
+        : big('Value ordered', ly.wv, ty.wv, crore) + big('Qty ordered', ly.wq, ty.wq, pcsShort) + big('Orders', ly.o, ty.o, inr) + big('Value approved', ly.fv, ty.fv, crore)}</div>
+      ${seasonChart(SE, ap ? 'fv' : 'wv', { h: 190, mini: true })}</div>`;
   }
 
   function vLastYear() {
@@ -1473,6 +1476,7 @@
   const cmpDate = (f, desc) => (a, b) => { const x = f(a) || '', y = f(b) || ''; return !x !== !y ? (x ? -1 : 1) : (desc ? y.localeCompare(x) : x.localeCompare(y)); };   // lines without a date go last
   const SORTS = {
     '': ['Store, then order (usual)', null],
+    latest: ['Latest approved first', (a, b) => (Date.parse(b.approved_at || 0) || 0) - (Date.parse(a.approved_at || 0) || 0) || b.id - a.id],
     booked: ['Booking date - oldest first', cmpDate((l) => l.order_date)], booked_new: ['Booking date - newest first', cmpDate((l) => l.order_date, true)],
     delivery: ['Delivery date - soonest first', cmpDate((l) => l.del_date)], allocate: ['Allocate-by date - soonest first', cmpDate((l) => l.allocate_by)],
     article: ['Article code', cmpStr((l) => l.article_code)], mc: ['MC name', cmpStr((l) => l.mc_name)],
@@ -1588,7 +1592,7 @@
       const more = [l.dispatched ? `${inr(l.dispatched)} dispatched` : '', l.balance ? `${inr(l.balance)} still pending` : ''].filter(Boolean).join(', ');
       return wrap(l.status === 'REJECTED' ? 'rej' : '', `<td class="big right"><b class="${l.approved ? 'good' : 'zero'}">${l.approved ? inr(l.approved) : '-'}</b>${more ? `<div class="small">${more}</div>` : ''}</td>
         ${locsOn() ? `<td class="from">${C.locText(l.locs) ? esc(C.locText(l.locs)) + (l.sap_ded ? `<div class="small sapnote">In SAP, taken off the DC balance by hand${ed && l.approved_open > 0 ? ` <button class="btn link" data-act="sapDeduct" data-id="${l.id}" data-on="0" title="Stop taking it off the DC balance">undo</button>` : ''}</div>` : '') : l.sap_appr && l.sap_appr.status === 'APPROVED' ? `<span class="sapnote">In SAP${l.sap_appr.dc ? ' &middot; ' + esc(l.sap_appr.dc) : ''}</span>${l.sap_appr.remarks ? `<div class="small">${esc(l.sap_appr.remarks)}</div>` : ''}${ed && dedOn() && l.sap_open > 0 ? `<div><button class="btn sm" data-act="sapDeduct" data-id="${l.id}" data-on="1" title="Not taken off the DC balance now. Take it off when the latest stock report still has this stock (approved in SAP after the report)">Take off DC stock</button></div>` : ''}` : '<span class="muted">-</span>'}</td>` : ''}
-        <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${note ? `<div class="small">${note}</div>` : ''}</td>
+        <td class="big right"><b>${l.approved ? inr(l.value) : '-'}</b></td><td>${pill(l.status)}${l.approved_at && l.approved ? `<div class="small apprat" title="When the latest approval on this line was made${l.appr_by ? ', and by whom' : ''}">Approved ${when(l.approved_at)}${l.appr_by ? ' by ' + esc(l.appr_by) : ''}</div>` : ''}${note ? `<div class="small">${note}</div>` : ''}</td>
         <td class="acts"><div class="rowlinks">${details.replace('>Details<', ed && l.approved_open > 0 && locsOn() && C.locText(l.locs) ? '>Details / change<' : '>Details<')}${ed && (!l.dispatched || delDispOn()) ? ` <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker (for a line added by mistake)">Delete</button>` : ''}</div></td>`);
     }
     const canAct = ed && l.open_qty > 0, top = canAct ? approvable(l) : 0, need = C.roundPack(l.open_qty, l.pack), maxQ = canAct ? canGive(l) : 0;
@@ -1959,9 +1963,20 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
     return Object.entries(M.pos).map(([c, p]) => ({ c, p, a: M.articles[c] || {}, gap: p.pending - Math.max(p.free, 0) }))
       .filter((r) => r.p.pending > 0 && (!S.s.only || r.gap > 0))
       .filter((r) => !q || (r.c + ' ' + (r.a.description || '') + ' ' + (r.a.mc_name || '') + ' ' + (r.a.buyer || '')).toLowerCase().includes(q))
+      .map((r) => Object.assign(r, { cover: coverOf(r.c, r.gap) }))
+      .filter((r) => !S.s.cover || r.cover.k === S.s.cover)
       .sort((x, y) => y.gap - x.gap);
   }
   const altFreeOf = (arr) => arr.reduce((t, a) => t + Math.max(0, C.freeOf(S.M, a.article_code)), 0);
+  /* Can the alternates cover what is short? The balance in the same design and in other designs at the same price, against the shortfall
+     (worked out as on the Dashboard). k: yes | partly | no | '' (not short) */
+  function coverOf(c, gap) {
+    if (!(gap > 0)) return { k: '', t: '-' };
+    const al = C.alternates(S.M, c), have = altFreeOf(al.same) + altFreeOf(al.diff);
+    return have >= gap ? { k: 'yes', t: 'Yes', have } : have > 0 ? { k: 'partly', t: 'Partly', have } : { k: 'no', t: 'No', have };
+  }
+  const COVERS = { yes: 'Covered by alternates: Yes', partly: 'Covered by alternates: Partly', no: 'Covered by alternates: No' };
+  const coverPill = (cv) => (cv.k ? `<span class="cov ${cv.k}" title="${cv.k === 'no' ? 'No alternate has a balance' : `Alternates have ${inr(cv.have)} pcs`}">${cv.t}</span>` : '<span class="muted">-</span>');
   function vShortages() {
     const M = S.M, rows = shortRows();
     if (S.s.art && (!M.pos[S.s.art] || (S.wide && !rows.some((r) => r.c === S.s.art)))) S.s.art = null;
@@ -1970,24 +1985,25 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
     else if (!rows.length) list = `<div class="empty card">${S.s.only ? 'No article is short. Every pending order line can be covered from free DC stock.' : 'No pending demand.'}</div>`;
     else if (S.wide) {
       list = `<div class="tablewrap"><table class="twoline"><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Total<br>DC qty</th><th class="right">Allocated<br>to orders</th>
-        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th>${expOn() ? '<th class="right">Expected<br>qty</th><th>Next<br>arrival</th>' : ''}<th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th></tr></thead><tbody>
-        ${rows.map(({ c, p, a, gap }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff), ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
+        <th class="right">Balance<br>DC qty</th><th class="right">Pending<br>order qty</th><th class="right">Stores</th><th class="right">Short by</th><th class="right">Pending<br>PO</th>${expOn() ? '<th class="right">Expected<br>qty</th><th>Next<br>arrival</th>' : ''}<th class="right">Balance,<br>same design</th><th class="right">Balance,<br>other designs</th><th>Covered by<br>alternates?</th></tr></thead><tbody>
+        ${rows.map(({ c, p, a, gap, cover }) => { const al = C.alternates(M, c), sf = altFreeOf(al.same), df = altFreeOf(al.diff), ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
           return `<tr class="pick ${S.s.art === c ? 'sel' : ''}" data-act="shortSel" data-code="${esc(c)}"><td class="w mc"><span class="caret">${S.s.art === c ? '&#9662;' : '&#9656;'}</span> ${esc(a.mc_name || '')}</td><td class="right b">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
           <td class="right">${inr(p.dc)}</td><td class="right">${p.reserved ? inr(p.reserved) : '-'}</td><td class="right b ${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</td>
           <td class="right b">${inr(p.pending)}</td><td class="right">${p.n_stores}</td><td class="right b ${gap > 0 ? 'bad' : 'muted'}">${gap > 0 ? inr(gap) : '-'}</td><td class="right ${ppo ? '' : 'muted'}" title="${ppo ? `This month ${inr(a.ppo_cm || 0)}, next month ${inr(a.ppo_nm || 0)}` : ''}">${ppo ? inr(ppo) : '-'}</td>
           ${expOn() ? (() => { const ex = expOpen(c), t = ex.reduce((x, e) => x + e.qty, 0); return `<td class="right ${t ? 'b' : 'muted'}">${t ? inr(t) : '-'}</td><td class="${ex[0] && expLate(ex[0]) ? 'warn b' : ''}">${ex[0] ? when(ex[0].eta) + (ex.length > 1 ? ` <span class="small muted">+${ex.length - 1}</span>` : '') : '<span class="muted">-</span>'}</td>`; })() : ''}
-          <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td></tr>` +
-            (S.s.art === c ? `<tr class="sdrow"><td colspan="${expOn() ? 15 : 13}"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
+          <td class="right ${sf ? 'good' : 'muted'}">${inr(sf)}</td><td class="right ${df ? 'good' : 'muted'}">${inr(df)}</td><td>${coverPill(cover)}</td></tr>` +
+            (S.s.art === c ? `<tr class="sdrow"><td colspan="${expOn() ? 16 : 14}"><div id="sdetail">${sDetailHtml()}</div></td></tr>` : ''); }).join('')}</tbody></table></div>`;
     } else {
-      list = rows.map(({ c, p, a, gap }) => `<div class="ocard" data-act="shortSel" data-code="${esc(c)}">${thumb(c, 's')}<div class="grow">
-        <div class="row"><span class="mcname grow">${esc(a.mc_name || '')}</span>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>
+      list = rows.map(({ c, p, a, gap, cover }) => `<div class="ocard" data-act="shortSel" data-code="${esc(c)}">${thumb(c, 's')}<div class="grow">
+        <div class="row"><span class="mcname grow">${esc(a.mc_name || '')}</span>${gap > 0 ? `<span class="pill REJECTED">Short ${inr(gap)}</span>` : ''}</div>${cover.k ? `<div class="small">Covered by alternates? ${coverPill(cover)}</div>` : ''}
         <div><b>${esc(a.description || c)}</b></div>
         <div class="small">MRP ${inr(a.mrp)} &middot; ${esc(c)} &middot; ${p.n_stores} ${plural(p.n_stores, 'store')} waiting</div>
         <div class="nums"><span>Balance DC qty <b class="${p.free > 0 ? 'good' : 'bad'}">${inr(p.free)}</b></span><span>Pending order qty <b>${inr(p.pending)}</b></span><span>Pending PO <b>${inr((Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0))}</b></span><span>In alternates <b>${inr(altFreeOf(C.allAlternates(M, c)))}</b></span>${expOn() && expOpen(c).length ? `<span>Expected <b>${expOpen(c).map(expText).join(', ')}</b></span>` : ''}</div></div></div>`).join('');
     }
     const detail = S.wide ? '' : `<div id="sdetail" class="${S.s.art ? 'sheetpage' : ''}" ${!S.s.art ? 'hidden' : ''}>${sDetailHtml()}</div>`;
     return `<div class="head"><h1>Shortages</h1><span class="sub">Articles that several stores are waiting for${editor() ? ' - share out the balance DC quantity here' : ''}</span><span class="grow"></span><button class="btn sm" data-act="exportShort" title="Excel file of every article listed here, and the order lines waiting for each">Export shortages to Excel</button></div>
-      <div class="toolbar two"><input type="search" id="sq" placeholder="Search article, MC or buyer ..." value="${esc(S.s.q)}" aria-label="Search shortages">
+      <div class="toolbar three"><input type="search" id="sq" placeholder="Search article, MC or buyer ..." value="${esc(S.s.q)}" aria-label="Search shortages">
+        <select id="scover" aria-label="Covered by alternates" title="Can the alternates cover what is short?"><option value="">Covered by alternates: any</option>${Object.keys(COVERS).map((k) => `<option value="${k}" ${S.s.cover === k ? 'selected' : ''}>${COVERS[k]}</option>`).join('')}</select>
         <label class="row" style="min-height:38px"><input type="checkbox" id="sonly" ${S.s.only ? 'checked' : ''}> Only articles that are short</label></div>
       ${S.wide && rows.length && M.meta.stock_asof ? `<p class="small" style="margin:0 0 8px">${inr(rows.length)} ${plural(rows.length, 'article')}, most short first. Click an article to open its order lines just below it; click it again to close.</p>` : ''}
       <div class="slist">${list}</div>${detail}`;
@@ -2042,6 +2058,16 @@ ${ed ? `<div class="small">Give each store its share below, in full packs. Lines
     return Object.values(S.M.articles).filter((a) => inScope(a) && (!S.c.cat || (a.category || '') === S.c.cat) &&
       words.every((w) => [a.article_code, a.description, a.mc_name, a.category, a.buyer, a.vendor_name, a.group_same, a.group_diff].join(' ').toLowerCase().includes(w)));
   }
+  /* MRP filter: only the MRPs of the articles that the search and category leave (type "bowl" and only bowl MRPs are listed) */
+  const mrpKey = (v) => String(Math.round((Number(v) || 0) * 100) / 100);
+  const byMrp = (list) => (S.c.mrp ? list.filter((a) => mrpKey(a.mrp) === S.c.mrp) : list);
+  function cMrpHtml() {
+    const base = S.c.scope === 'all' ? (S.c.results || []) : catRows(), cnt = new Map();
+    for (const a of base) { const k = mrpKey(a.mrp); cnt.set(k, (cnt.get(k) || 0) + 1); }
+    const keys = Array.from(cnt.keys()).sort((x, y) => x - y);
+    if (S.c.mrp && !cnt.has(S.c.mrp)) keys.unshift(S.c.mrp);
+    return `<select id="cmrp" aria-label="MRP" title="Only the MRPs of the articles listed">${`<option value="">All MRPs${keys.length ? ` (${keys.length})` : ''}</option>`}${keys.map((k) => `<option value="${k}" ${S.c.mrp === k ? 'selected' : ''}>MRP ${inr2(+k)} (${inr(cnt.get(k) || 0)})</option>`).join('')}</select>`;
+  }
   function cCard(a, free) {
     const tags = [a.status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '', a.in_master ? '' : '<span class="badge">Not in Diwali range</span>'].join(' ');
     return `<div class="ccard" data-act="art" data-code="${esc(a.article_code)}">${thumb(a.article_code, '')}
@@ -2055,9 +2081,11 @@ ${ed ? `<div class="small">Give each store its share below, in full packs. Lines
       if (!c.results || c.asked !== c.q.trim()) return '<div class="empty card">Searching ...</div>';
       setTimeout(() => setHtml('csum', `${c.results.length}${c.results.length >= 120 ? '+' : ''} found in ${inr(total)} articles`), 0);
       if (!c.results.length) return '<div class="empty card">No article matches. Check the code, or load the full article data on the Data screen.</div>';
-      return `<div class="cgrid">${c.results.map((a) => cCard(a, (a.dc || 0) - (a.reserved || 0))).join('')}</div>`;
+      const res = byMrp(c.results);
+      if (!res.length) return '<div class="empty card">No article at this MRP matches. Choose "All MRPs" or another MRP.</div>';
+      return `<div class="cgrid">${res.map((a) => cCard(a, (a.dc || 0) - (a.reserved || 0))).join('')}</div>`;
     }
-    const rows = catRows(), n = Object.values(M.articles).filter((a) => (c.scope === 'ordered') === !a.in_master).length;
+    const rows = byMrp(catRows()), n = Object.values(M.articles).filter((a) => (c.scope === 'ordered') === !a.in_master).length;
     setTimeout(() => setHtml('csum', `${inr(rows.length)} of ${inr(n)} articles ${c.scope === 'ordered' ? 'ordered from outside the Diwali range' : 'in the Diwali range'}`), 0);
     if (!rows.length) return `<div class="empty card">${n ? 'No article matches here.' : (c.scope === 'ordered' ? 'No article outside the Diwali range has been ordered.' : 'The Diwali article master is not loaded yet.')}${(M.counts.articles || 0) > n ? ' <button class="btn sm" data-act="scopeAll">Search all articles</button>' : ''}</div>`;
     return `<div class="cgrid">${rows.slice(0, 600).map((a) => cCard(a, C.freeOf(M, a.article_code))).join('')}</div>`;
@@ -2074,15 +2102,16 @@ ${ed ? `<div class="small">Give each store its share below, in full packs. Lines
         res.forEach((a) => { if (!S.M.articles[a.article_code]) S.extra[a.article_code] = a; });
         S.c.results = res; S.c.asked = q;
       } catch (e) { S.c.results = []; S.c.asked = q; }
-      setHtml('cgrid', cGridHtml()); hydrate();
+      setHtml('cgrid', cGridHtml()); setHtml('cmrpbox', cMrpHtml()); hydrate();
     }, 300);
   }
   function vCatalogue() {
     const M = S.M, cats = Array.from(new Set(Object.values(M.articles).filter((a) => (S.c.scope === 'ordered') === !a.in_master).map((a) => a.category).filter(Boolean))).sort();
     return `<div class="head"><h1>Articles</h1><span class="sub" id="csum"></span></div>
-      <div class="toolbar three"><input type="search" id="cq" class="wide" placeholder="Type an article code, name, MC, buyer or vendor ..." value="${esc(S.c.q)}" aria-label="Search articles">
+      <div class="toolbar four"><input type="search" id="cq" class="wide" placeholder="Type an article code, name, MC, buyer or vendor ..." value="${esc(S.c.q)}" aria-label="Search articles">
         <select id="cscope" aria-label="Which articles"><option value="master" ${S.c.scope === 'master' ? 'selected' : ''}>Diwali range (${inr(M.counts.master || 0)})</option><option value="ordered" ${S.c.scope === 'ordered' ? 'selected' : ''}>Ordered, outside the range (${inr(Object.values(M.articles).filter((a) => !a.in_master).length)})</option><option value="all" ${S.c.scope === 'all' ? 'selected' : ''}>All articles on file (${inr(M.counts.articles || 0)})</option></select>
-        <select id="ccat" aria-label="Category" ${S.c.scope === 'all' ? 'disabled' : ''}><option value="">All categories</option>${cats.map((g) => `<option ${S.c.cat === g ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select></div>
+        <select id="ccat" aria-label="Category" ${S.c.scope === 'all' ? 'disabled' : ''}><option value="">All categories</option>${cats.map((g) => `<option ${S.c.cat === g ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>
+        <span id="cmrpbox">${cMrpHtml()}</span></div>
       <p class="small" style="margin:-4px 0 10px">Open any article for its picture, DC stock by location, alternates and a deal check (discount and margin).</p>
       <div id="cgrid">${cGridHtml()}</div>`;
   }
@@ -2688,7 +2717,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     if (!rows.length) return tell('Export', 'There is nothing on the Shortages screen to export.');
     const codes = new Set(rows.map((r) => r.c));
     return excelFile(S.s.only ? 'Shortages' : 'Pending_By_Article', false, (sheet) => {
-      sheet('Shortages', STOCK_HEAD, rows.map((r) => stockRow(r.c)));
+      sheet('Shortages', STOCK_HEAD.concat(['Covered by Alternates?']), rows.map((r) => stockRow(r.c).concat([r.cover.k ? r.cover.t : ''])));
       sheet('Orders waiting', ['MC Name', 'MRP', 'Article', 'Description', 'Site', 'Store Name', 'Order No', 'Book Date', 'Delivery Date', 'Allocate by', 'Price Wanted', 'Discount %', 'Qty Wanted', 'Approved', 'Pending Qty', 'Booked By', 'Contact Number'],
         M.lines.filter((l) => l.balance > 0 && codes.has(l.article_code)).sort((a, b) => a.article_code.localeCompare(b.article_code) || (a.order_date || '').localeCompare(b.order_date || ''))
           .map((l) => [l.mc_name, +l.mrp, l.article_code, l.description, l.store_code, l.store_name, l.order_no, l.order_date, l.del_date || '', l.allocate_by || '', +l.req_price, r1(l.discount), l.req_qty, l.approved, l.balance, l.poc_name, l.phone]));
@@ -2811,6 +2840,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     stClearAll: () => { Object.assign(S.st, { q: '', status: '', store: '', state: '', mc: '', buyer: '', limit: 300 }); render(); },
     stTile: (el) => { S.st.status = S.st.status === el.dataset.k ? '' : el.dataset.k; S.st.limit = 300; render(); },
     stExport: () => exportSellThrough(),
+    lyDash: (el) => { S.ly.dash = el.dataset.v; try { localStorage.setItem('allocdesk.lydash', S.ly.dash); } catch (_) { /* only a convenience */ } render(); },
     skMore: () => { S.sk.limit += 500; skLoad(true); },
     skClear: (el) => { const k = el.dataset.key; if (k === 'mrp') { S.sk.mrp_min = ''; S.sk.mrp_max = ''; } else S.sk[k] = ''; S.sk.limit = 300; render(); },
     skClearAll: () => { Object.assign(S.sk, SK_BLANK, { limit: 300 }); render(); },
@@ -3129,7 +3159,7 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
   document.addEventListener('input', (e) => {
     const t = e.target;
     if (t.id === 'oq') { sec().q = t.value; relist(); }
-    else if (t.id === 'cq') { S.c.q = t.value; setHtml('cgrid', cGridHtml()); hydrate(); searchAll(); }
+    else if (t.id === 'cq') { S.c.q = t.value; setHtml('cgrid', cGridHtml()); setHtml('cmrpbox', cMrpHtml()); hydrate(); searchAll(); }
     else if (t.id === 'sq') { S.s.q = t.value; const a = document.activeElement, pos = t.selectionStart; render(); const n = $('#sq'); if (a === t && n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.classList.contains('sq')) { const v = Math.max(0, Math.round(+t.value || 0)); if (v) S.s.qty[t.dataset.id] = v; else delete S.s.qty[t.dataset.id]; tally(); }
     else if (t.id === 'ap-qty' || t.classList.contains('altq')) packPreview();
@@ -3155,9 +3185,11 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'obuyer') { sec().buyer = t.value; relist(); }
     else if (t.id === 'osort') { const st = sec(); st.sort = t.value; st.limit = 300; render(); }
     else if (t.id === 'ogroup') { const st = sec(); st.group = t.value; st.collapsed = false; st.toggled.clear(); st.limit = 300; render(); }
-    else if (t.id === 'ccat') { S.c.cat = t.value; setHtml('cgrid', cGridHtml()); hydrate(); }
+    else if (t.id === 'ccat') { S.c.cat = t.value; setHtml('cgrid', cGridHtml()); setHtml('cmrpbox', cMrpHtml()); hydrate(); }
+    else if (t.id === 'cmrp') { S.c.mrp = t.value; setHtml('cgrid', cGridHtml()); hydrate(); }
     else if (t.id === 'cscope') { S.c.scope = t.value; S.c.cat = ''; render(); }
     else if (t.id === 'sonly') { S.s.only = t.checked; render(); }
+    else if (t.id === 'scover') { S.s.cover = t.value; render(); }
     else if (t.id === 'lysonly') { S.ly.sonly = t.checked; render(); }
     else if (['skgroup', 'sksort', 'skonly', 'skstate'].includes(t.id)) { S.sk[t.id.slice(2)] = t.value; S.sk.limit = 300; render(); }
     else if (t.id === 'skstore' || t.id === 'skmc') { S.sk[t.id.slice(2)] = t.id === 'skstore' ? t.value.trim().toUpperCase() : t.value.trim(); S.sk.limit = 300; render(); }

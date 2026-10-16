@@ -223,6 +223,7 @@ table.twoline th { white-space: normal; line-height: 1.2; vertical-align: bottom
   .toolbar { grid-template-columns: minmax(0, 1fr) 170px 210px 170px; } .toolbar .wide { grid-column: auto; }
   .toolbar.two { grid-template-columns: minmax(0, 1fr) 300px; }
   .toolbar.three { grid-template-columns: minmax(0, 1fr) 220px 220px; }
+  .toolbar.four { grid-template-columns: minmax(0, 1fr) 220px 200px 190px; }
   .toolbar.seven { grid-template-columns: minmax(170px, 1fr) minmax(0, 190px) repeat(5, minmax(0, 132px)); }
   .dealgrid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .tiles { grid-template-columns: repeat(8, minmax(0, 1fr)); } .tile b { font-size: clamp(15px, 1.35vw, 22px); white-space: nowrap; }
@@ -431,3 +432,7 @@ table.fitcols td.sold .stbar { width: 40px; margin-right: 5px; } table.fitcols t
 .aremark { margin-top: 3px; font-size: 12px; color: #7A4A00; background: #FFF6DB; border: 1px solid #FFE3A0; border-radius: 6px; padding: 1px 6px; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
 .aremark span { font-weight: 700; }
 .storerem { font-size: 13px; color: var(--muted); } .storerem.has { color: #7A4A00; background: #FFF6DB; border: 1px solid #FFE3A0; border-radius: 8px; padding: 6px 10px; }
+/* Shortages: can the alternates cover it */
+.cov { display: inline-block; font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid; }
+.cov.yes { color: #0F7A55; background: #E3F7EE; border-color: #B9EDD4; } .cov.partly { color: #946600; background: #FFF6DB; border-color: #FFE3A0; } .cov.no { color: #C7366A; background: #FFE8F0; border-color: #FFC6DA; }
+#cmrpbox select { width: 100%; }
