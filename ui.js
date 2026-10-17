@@ -26,7 +26,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 27;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 28;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -38,7 +38,14 @@
   const expOn = () => !!S.M && S.M.schema >= 15;       // expected stock needs database version 15
   const delDispOn = () => !!S.M && S.M.schema >= 18;   // deleting a line with stock marked dispatched needs version 18
   const qOn = () => !!S.M && S.M.schema >= 14;
-  const nsOn = () => !!S.M && S.M.schema >= 26;         // approving a line without stock needs version 26        // queries from the stores need database version 14
+  const nsOn = () => !!S.M && S.M.schema >= 26;
+  const sfOn = () => !!S.M && S.M.schema >= 28;         // settling a difference with the SAP approval file needs version 28
+  /* What 'take SAP's figure' does to a line that differs from the SAP approval file */
+  const sapFix = (l) => { const x = l.sap_appr || {}, q = x.status === 'APPROVED' ? Math.max(0, +x.qty || 0) : 0, here = (l.approved || 0);
+    if (x.status === 'REJECTED') return { btn: 'Reject as in SAP', text: `Cancel the ${inr(here)} pcs approved here and reject the line (${x.label || 'rejected in SAP'}).` };
+    if (!q) return { btn: 'As in SAP: approved, 0 pcs', text: `${here ? `Cancel the ${inr(here)} pcs approved here and mark` : 'Mark'} the line approved without stock, with SAP's remark as the note.` };
+    return { btn: `Take SAP qty (${inr(q)} pcs)`, text: q > here ? `Approve ${inr(q - here)} pcs more (${inr(q)} in all, as in SAP)${l.rejected ? ' and take off the rejection' : ''}. The extra is an SAP approval: it is not checked against or taken off the DC balance - e.g. a fresh inward the stock report does not have yet.`
+      : `Cut the approval here from ${inr(here)} to ${inr(q)} pcs, as in SAP (the newest approvals are cut first).` }; };         // approving a line without stock needs version 26        // queries from the stores need database version 14
   /* What the SAP approval file said about a line, in one line of text */
   const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
     return [x.label || (x.status === 'APPROVED' ? 'Approved in SAP' : 'Rejected in SAP'), x.status === 'APPROVED' && x.qty ? inr(x.qty) + ' pcs' : '', x.by, x.at ? when(x.at) : '', x.po ? 'PO ' + x.po : '', x.remarks].filter(Boolean).join(' · '); };     // approving a price with the quantity needs database version 8
@@ -1951,7 +1958,7 @@
       <button class="btn link" data-act="clearFilters">Clear all filters</button>` : '';
   }
   function noteOf(l) {
-    if (l.sap_appr && l.sap_appr.conflict) return `<span class="bad">Differs from SAP: ${esc(l.sap_appr.conflict)}</span>`;
+    if (l.sap_appr && l.sap_appr.conflict) return `<span class="bad">Differs from SAP: ${esc(l.sap_appr.conflict)}</span>${sfOn() && editor() ? ` <span class="sapfix"><button class="btn link" data-act="sapFix" data-id="${l.id}" data-how="sap" title="${esc(sapFix(l).text)}">${esc(sapFix(l).btn)}</button> <button class="btn link" data-act="sapFix" data-id="${l.id}" data-how="keep" title="Keep what is here; the note goes, and stays away on the next SAP file while SAP says the same">Keep as here</button></span>` : ''}`;
     if (l.sap_appr && l.status !== 'PENDING') { const x = l.sap_appr; return `<span class="sapnote">${esc([(x.label || '').replace(/^(Approved|Rejected) By (\w+)$/i, '$1 by $2') + ' in SAP', x.by, x.at ? when(x.at).slice(0, 6) : '', x.po ? 'PO ' + x.po : ''].filter(Boolean).join(' · '))}</span>`; }
     if (l.sap_new_qty != null) return `<span class="warn">SAP qty now ${inr(l.sap_new_qty)}</span>`;
     if (l.appr_manual) return `<span class="nsnote">Approved without stock${l.appr_note ? ': ' + esc(l.appr_note) : ''}</span>`;
@@ -2198,8 +2205,8 @@
     const keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);          // a chosen filter stays in its list even when it matches nothing now
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
     const delBtn = '<button class="btn sm danger" data-act="bulkDelete" title="Delete the ticked lines from the tracker (lines added by mistake)">Delete ...</button>';
-    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}${delBtn}` : S.a.seg === 'rej' || delDispOn() ? tick + delBtn : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
-        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button>${nsOn() ? '<button class="btn sm" data-act="bulkNoStock" title="Mark the ticked lines approved without giving stock here">Approve without stock ...</button>' : ''}<button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
+    const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${sfOn() ? '<button class="btn sm" data-act="bulkSapFix" title="Ticked lines that differ from the SAP approval file: take SAP\'s figure, or keep this tracker\'s">Settle SAP differences ...</button>' : ''}${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}${delBtn}` : S.a.seg === 'rej' || delDispOn() ? tick + delBtn : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
+        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button>${nsOn() ? '<button class="btn sm" data-act="bulkNoStock" title="Mark the ticked lines approved without giving stock here">Approve without stock ...</button>' : ''}${sfOn() && M.lines.some((l) => l.sap_appr && l.sap_appr.conflict && l.status === 'PENDING') ? '<button class="btn sm" data-act="bulkSapFix" title="Ticked lines that differ from the SAP approval file: take SAP\'s figure, or keep this tracker\'s">Settle SAP differences ...</button>' : ''}<button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
     const detail = `<div id="odetail" class="detail ${S.o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${S.o.sel ? '' : 'hidden'}>${S.o.sel ? oDetailHtml() : ''}</div>`;
@@ -2297,7 +2304,9 @@
       ${l.appr_manual ? `<div class="note good row wrap"><span class="grow"><b>Approved without stock</b>${l.appr_note ? ` - ${esc(l.appr_note)}` : ''} <span class="small">(${esc(l.appr_manual_by || '')}, ${when(l.appr_manual)})</span></span>${ed ? `<button class="btn sm" data-act="noStockUndo" data-id="${l.id}">Back to pending</button>` : ''}</div>` : ''}</div>`);
     if (l.sap_appr) {
       const x = l.sap_appr, kv = (k, v) => (v ? `<span>${k}</span><b>${v}</b>` : '');
-      out.push(`<div class="card stack"><h3>In SAP</h3>${x.conflict ? `<div class="note bad"><b>The SAP approval file differs from this tracker:</b> ${esc(x.conflict)}. Nothing was changed on this line - check it and correct it here or in SAP.</div>` : ''}
+      out.push(`<div class="card stack"><h3>In SAP</h3>${x.conflict ? `<div class="note bad"><b>The SAP approval file differs from this tracker:</b> ${esc(x.conflict)}. Nothing was changed on this line - check it and correct it here or in SAP.</div>
+        ${sfOn() && editor() ? `<div class="row wrap"><button class="btn sm primary" data-act="sapFix" data-id="${l.id}" data-how="sap">${esc(sapFix(l).btn)} ...</button><button class="btn sm" data-act="sapFix" data-id="${l.id}" data-how="keep">Keep this tracker's figure ...</button></div>
+        <div class="small">${esc(sapFix(l).text)}</div>` : ''}` : ''}${x.kept ? `<div class="small">SAP said: ${esc(x.kept)} - kept as it is here (${esc(x.kept_by || '')}, ${when(x.kept_at)}).</div>` : ''}${x.fixed ? `<div class="small">SAP said: ${esc(x.fixed)} - corrected to SAP's figure (${esc(x.fixed_by || '')}, ${when(x.fixed_at)}).</div>` : ''}
         <div class="kv">${kv('Status', esc(x.label || x.status))}${x.status === 'APPROVED' ? kv('Qty allocated', x.qty ? inr(x.qty) + ' pcs' : '') + kv('Price given', x.price ? 'Rs ' + inr2(x.price) : '') : ''}
           ${kv('By', esc(x.by || ''))}${kv('Category approval', x.at ? when(x.at) : '')}${kv('Planning approval', x.plan_at ? when(x.plan_at) : '')}${kv('DC', esc(x.dc || ''))}${kv('PO', esc(x.po || ''))}
           ${kv('Remarks', esc(x.remarks || ''))}${kv('Reason', esc(x.reason || ''))}${kv('From file', esc(x.file || '') + (x.loaded ? ', loaded ' + when(x.loaded) : ''))}</div>
@@ -3624,6 +3633,23 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       if (!v) return;
       if (S.o.sel === l.id) S.o.sel = null;
       run(() => A.rpc('approve_no_stock', { p_lines: [l.id], p_note: v.note, p_on: true }), 'Approved without stock');
+    },
+    sapFix: async (el) => {
+      const l = S.M.byId[+el.dataset.id]; if (!l || !l.sap_appr || !l.sap_appr.conflict) return;
+      const keep = el.dataset.how === 'keep', f = sapFix(l);
+      if (!(await confirmBox(keep ? 'Keep this tracker\'s figure?' : f.btn + '?', `${l.store_code} ${l.store_name}, order ${l.order_no}\n${l.article_code} ${l.description}\nSAP: ${l.sap_appr.conflict}\n\n${keep ? 'Nothing changes on the line here. The "Differs from SAP" note goes, and does not come back on the next SAP file while SAP says the same.' : f.text}`, keep ? 'Keep as here' : f.btn))) return;
+      run(async () => { const r = await A.rpc('sap_resolve', { p_lines: [l.id], p_how: keep ? 'keep' : 'sap' }); if (r.skipped && r.skipped.length) throw new Error(r.skipped.join('\n')); return r; }, keep ? 'Kept as here' : 'Corrected to SAP');
+    },
+    bulkSapFix: async () => {
+      const ids = Array.from(sec().checked).filter((id) => S.M.byId[id] && S.M.byId[id].sap_appr && S.M.byId[id].sap_appr.conflict);
+      if (!ids.length) return tell('Settle SAP differences', 'None of the ticked lines differs from the SAP approval file.');
+      const v = await ask(`Settle ${ids.length} SAP ${plural(ids.length, 'difference')}`, `<p class="small">For each ticked line that differs from the SAP approval file:</p>
+        <label class="row"><input type="radio" name="how" value="sap" checked> <span><b>Take SAP's figure</b> - the approved qty here becomes SAP's. More than here is added as an SAP approval (not checked against or taken off the DC balance); 0 in SAP makes the line approved without stock; rejected in SAP rejects it.</span></label>
+        <label class="row"><input type="radio" name="how" value="keep"> <span><b>Keep this tracker's figure</b> - nothing changes here; the note goes.</span></label>
+        <p class="small">Lines with dispatched stock above SAP's qty, or an alternate offered to the store, are left as they are.</p>`, 'Settle');
+      if (!v) return;
+      run(async () => { const r = await A.rpc('sap_resolve', { p_lines: ids, p_how: v.how === 'keep' ? 'keep' : 'sap' }); sec().checked.clear();
+        if (r.skipped && r.skipped.length) setTimeout(() => tell('Some lines were left as they are', r.skipped.join('\n')), 400); return r.done; }, (n) => `${n} ${plural(n, 'line')} settled`);
     },
     noStockUndo: async (el) => {
       const l = S.M.byId[+el.dataset.id]; if (!l) return;
