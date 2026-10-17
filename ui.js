@@ -21,12 +21,12 @@
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
     tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false, opened: new Set(), closed: new Set() },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
-    qp: { mc: '', mcText: '', mrp: '', q: '', res: null, mcs: null, mcsLoading: false, seq: 0, err: '' },
+    qp: { mc: '', mcText: '', mrp: '', q: '', res: null, mcs: null, mcsLoading: false, seq: 0, err: '', ssc: {}, state: '', sstock: false },
     qb: { store: '', mc: '', mrp: '', find: '', rows: [], remarks: '', saving: false },
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 26;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 27;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1235,7 +1235,7 @@
       : `<span class="bad">Store ${esc(x.sc)} is not in the store list</span>`) +
       (x.st && (!x.st.state || x.st.lead_time == null) ? `<div class="small muted" style="flex-basis:100%">${editor() ? 'Upload the lead-time store list under Data &gt; 4 Stores to fill this in.' : 'The editor can fill this in by uploading the lead-time store list (Data &gt; 4 Stores).'}</div>` : ''));
     setHtml('qf-art-info', !x.ac ? '<span class="muted">Type the article code</span>' : x.a === undefined ? '<span class="muted">Looking it up ...</span>' : x.a
-      ? `<b>${esc(x.a.description || '')}</b><span>MRP <b>Rs ${inr2(x.mrp)}</b></span><span>${esc(x.a.mc_name || '')}</span>`
+      ? `<b>${esc(x.a.description || '')}</b><span>MRP <b>Rs ${inr2(x.mrp)}</b></span><span>${esc(x.a.mc_name || '')}</span>${x.st ? (qpSS(x.ac) ? qpSSHtml(x.ac) : (setTimeout(() => qpSSFetch(x.ac), 0), '')) : ''}`
       : `<span class="bad">Article ${esc(x.ac)} is not in the article files</span>`);
     const over = x.mrp && x.price > x.mrp + 0.004;
     setHtml('qf-sum', `<span>Discount <b>${x.disc == null ? '-' : x.disc.toFixed(2) + '%'}</b></span><span>Final price <b>${x.price ? 'Rs ' + inr2(x.price) : '-'}</b></span><span>Quantity <b>${x.qty ? inr(x.qty) + ' pcs' : '-'}</b></span>
@@ -1407,6 +1407,33 @@
   /* ----- the article picker of both query forms: type part of the MC and choose it, then the MRP (or type a code / name);
      the articles come from the full article data (DSR) file, with their balance DC qty ----- */
   let qpTimer = null;
+  /* the store of the form in use, and that store's stock of an article (and the other stores of its state), kept from the picker */
+  const qpStore = () => C.code(S.qy.mode === 'many' ? S.qb.store : S.qy.form.store).toUpperCase();
+  function qpCache(r, st) {
+    if (!r || !st) return;
+    S.qp.state = r.state || ''; S.qp.sstock = !!r.sstock;
+    for (const a of r.rows || []) S.qp.ssc[st + '|' + a.article_code] = { ss: a.ss || null, st: a.st || null, state: r.state || '' };
+  }
+  const qpSS = (code) => S.qp.ssc[qpStore() + '|' + code];
+  /* the store's stock of an article as a short text, and the same state's other stores */
+  function qpSSHtml(code, wide) {
+    const st = qpStore(), x = st && qpSS(code);
+    if (!st || !S.M.hasStoreStock || S.M.schema < 27) return '';
+    if (!x || x.loading) return wide ? ['<span class="muted">-</span>', '<span class="muted">-</span>'] : '';
+    const own = x.ss ? `<b>${inr(x.ss.c)}</b>${x.ss.t ? ` + ${inr(x.ss.t)} in transit` : ''} &middot; sold ${inr(x.ss.m)} this month` : '<span class="muted">not in the store stock report</span>';
+    const near = x.state ? (x.st && (x.st.c || x.st.t) ? `<b>${inr(x.st.c + x.st.t)}</b> in ${inr(x.st.n)} ${plural(x.st.n, 'store')}` : 'none') : '<span class="muted">state not on file</span>';
+    return wide ? [own, near] : `<div class="small qpss">At ${esc(st)}: ${own} &middot; other ${esc(x.state || '')} stores: ${near}</div>`;
+  }
+  /* an article chosen or typed without the picker: fetch its store stock once */
+  async function qpSSFetch(code) {
+    const st = qpStore();
+    if (!st || !code || !S.M.hasStoreStock || qpSS(code) || S.M.schema < 27) return;
+    S.qp.ssc[st + '|' + code] = { ss: null, st: null, state: '', loading: true };
+    try { const r = await A.rpc('q_pick', { p: { q: code, store: st, limit: 5 } }); const a = (r.rows || []).find((x) => x.article_code === code);
+      S.qp.ssc[st + '|' + code] = a ? { ss: a.ss || null, st: a.st || null, state: r.state || '' } : { ss: null, st: null, state: r.state || '' }; }
+    catch (e) { delete S.qp.ssc[st + '|' + code]; return; }
+    qInfo(); if (S.qy.mode === 'many') setHtml('qb-rows', qbRowsHtml());
+  }
   async function qpMcs() {
     const P = S.qp;
     if (P.mcs || P.mcsLoading || S.M.schema < 23) return;
@@ -1422,7 +1449,7 @@
     if (!P.mc && P.q.trim().length < 2) { P.res = null; qpPaint(); return; }
     qpTimer = setTimeout(async () => {
       const seq = ++P.seq;
-      try { const r = await A.rpc('q_pick', { p: { mc: P.mc, mrp: P.mrp, q: P.q.trim(), limit: 150 } }); if (seq !== P.seq) return; if (r && r.rows) r.rows = r.rows.filter((a) => a.status !== 'In-Active').concat(r.rows.filter((a) => a.status === 'In-Active')); P.res = r; P.err = ''; }
+      try { const st = qpStore(), r = await A.rpc('q_pick', { p: { mc: P.mc, mrp: P.mrp, q: P.q.trim(), limit: 150, store: st } }); if (seq !== P.seq) return; qpCache(r, st); if (r && r.rows) r.rows = r.rows.filter((a) => a.status !== 'In-Active').concat(r.rows.filter((a) => a.status === 'In-Active')); P.res = r; P.err = ''; }
       catch (e) { if (seq !== P.seq) return; P.err = e.message; }
       (P.res ? P.res.rows : []).forEach((a) => { if (!S.M.articles[a.article_code]) S.extra[a.article_code] = a; });
       qpPaint();
@@ -1439,9 +1466,11 @@
     if (!P.res) return `<div class="small muted">${P.mc ? 'Loading ...' : 'Choose an MC (and an MRP), or type an article code or name, to list the articles.'}</div>`;
     if (!P.res.rows.length) return '<div class="small muted">No article matches.</div>';
     const cur = C.code(S.qy.form.art);
-    return `<div class="tablewrap qbpicks"><table class="tight"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Balance<br>DC qty</th><th class="right">Pack</th><th></th></tr></thead><tbody>
-      ${P.res.rows.map((a, i) => (a.status === 'In-Active' && (i === 0 || P.res.rows[i - 1].status !== 'In-Active') ? `<tr class="qpsep"><td colspan="5">In-Active articles</td></tr>` : '') + `<tr class="${a.status === 'In-Active' ? 'qpinact' : ''}"><td class="artcell"><b class="pick" data-act="art" data-code="${esc(a.article_code)}">${esc(a.article_code)}</b> <span class="small">${esc(a.description || '')}</span>${a.status === 'In-Active' ? ' <span class="badge bad">In-Active</span>' : ''}</td>
+    const st = qpStore(), showSS = !!st && S.M.hasStoreStock && S.M.schema >= 27, ncol = showSS ? 7 : 5;
+    return `<div class="tablewrap qbpicks"><table class="tight"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Balance<br>DC qty</th><th class="right">Pack</th>${showSS ? `<th>At ${esc(st)}<br><span class="thsub">closing, transit, MTD sale</span></th><th>Other stores<br><span class="thsub">${esc(S.qp.state || 'same state')}</span></th>` : ''}<th></th></tr></thead><tbody>
+      ${P.res.rows.map((a, i) => (a.status === 'In-Active' && (i === 0 || P.res.rows[i - 1].status !== 'In-Active') ? `<tr class="qpsep"><td colspan="${ncol}">In-Active articles</td></tr>` : '') + `<tr class="${a.status === 'In-Active' ? 'qpinact' : ''}"><td class="artcell"><b class="pick" data-act="art" data-code="${esc(a.article_code)}">${esc(a.article_code)}</b> <span class="small">${esc(a.description || '')}</span>${a.status === 'In-Active' ? ' <span class="badge bad">In-Active</span>' : ''}</td>
           <td class="right">${inr2(Number(a.mrp) || 0)}</td><td class="right ${a.free > 0 ? 'good' : 'bad'} b">${inr(a.free)}</td><td class="right">${C.packOf(a)}</td>
+          ${showSS ? (() => { const w = qpSSHtml(a.article_code, true); return `<td class="small qpsscell">${w[0]}</td><td class="small qpsscell">${w[1]}</td>`; })() : ''}
           <td class="right">${many ? (have.has(a.article_code) ? '<span class="small good b">Added</span>' : `<button class="btn sm" data-act="qbAdd" data-code="${esc(a.article_code)}">Add</button>`)
             : (cur === a.article_code ? '<span class="small good b">Chosen</span>' : `<button class="btn sm" data-act="qpChoose" data-code="${esc(a.article_code)}">Choose</button>`)}</td></tr>`).join('')}</tbody></table></div>
       ${P.res.more ? `<div class="small">${inr(P.res.n - P.res.rows.length)} more - choose an MRP or type more of the name.</div>` : ''}`;
@@ -1511,7 +1540,8 @@
     if (!B.rows.length) return '<div class="small muted">No article added yet.</div>';
     return `<div class="tablewrap fitwrap"><table class="tight qbrows resp"><thead><tr><th>Article</th><th class="right">MRP</th><th class="right">Discount %</th><th class="right">Final price</th><th class="right">Qty (pcs)</th><th class="right">Value</th><th class="right">Margin</th><th></th></tr></thead><tbody>
       ${B.rows.map((r, i) => { const x = qbCalc(r);
-        return `<tr><td class="artcell"><b>${esc(r.a)}</b><div class="small">${esc(x.a.description || '')}</div><div class="small muted">Balance DC qty <b class="${x.free > 0 ? 'good' : 'bad'}">${inr(x.free)}</b> &middot; pack of ${C.packOf(x.a)}</div></td>
+        if (!qpSS(r.a)) setTimeout(() => qpSSFetch(r.a), 0);
+        return `<tr><td class="artcell"><b>${esc(r.a)}</b><div class="small">${esc(x.a.description || '')}</div><div class="small muted">Balance DC qty <b class="${x.free > 0 ? 'good' : 'bad'}">${inr(x.free)}</b> &middot; pack of ${C.packOf(x.a)}</div>${qpSSHtml(r.a)}</td>
           <td class="right" data-l="MRP">${inr2(x.mrp)}</td>
           <td class="right" data-l="Discount %"><input class="qbd" data-i="${i}" type="number" min="0" max="100" step="0.01" inputmode="decimal" value="${esc(r.disc)}"></td>
           <td class="right" data-l="Final price"><input class="qbp" data-i="${i}" type="number" min="0" step="0.01" inputmode="decimal" value="${esc(r.price)}"></td>
@@ -3737,10 +3767,10 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
     else if (t.id === 'skq') { S.sk.q = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 350); }
     else if (t.id === 'skmrpmin' || t.id === 'skmrpmax') { S.sk[t.id === 'skmrpmin' ? 'mrp_min' : 'mrp_max'] = t.value; S.sk.limit = 300; setHtml('skchips', skChips()); skLoad(false, 500); }
     else if (t.id === 'stq') { S.st.q = t.value; S.st.limit = 300; setHtml('stlist', stTableHtml()); setHtml('stchips', stChips()); }
-    else if (/^qf-/.test(t.id)) qTyped(t);
+    else if (/^qf-/.test(t.id)) { qTyped(t); if (t.id === 'qf-store' && (S.qp.mc || S.qp.q.trim())) qpLoad(400); }
     else if (t.id === 'qp-mc') qpMcTyped(t);
     else if (t.id === 'qp-q') { S.qp.q = t.value; qpLoad(350); }
-    else if (t.id === 'qb-store') { S.qb.store = t.value; setHtml('qb-sinfo', qbStoreInfo()); }
+    else if (t.id === 'qb-store') { S.qb.store = t.value; setHtml('qb-sinfo', qbStoreInfo()); if (S.qp.mc || S.qp.q.trim()) qpLoad(400); setHtml('qb-rows', qbRowsHtml()); }
     else if (t.id === 'qb-find') { S.qb.find = t.value; setHtml('qb-picks', qbPicksHtml()); }
     else if (t.id === 'qb-rem') S.qb.remarks = t.value;
     else if (t.classList.contains('qbd') || t.classList.contains('qbp') || t.classList.contains('qbq')) qbTyped(t);

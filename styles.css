@@ -491,3 +491,4 @@ table.qtable .qdel { padding: 3px 9px; font-size: 13px; }
 @media (max-width: 760px) { table.qtable.resp tr.qgrp { background: #F6F2FF; border-color: #D9CCFB; } table.qtable.resp tr.qgrp td { background: transparent; border: 0; } table.qtable.resp tr.qchild { margin-left: 16px; } }
 .qbpicks tr.qpsep td { background: #F2F1F6; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 5px 8px; } .qbpicks tr.qpinact td { opacity: .72; }
 .nsnote { color: #0F7A55; font-weight: 600; } .btn.link.nostock { font-size: 12px; }
+.qpss { margin-top: 2px; color: #4A4370; } .qbpicks td.qpsscell { white-space: normal; min-width: 120px; }
