@@ -43,6 +43,7 @@
     if (l.rejected) return 'REJECTED';
     if (l.offered > 0) return 'AWAITING';
     const total = l.approved_open + l.dispatched;
+    if (l.appr_manual && !(total > 0 && l.approved_open === 0 && (total >= l.req_qty || l.balance_closed))) return 'APPROVED';   // approved by hand without stock
     if (total === 0) return 'PENDING';
     const done = total >= l.req_qty || l.balance_closed;
     if (l.approved_open === 0 && done) return 'DISPATCHED';
@@ -117,7 +118,7 @@
       l.dc = s.dc || ''; l.lead_time = s.lead_time == null ? null : Number(s.lead_time);
       l.mrp = Number(l.mrp) || Number(a.mrp) || 0; l.req_price = Number(l.req_price) || 0;
       l.approved = l.approved_open + l.dispatched;
-      l.open_qty = Math.max(0, l.req_qty - l.approved - l.offered);
+      l.open_qty = l.appr_manual ? 0 : Math.max(0, l.req_qty - l.approved - l.offered);
       l.status = statusOf(l);
       l.balance = (l.rejected || l.balance_closed) ? 0 : l.open_qty;
       l.discount = discountOf(l.req_price, l.mrp);

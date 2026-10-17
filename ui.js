@@ -26,7 +26,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 25;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 26;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -37,7 +37,8 @@
   const dedOn = () => !!S.M && S.M.schema >= 16;       // taking SAP approvals off the DC balance by hand needs version 16
   const expOn = () => !!S.M && S.M.schema >= 15;       // expected stock needs database version 15
   const delDispOn = () => !!S.M && S.M.schema >= 18;   // deleting a line with stock marked dispatched needs version 18
-  const qOn = () => !!S.M && S.M.schema >= 14;        // queries from the stores need database version 14
+  const qOn = () => !!S.M && S.M.schema >= 14;
+  const nsOn = () => !!S.M && S.M.schema >= 26;         // approving a line without stock needs version 26        // queries from the stores need database version 14
   /* What the SAP approval file said about a line, in one line of text */
   const sapText = (l) => { const x = l.sap_appr; if (!x) return '';
     return [x.label || (x.status === 'APPROVED' ? 'Approved in SAP' : 'Rejected in SAP'), x.status === 'APPROVED' && x.qty ? inr(x.qty) + ' pcs' : '', x.by, x.at ? when(x.at) : '', x.po ? 'PO ' + x.po : '', x.remarks].filter(Boolean).join(' · '); };     // approving a price with the quantity needs database version 8
@@ -1883,7 +1884,7 @@
   const NEEDS = ['PENDING', 'AWAITING', 'PARTIAL'];
   const LISTS = ['orders', 'approved'];
   const sec = (view) => ((view || S.view) === 'approved' ? S.a : S.o);
-  const SEGS = { todo: ['Approved', (l) => l.approved_open > 0], done: ['Dispatched', (l) => l.dispatched > 0], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
+  const SEGS = { todo: ['Approved', (l) => l.approved_open > 0 || (!!l.appr_manual && l.status === 'APPROVED' && !l.dispatched)], done: ['Dispatched', (l) => l.dispatched > 0], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
   const ticks = (view) => editor() && S.wide && ((view || S.view) !== 'approved' || S.a.seg !== 'done' || delDispOn());   // tick boxes: Pending orders, and Approved (to mark dispatched, or delete)
   const baseLines = (view) => (view === 'approved' ? S.M.lines.filter(SEGS[S.a.seg][1]) : S.M.lines.filter((l) => NEEDS.includes(l.status)));
   function ordersFiltered(view) {
@@ -1923,6 +1924,7 @@
     if (l.sap_appr && l.sap_appr.conflict) return `<span class="bad">Differs from SAP: ${esc(l.sap_appr.conflict)}</span>`;
     if (l.sap_appr && l.status !== 'PENDING') { const x = l.sap_appr; return `<span class="sapnote">${esc([(x.label || '').replace(/^(Approved|Rejected) By (\w+)$/i, '$1 by $2') + ' in SAP', x.by, x.at ? when(x.at).slice(0, 6) : '', x.po ? 'PO ' + x.po : ''].filter(Boolean).join(' · '))}</span>`; }
     if (l.sap_new_qty != null) return `<span class="warn">SAP qty now ${inr(l.sap_new_qty)}</span>`;
+    if (l.appr_manual) return `<span class="nsnote">Approved without stock${l.appr_note ? ': ' + esc(l.appr_note) : ''}</span>`;
     if (l.status === 'REJECTED') return esc(l.reject_reason || '');
     if (l.offered) return `${inr(l.offered)} pcs of alternate offered`;
     if (l.supplied && l.supplied !== l.article_code) return 'Given in ' + esc(l.supplied);
@@ -2089,6 +2091,7 @@
     const last = !ed ? `<td>${pill(l.status)}${l.approved ? `<div class="small"><b class="good">${inr(l.approved)} approved</b></div>` : ''}${note ? `<div class="small">${note}</div>` : ''}<div class="rowlinks">${details}</div></td>`
       : `<td class="apcell">${state}${top ? `<div class="row"><input class="qty rowq" type="number" inputmode="numeric" min="1" max="${maxQ}" value="${dflt}" data-want="${l.open_qty}" placeholder="Qty" data-id="${l.id}" data-pack="${l.pack}" aria-label="Quantity to approve for ${esc(l.article_code)}">${priceOn() ? `<input class="qty rowp" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-id="${l.id}" data-asked="${l.req_price}" title="Price per piece to approve (the store asked Rs ${l.req_price})" aria-label="Price to approve for ${esc(l.article_code)}">` : ''}<button class="btn sm primary" data-act="rowApprove" data-id="${l.id}">Approve</button></div><div class="small rowprev">${prev}</div>${locsOn() ? `<div class="small rowloc"><span class="rowfrom">${fromHtml(l.article_code, f)}</span> <button class="btn link" data-act="rowLocs" data-id="${l.id}" title="Choose which DC location(s) this approval is taken from">Choose</button></div>` : ''}`
         : canAct ? '<div class="small bad">No balance at DC</div>' : ''}
+        ${canAct && nsOn() ? `<div><button class="btn link nostock" data-act="noStock" data-id="${l.id}" title="Mark this line approved without giving any stock here (for example, the store gets it in another article)">Approve without stock ...</button></div>` : ''}
         <div class="rowlinks">${details.replace('>Details<', canAct && !top && C.allAlternates(M, l.article_code).length ? '>See alternates<' : '>Details<')} <button class="btn link del" data-act="delLine" data-id="${l.id}" title="Delete this line from the tracker">Delete</button></div></td>`;
     return wrap('', bal + (c.ss ? ssCell(l) : '') + last);
   }
@@ -2166,7 +2169,7 @@
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
     const delBtn = '<button class="btn sm danger" data-act="bulkDelete" title="Delete the ticked lines from the tracker (lines added by mistake)">Delete ...</button>';
     const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}${delBtn}` : S.a.seg === 'rej' || delDispOn() ? tick + delBtn : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
-        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button><button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
+        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button>${nsOn() ? '<button class="btn sm" data-act="bulkNoStock" title="Mark the ticked lines approved without giving stock here">Approve without stock ...</button>' : ''}<button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
     const detail = `<div id="odetail" class="detail ${S.o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${S.o.sel ? '' : 'hidden'}>${S.o.sel ? oDetailHtml() : ''}</div>`;
@@ -2260,7 +2263,8 @@
       <div class="stats">${stat('MRP', inr(l.mrp))}${stat(l.price_missing ? 'Price (MRP used)' : 'Price wanted', inr(l.req_price))}${stat('Discount', l.discount > 0.0005 ? pct(l.discount) : 'None', l.discount > 0.0005 ? 'warn' : '')}${stat('Margin', pct(l.margin), l.margin != null && l.margin < 0 ? 'bad' : '')}</div>
       <div class="small">${l.margin == null ? 'Margin cannot be worked out: cost or GST for this article is not on file.' : `${l.price_missing ? 'The store gave no price, so MRP is used. ' : ''}Margin after this discount is ${pct(l.margin)}; at ${Number(a.vrp) > 0 && Number(a.vrp) !== Number(l.mrp) ? 'VRP ' + inr(a.vrp) : 'MRP'} it would be ${pct(l.base_margin)}. Order value ${rupees(l.ask_value)}${l.approved ? ', approved ' + rupees(l.value) : ''}.`}</div>
       <div class="stats">${stat('Qty wanted', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered (alternate)', inr(l.offered), l.offered ? 'warn' : '')}${stat('Pending qty', inr(l.balance), l.balance ? 'bad' : '')}</div>
-      ${deliveryNote(l)}</div>`);
+      ${deliveryNote(l)}
+      ${l.appr_manual ? `<div class="note good row wrap"><span class="grow"><b>Approved without stock</b>${l.appr_note ? ` - ${esc(l.appr_note)}` : ''} <span class="small">(${esc(l.appr_manual_by || '')}, ${when(l.appr_manual)})</span></span>${ed ? `<button class="btn sm" data-act="noStockUndo" data-id="${l.id}">Back to pending</button>` : ''}</div>` : ''}</div>`);
     if (l.sap_appr) {
       const x = l.sap_appr, kv = (k, v) => (v ? `<span>${k}</span><b>${v}</b>` : '');
       out.push(`<div class="card stack"><h3>In SAP</h3>${x.conflict ? `<div class="note bad"><b>The SAP approval file differs from this tracker:</b> ${esc(x.conflict)}. Nothing was changed on this line - check it and correct it here or in SAP.</div>` : ''}
@@ -2309,7 +2313,7 @@
       ${shortNote}
       ${canAct ? `<div class="row wrap"><span>Approve qty</span><input class="qty" id="ap-qty" type="number" inputmode="numeric" min="0" max="${canGive(l)}" value="${dflt || ''}" data-want="${l.open_qty}" data-pack="${pack}" ${top ? '' : 'disabled'} aria-label="Quantity to approve">
         ${priceOn() && top ? `<span>at Rs</span><input class="qty" id="ap-price" type="number" inputmode="decimal" min="0.01" step="0.01" max="${l.mrp || ''}" value="${l.req_price}" data-asked="${l.req_price}" aria-label="Price to approve" title="Price per piece to approve (the store asked Rs ${l.req_price})">` : ''}
-        <button class="btn primary" data-act="approve" ${top ? '' : 'disabled'}>Approve</button><span class="small" id="ap-prev"></span></div>
+        <button class="btn primary" data-act="approve" ${top ? '' : 'disabled'}>Approve</button>${nsOn() ? `<button class="btn" data-act="noStock" data-id="${l.id}" title="Approved without giving any stock here (for example, the store gets it in another article)">Approve without stock ...</button>` : ''}<span class="small" id="ap-prev"></span></div>
         ${locsOn() && top ? '<div class="row wrap aploc"><span class="small grow" id="ap-loc"></span><button class="btn sm" data-act="apLocs" title="Take this approval from the DC locations you choose">Choose locations ...</button></div>' : ''}
         <div class="small">${top ? `${inr(l.open_qty)} pcs pending. Whatever is approved is rounded up to full packs of ${pack}.` : (free > 0 ? `Balance DC quantity is only ${inr(free)} pcs - less than one pack of ${pack}. Use an alternate below.` : 'No balance DC quantity - use an alternate below.')}</div>` : ''}</div>`);
     const alts = C.alternates(M, l.article_code);
@@ -3137,7 +3141,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
     'Remarks / reject reason', 'Duplicate article in order', 'Approved by', 'Lead time (days)', 'DC / RDC', 'Allocate by', 'Delivery at risk', 'Total DC Qty (stock report + inwards)', 'of which inwards since the report', 'Balance DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending PO', 'Store Closing Stock', 'Store In Transit (incl. CLA)', 'Store Total Stock', 'Store MTD Sale', 'Store Stock in Alternates', 'Alternates Held by Store',
       'SAP Approval Status', 'SAP Qty Allocated', 'SAP Price Given', 'SAP Approved By', 'SAP Approval Date', 'SAP PO', 'SAP Remarks', 'Differs From SAP',
-      'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File', 'Store Remark (Article Remarks)']);
+      'SAP Qty Changed', 'New SAP Qty', 'Imported At', 'Source File', 'Store Remark (Article Remarks)', 'Approved Without Stock']);
   function orderRow(l, ex, byLine) {
     const M = S.M, mine = (byLine[l.id] || []).filter((a) => a.state !== 'OFFERED'), p = M.pos[l.article_code] || NOPOS, a = M.articles[l.article_code] || {};
     return [C.STATUS_LABEL[l.status], l.store_code, l.store_name, l.order_no, l.mc_code, l.mc_name, l.article_code, l.description, +l.mrp, l.req_qty, l.order_date, l.del_date || '', +l.req_price,
@@ -3148,7 +3152,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0),
       l.ss ? l.ss.own.closing : '', l.ss ? l.ss.own.transit : '', l.ss ? l.ss.own.total : '', l.ss ? l.ss.own.mtd : '', l.ss ? l.ss.altTotal : '', l.ss ? l.ss.alts.filter((x) => x.total > 0).map((x) => `${x.code} (${x.total})`).join(', ') : '',
       ...(() => { const x = l.sap_appr || {}; return [x.label || '', x.qty || '', x.price || '', x.by || '', x.at ? when(x.at) : '', x.po || '', x.remarks || '', x.conflict || '']; })(),
-      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file, l.art_remarks || '']);
+      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file, l.art_remarks || '', l.appr_manual ? 'Yes' + (l.appr_note ? ': ' + l.appr_note : '') : '']);
   }
   const STOCK_HEAD = ['MC Name', 'MRP', 'Article', 'Description', 'Buyer', 'Same design group', 'Same price group', 'Pack', 'Stock report qty (Total MSA)', 'Inwards since the report', 'Total DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => t + ' (report + inwards)'), ['Allocated to orders', 'Balance DC Qty'], C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO', 'Balance in same design', 'Balance in other designs', 'Expected Qty', 'Next Arrival', 'Expected deliveries']);
@@ -3581,6 +3585,28 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
         await reload(); toast('Line rejected');
         if (v.msg) await messageStore(before, { kind: 'reorder', alts });
       } catch (e) { await tell('Not done', e.message); } finally { S.busy = false; }
+    },
+    noStock: async (el) => {
+      const l = S.M.byId[+el.dataset.id]; if (!l) return;
+      const v = await ask('Approve without stock', `<pre>${esc(`${l.store_code} ${l.store_name}, order ${l.order_no}\n${l.article_code} ${l.description}\nQty wanted ${inr(l.req_qty)}${l.approved ? `, ${inr(l.approved)} already approved` : ''}`)}</pre>
+        <p class="small">The line moves to Approved orders. Nothing is taken from the DC balance of this article. You can put it back to pending from its details.</p>
+        <label class="f">Note (optional)<input type="text" name="note" maxlength="300" placeholder="e.g. given in 1005110, order TW26000201"></label>`, 'Approve without stock');
+      if (!v) return;
+      if (S.o.sel === l.id) S.o.sel = null;
+      run(() => A.rpc('approve_no_stock', { p_lines: [l.id], p_note: v.note, p_on: true }), 'Approved without stock');
+    },
+    noStockUndo: async (el) => {
+      const l = S.M.byId[+el.dataset.id]; if (!l) return;
+      if (!(await confirmBox('Back to pending?', `${l.store_code} ${l.order_no}\n${l.article_code} ${l.description}\n\nThe approval without stock is taken off; the line is pending again.`, 'Back to pending'))) return;
+      run(() => A.rpc('approve_no_stock', { p_lines: [l.id], p_note: '', p_on: false }), 'Back to pending');
+    },
+    bulkNoStock: async () => {
+      const ids = Array.from(sec().checked).filter((id) => S.M.byId[id] && S.M.byId[id].open_qty > 0);
+      if (!ids.length) return tell('Approve without stock', 'Tick one or more pending order lines first.');
+      const v = await ask(`Approve ${ids.length} ${plural(ids.length, 'line')} without stock`, `<p class="small">They move to Approved orders. Nothing is taken from the DC balance.</p>
+        <label class="f">Note (optional)<input type="text" name="note" maxlength="300" placeholder="e.g. given in another article"></label>`, 'Approve without stock');
+      if (!v) return;
+      run(async () => { const r = await A.rpc('approve_no_stock', { p_lines: ids, p_note: v.note, p_on: true }); sec().checked.clear(); return r; }, (n) => `${n} ${plural(n, 'line')} approved without stock`);
     },
     bulkApprove: async () => {
       const ids = Array.from(sec().checked);
