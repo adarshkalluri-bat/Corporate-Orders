@@ -26,7 +26,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 28;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 29;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -39,7 +39,9 @@
   const delDispOn = () => !!S.M && S.M.schema >= 18;   // deleting a line with stock marked dispatched needs version 18
   const qOn = () => !!S.M && S.M.schema >= 14;
   const nsOn = () => !!S.M && S.M.schema >= 26;
-  const sfOn = () => !!S.M && S.M.schema >= 28;         // settling a difference with the SAP approval file needs version 28
+  const sfOn = () => !!S.M && S.M.schema >= 28;
+  const ndOn = () => !!S.M && S.M.schema >= 29;         // dispatching a line approved without stock needs version 29
+  const nsDisp = (l) => ndOn() && !!l.appr_manual && !l.disp_manual && l.status === 'APPROVED' && !l.rejected;   // approved without stock, not yet dispatched         // settling a difference with the SAP approval file needs version 28
   /* What 'take SAP's figure' does to a line that differs from the SAP approval file */
   const sapFix = (l) => { const x = l.sap_appr || {}, q = x.status === 'APPROVED' ? Math.max(0, +x.qty || 0) : 0, here = (l.approved || 0);
     if (x.status === 'REJECTED') return { btn: 'Reject as in SAP', text: `Cancel the ${inr(here)} pcs approved here and reject the line (${x.label || 'rejected in SAP'}).` };
@@ -1921,7 +1923,7 @@
   const NEEDS = ['PENDING', 'AWAITING', 'PARTIAL'];
   const LISTS = ['orders', 'approved'];
   const sec = (view) => ((view || S.view) === 'approved' ? S.a : S.o);
-  const SEGS = { todo: ['Approved', (l) => l.approved_open > 0 || (!!l.appr_manual && l.status === 'APPROVED' && !l.dispatched)], done: ['Dispatched', (l) => l.dispatched > 0], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
+  const SEGS = { todo: ['Approved', (l) => l.approved_open > 0 || (!!l.appr_manual && l.status === 'APPROVED' && !l.dispatched)], done: ['Dispatched', (l) => l.dispatched > 0 || (!!l.appr_manual && !!l.disp_manual)], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
   const ticks = (view) => editor() && S.wide && ((view || S.view) !== 'approved' || S.a.seg !== 'done' || delDispOn());   // tick boxes: Pending orders, and Approved (to mark dispatched, or delete)
   const baseLines = (view) => (view === 'approved' ? S.M.lines.filter(SEGS[S.a.seg][1]) : S.M.lines.filter((l) => NEEDS.includes(l.status)));
   function ordersFiltered(view) {
@@ -2301,7 +2303,7 @@
       <div class="small">${l.margin == null ? 'Margin cannot be worked out: cost or GST for this article is not on file.' : `${l.price_missing ? 'The store gave no price, so MRP is used. ' : ''}Margin after this discount is ${pct(l.margin)}; at ${Number(a.vrp) > 0 && Number(a.vrp) !== Number(l.mrp) ? 'VRP ' + inr(a.vrp) : 'MRP'} it would be ${pct(l.base_margin)}. Order value ${rupees(l.ask_value)}${l.approved ? ', approved ' + rupees(l.value) : ''}.`}</div>
       <div class="stats">${stat('Qty wanted', inr(l.req_qty))}${stat('Approved', inr(l.approved), l.approved ? 'good' : '')}${stat('Offered (alternate)', inr(l.offered), l.offered ? 'warn' : '')}${stat('Pending qty', inr(l.balance), l.balance ? 'bad' : '')}</div>
       ${deliveryNote(l)}
-      ${l.appr_manual ? `<div class="note good row wrap"><span class="grow"><b>Approved without stock</b>${l.appr_note ? ` - ${esc(l.appr_note)}` : ''} <span class="small">(${esc(l.appr_manual_by || '')}, ${when(l.appr_manual)})</span></span>${ed ? `<button class="btn sm" data-act="noStockUndo" data-id="${l.id}">Back to pending</button>` : ''}</div>` : ''}</div>`);
+      ${l.appr_manual ? `<div class="note good row wrap"><span class="grow"><b>Approved without stock</b>${l.appr_note ? ` - ${esc(l.appr_note)}` : ''} <span class="small">(${esc(l.appr_manual_by || '')}, ${when(l.appr_manual)})</span></span>${l.disp_manual ? ` <b>- marked dispatched</b> <span class="small">(${when(l.disp_manual)})</span>` : ''}${ed && l.disp_manual ? `<button class="btn sm" data-act="nsUndisp" data-id="${l.id}">Undo dispatch</button>` : ed ? `<button class="btn sm" data-act="noStockUndo" data-id="${l.id}">Back to pending</button>` : ''}</div>` : ''}</div>`);
     if (l.sap_appr) {
       const x = l.sap_appr, kv = (k, v) => (v ? `<span>${k}</span><b>${v}</b>` : '');
       out.push(`<div class="card stack"><h3>In SAP</h3>${x.conflict ? `<div class="note bad"><b>The SAP approval file differs from this tracker:</b> ${esc(x.conflict)}. Nothing was changed on this line - check it and correct it here or in SAP.</div>
@@ -2371,10 +2373,11 @@
     const allocs = d ? d.allocations.filter((x) => x.state !== 'CANCELLED') : null;
     const acts = [];
     if (ed) {
-if (l.approved_open > 0) acts.push('<button class="btn link" data-act="dispatch" title="Not needed day to day: when you load a newer DC stock report you are asked whether the approved stock has left the DC. Use this only to record one line by hand.">Mark dispatched by hand</button>');
+if (nsDisp(l) && !(l.approved_open > 0)) acts.push('<button class="btn link" data-act="dispatch" title="This line is approved without stock (0 pcs). Mark it dispatched so it moves to the Dispatched tab.">Mark dispatched</button>');
+      if (l.approved_open > 0) acts.push('<button class="btn link" data-act="dispatch" title="Not needed day to day: when you load a newer DC stock report you are asked whether the approved stock has left the DC. Use this only to record one line by hand.">Mark dispatched by hand</button>');
       if (l.status === 'PARTIAL') acts.push('<button class="btn" data-act="closeBal" title="The store gets only what is approved; the rest is no longer pending">Close pending qty</button>');
       if (l.status === 'REJECTED') acts.push('<button class="btn" data-act="reopen">Reopen</button>');
-      else if (l.dispatched === 0) acts.push('<button class="btn danger" data-act="reject">Reject line ...</button>');
+      else if (l.dispatched === 0 && !l.disp_manual) acts.push('<button class="btn danger" data-act="reject">Reject line ...</button>');
       if (l.balance_closed) acts.push('<button class="btn" data-act="reopen">Reopen pending qty</button>');
     }
     out.push(`<div class="card stack"><h3>Approved on this line</h3>
@@ -3573,7 +3576,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     confirmOffer: (el) => run(() => A.rpc('confirm_offer', { p_alloc: +el.dataset.alloc }), 'Marked as confirmed by the store'),
     declineOffer: (el) => run(() => A.rpc('decline_offer', { p_alloc: +el.dataset.alloc }), 'Offer cancelled, stock released'),
     undo: (el) => run(() => A.rpc('undo_alloc', { p_alloc: +el.dataset.alloc }), 'Undone'),
-dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use this only if the stock on this line has left the DC and you do not want to wait for the next DC stock report.\n\nUntil a newer stock report is loaded, the quantity is still taken off the current one, exactly as now.', 'Mark dispatched')) run(() => A.rpc('dispatch_lines', { p_lines: [S.o.sel] }), 'Marked dispatched'); },
+dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(l0.approved_open > 0)) { if (await confirmBox('Mark dispatched', `${l0.store_code} ${l0.order_no}\n${l0.article_code} ${l0.description}\n\nApproved without stock (0 pcs). The line moves to the Dispatched tab; nothing changes in the DC balance.`, 'Mark dispatched')) run(() => A.rpc('dispatch_lines', { p_lines: [l0.id] }), 'Marked dispatched'); return; }
+      if (await confirmBox('Mark dispatched by hand', 'Use this only if the stock on this line has left the DC and you do not want to wait for the next DC stock report.\n\nUntil a newer stock report is loaded, the quantity is still taken off the current one, exactly as now.', 'Mark dispatched')) run(() => A.rpc('dispatch_lines', { p_lines: [S.o.sel] }), 'Marked dispatched'); },
     closeBal: () => run(() => A.rpc('close_balance', { p_line: S.o.sel }), 'Pending quantity closed'),
     sapDeduct: (el) => sapDeduct([S.M.byId[+el.dataset.id]].filter(Boolean), el.dataset.on === '1'),
     sapDeductArt: (el) => { const ar = artPop; if (ar) ar.close(); sapDeduct(S.M.lines.filter((l) => l.article_code === el.dataset.code && l.sap_open > 0), true); },
@@ -3583,10 +3587,10 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       sapDeduct(L, true);
     },
     bulkDispatch: async () => {
-      const L = Array.from(sec().checked).map((id) => S.M.byId[id]).filter((l) => l && l.approved_open > 0);
+      const L = Array.from(sec().checked).map((id) => S.M.byId[id]).filter((l) => l && (l.approved_open > 0 || nsDisp(l)));
       if (!L.length) return tell('Mark dispatched', 'Tick one or more approved lines first ("Tick all shown" ticks every line listed).');
       const pcs = L.reduce((t, l) => t + l.approved_open, 0);
-      if (!(await confirmBox(`Mark ${L.length} ${plural(L.length, 'line')} dispatched?`, L.slice(0, 12).map((l) => `${l.store_code}  ${l.order_no}  ${l.article_code}: ${inr(l.approved_open)} pcs`).join('\n') + (L.length > 12 ? `\n... and ${L.length - 12} more` : '') +
+      if (!(await confirmBox(`Mark ${L.length} ${plural(L.length, 'line')} dispatched?`, L.slice(0, 12).map((l) => `${l.store_code}  ${l.order_no}  ${l.article_code}: ${inr(l.approved_open)} pcs${nsDisp(l) && !l.approved_open ? ' (approved without stock)' : ''}`).join('\n') + (L.length > 12 ? `\n... and ${L.length - 12} more` : '') +
         `\n\n${inr(pcs)} pcs in all. The lines move to the Dispatched tab. Until a newer DC stock report is loaded, stock approved here stays taken off the DC balance (approvals from SAP never are). Undo is in each line's Details.`, 'Mark dispatched'))) return;
       run(async () => { const n = await A.rpc('dispatch_lines', { p_lines: L.map((l) => l.id) }); sec().checked.clear(); return n; }, (n) => `Marked dispatched: ${n} ${plural(n, 'line')}`);
     },
@@ -3650,6 +3654,11 @@ dispatch: async () => { if (await confirmBox('Mark dispatched by hand', 'Use thi
       if (!v) return;
       run(async () => { const r = await A.rpc('sap_resolve', { p_lines: ids, p_how: v.how === 'keep' ? 'keep' : 'sap' }); sec().checked.clear();
         if (r.skipped && r.skipped.length) setTimeout(() => tell('Some lines were left as they are', r.skipped.join('\n')), 400); return r.done; }, (n) => `${n} ${plural(n, 'line')} settled`);
+    },
+    nsUndisp: async (el) => {
+      const l = S.M.byId[+el.dataset.id]; if (!l) return;
+      if (!(await confirmBox('Undo dispatch?', `${l.store_code} ${l.order_no}\n${l.article_code} ${l.description}\n\nThe line goes back to Approved orders (approved without stock).`, 'Undo dispatch'))) return;
+      run(() => A.rpc('ns_undispatch', { p_lines: [l.id] }), 'Back to approved');
     },
     noStockUndo: async (el) => {
       const l = S.M.byId[+el.dataset.id]; if (!l) return;

@@ -43,6 +43,7 @@
     if (l.rejected) return 'REJECTED';
     if (l.offered > 0) return 'AWAITING';
     const total = l.approved_open + l.dispatched;
+    if (l.appr_manual && l.disp_manual && l.approved_open === 0) return 'DISPATCHED';                                      // approved without stock, marked dispatched
     if (l.appr_manual && !(total > 0 && l.approved_open === 0 && (total >= l.req_qty || l.balance_closed))) return 'APPROVED';   // approved by hand without stock
     if (total === 0) return 'PENDING';
     const done = total >= l.req_qty || l.balance_closed;
