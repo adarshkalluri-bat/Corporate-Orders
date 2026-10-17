@@ -492,3 +492,54 @@ table.qtable .qdel { padding: 3px 9px; font-size: 13px; }
 .qbpicks tr.qpsep td { background: #F2F1F6; color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: 5px 8px; } .qbpicks tr.qpinact td { opacity: .72; }
 .nsnote { color: #0F7A55; font-weight: 600; } .btn.link.nostock { font-size: 12px; }
 .qpss { margin-top: 2px; color: #4A4370; } .qbpicks td.qpsscell { white-space: normal; min-width: 120px; }
+/* ---------- Dashboard: two screens, breakdown, sortable tables (version 3.25) ---------- */
+.dashtabs { margin: 2px 0 12px; }
+.tiles.dtiles .tile b { overflow-wrap: anywhere; }
+.tiles.dtiles .tile b.long { font-size: clamp(15px, 4vw, 19px); }
+@media (min-width: 960px) {
+  .tiles.dtiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .tiles.dtiles .tile b { font-size: clamp(17px, 1.7vw, 24px); white-space: normal; }
+  .tiles.dtiles .tile b.long { font-size: clamp(15px, 1.5vw, 20px); }
+  .grid2.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .lybigs.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.lybigs.five > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+@media (min-width: 960px) { .lybigs.five > :last-child:nth-child(odd) { grid-column: auto; } }
+.lybig b { overflow-wrap: anywhere; }
+.bdsegs, .dashtabs.segs { margin-bottom: 0; }
+.dashtabs.segs { margin-bottom: 12px; }
+.bdhis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.bdhi { display: flex; flex-direction: column; gap: 1px; background: #FAF8FF; border: 1px solid #EAE4FA; border-radius: 10px; padding: 8px 10px; min-width: 0; }
+.bdhi > span:first-child { font-size: 11.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.bdhi b { font-size: 16px; overflow-wrap: anywhere; } .bdhi > span:last-child { font-size: 12.5px; color: var(--muted); }
+.dbars { grid-template-columns: minmax(120px, max-content) minmax(60px, 1fr) auto auto; }
+.dbars .dlabel { text-align: left; white-space: normal; justify-self: start; padding: 2px 0; }
+table.fitcols col.c-bdn { width: 22%; } table.fitcols col.c-val { width: 96px; } table.fitcols col.c-cov { width: 80px; } table.fitcols col.c-exp { width: 112px; }
+table.shtable col.c-art { width: 24%; }
+table.fitcols td.bdname { white-space: normal; overflow-wrap: anywhere; }
+table.fitcols td.expcell { white-space: normal; }
+th.sortth { padding: 0 !important; }
+.sorth { border: 0; background: none; font: inherit; color: inherit; cursor: pointer; width: 100%; padding: 8px 6px; text-align: inherit; line-height: 1.2; display: block; }
+th.right .sorth { text-align: right; }
+.sorth:hover { color: var(--accent-deep); background: #EFE8FF; }
+.sarr { margin-left: 3px; font-size: 10px; color: #B3ADCC; white-space: nowrap; }
+th.sortth.on { color: var(--accent-deep); } th.sortth.on .sarr { color: var(--accent-deep); }
+.qmtile.on { border-color: var(--accent); box-shadow: 0 0 0 2px #7558E033; }
+@media (min-width: 761px) and (max-width: 1180px) {
+  table.fitcols col.c-val { width: 84px; } table.fitcols col.c-exp { width: 96px; } table.fitcols col.c-cov { width: 68px; }
+  .sorth { padding: 7px 4px; }
+}
+@media (max-width: 760px) { table.resp td.bdname { grid-column: 1 / -1; } }
+@media (min-width: 960px) and (max-width: 1499px) { .grid2.ovgrid { grid-template-columns: minmax(0, 1fr); } }
+@media (min-width: 761px) and (max-width: 1180px) {
+  table.bdtable col.c-bdn { width: 17%; } table.shtable col.c-art { width: 20%; } table.shtable col.c-mrp { width: 44px; }
+  table.bdtable th, table.shtable th { font-size: 11px; } .sorth { padding: 6px 3px; } .sarr { margin-left: 0; }
+  table.bdtable td, table.shtable td { padding: 6px 3px; font-size: 12.5px; }
+}
+@media (max-width: 760px) {
+  table.bdtable.resp td, table.shtable.resp td { white-space: normal; overflow-wrap: anywhere; }
+  table.bdtable.resp td[data-l]::before, table.shtable.resp td[data-l]::before { white-space: normal; }
+}
+.phsort { display: none; }
+@media (max-width: 760px) { .phsort { display: block; } }
+table.fitcols td.expcell { padding-left: 12px; }

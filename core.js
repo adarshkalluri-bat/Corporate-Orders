@@ -734,12 +734,13 @@
   const SEASON = { ly: '2025-09-20', ty: '2026-10-09', days: 31 };
   function season(M, lyDaily) {
     const ly0 = (M.meta && M.meta.ly_d30) || SEASON.ly, ty0 = (M.meta && M.meta.ty_d30) || SEASON.ty;
-    const blank = () => ({ n: 0, o: 0, wq: 0, wv: 0, fq: 0, fv: 0 });
+    const blank = () => ({ n: 0, o: 0, wq: 0, wv: 0, fq: 0, fv: 0, wvm: 0, mv: 0, fvm: 0, fm: 0 });   // wvm/mv, fvm/fm: value and value at MRP, for the discount
     const LYd = Array.from({ length: SEASON.days }, blank), TYd = Array.from({ length: SEASON.days }, blank);
     let lyBefore = 0, lyAfter = 0, tyBefore = 0, tyAfter = 0;
     for (const r of lyDaily || []) {
       let k = dayDiff(ly0, r[0]); if (k < 0) { lyBefore += r[1]; k = 0; } if (k >= SEASON.days) { lyAfter += r[1]; continue; }
       const d = LYd[k]; d.n += r[1]; d.o += r[2]; d.wq += +r[4]; d.wv += +r[5]; d.fq += +r[6]; d.fv += +r[7];
+      if (r.length > 8) { d.wvm += +r[8] || 0; d.mv += +r[9] || 0; d.fvm += +r[10] || 0; d.fm += +r[11] || 0; }
     }
     const seenOrder = new Set();
     for (const l of M.lines) {
@@ -748,11 +749,16 @@
       const d = TYd[k];
       if (!l.parent_id) { d.n++; d.wq += l.sap_qty; d.wv += l.sap_qty * l.req_price; if (!seenOrder.has(l.order_no)) { seenOrder.add(l.order_no); d.o++; } }
       d.fq += l.approved; d.fv += l.value;
+      if (Number(l.mrp) > 0) {
+        if (!l.parent_id && l.req_price > 0) { d.wvm += l.sap_qty * l.req_price; d.mv += l.sap_qty * l.mrp; }
+        if (l.approved > 0 && l.value > 0) { d.fvm += l.value; d.fm += l.approved * l.mrp; }
+      }
     }
     const cum = (arr) => { const t = blank(); return arr.map((d) => { for (const k in t) t[k] += d[k]; return Object.assign({}, t); }); };
     const today = (() => { const d = new Date(); return d.getFullYear() + '-' + p2(d.getMonth() + 1) + '-' + p2(d.getDate()); })();
     const kToday = dayDiff(ty0, today), upto = Math.min(SEASON.days - 1, kToday - 1);      // complete days: up to yesterday
-    return { ly0, ty0, lyDay: LYd, tyDay: TYd, lyCum: cum(LYd), tyCum: cum(TYd), upto, kToday, lyBefore, lyAfter, tyBefore, tyAfter,
+    const hasDisc = (lyDaily || []).some((r) => r.length > 8);
+    return { ly0, ty0, lyDay: LYd, tyDay: TYd, lyCum: cum(LYd), tyCum: cum(TYd), upto, kToday, lyBefore, lyAfter, tyBefore, tyAfter, hasDisc,
       lyDate: (k) => addDays(ly0, k), tyDate: (k) => addDays(ty0, k), label: (k) => 'D-' + (30 - k) };
   }
   const growth = (ty, ly) => (ly > 0 ? ty / ly - 1 : null);

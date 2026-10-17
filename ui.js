@@ -17,6 +17,8 @@
     s: { only: true, q: '', art: null, qty: {}, cover: '' },
     c: { q: '', scope: 'master', cat: '', mrp: '', results: null, loading: false, asked: '' },
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
+    dash: { tab: (() => { try { return localStorage.getItem('allocdesk.dashtab') === 'stock' ? 'stock' : 'overview'; } catch (_) { return 'overview'; } })(),
+      by: (() => { try { return localStorage.getItem('allocdesk.dashby') || 'buyer'; } catch (_) { return 'buyer'; } })(), all: false, sf: '', sall: false },
     ly: { dash: (() => { try { return localStorage.getItem('allocdesk.lydash') || 'ordered'; } catch (_) { return 'ordered'; } })(), basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
     tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false, opened: new Set(), closed: new Set() },
@@ -26,7 +28,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 29;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 30;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -363,6 +365,9 @@
   const FLAGS = {
     LATE: ['Delivery date at risk', (l) => l.late],
     SOON: ['Allocate today or tomorrow', (l) => l.tight],
+    WEEK: ['Allocate in 2 to 7 days', (l) => l.balance > 0 && l.days_left != null && l.days_left >= 2 && l.days_left <= 7],
+    LATER: ['Allocate in more than 7 days', (l) => l.balance > 0 && l.days_left != null && l.days_left > 7],
+    NODATE: ['No delivery date', (l) => l.balance > 0 && l.days_left == null],
     BELOW: ['Price below MRP', (l) => !l.price_missing && l.discount != null && l.discount > 0.0005],
     NOPRICE: ['Price not given (MRP used)', (l) => !!l.price_missing],
     OUTSIDE: ['Not in the Diwali range', (l) => !l.in_master],
@@ -450,44 +455,179 @@
       <div class="tablewrap"><table class="tight twoline fit"><thead><tr><th></th><th class="right">At MRP<br>(Rs)</th><th class="right">At the price<br>(Rs)</th><th class="right">Discount</th><th class="right">Margin %<br>without discount</th><th class="right">Margin %<br>after discount</th><th class="right">Margin lost<br>to discount</th><th class="right">Margin<br>(Rs)</th></tr></thead><tbody>
       ${mrow('Ordered', asked)}${mrow('Approved so far', given)}${mrow('Still pending', pend)}</tbody></table></div>
       <p class="small">Values in rupees, rejected lines left out. "Ordered" and "Still pending" use the price the store asked; "Approved so far" uses the price approved. Margin without discount = the same pieces at MRP. Margin = (price without GST - cost) / price without GST, on the cost of the ordered article.${asked.noCost ? ` ${asked.noCost} ${plural(asked.noCost, 'line')} left out of the margin because the article has no cost on file.` : ''}</p></div>`;
-    /* by buyer */
-    const buyers = {};
-    for (const l of lines) { const k = l.buyer || '(buyer not set)'; (buyers[k] = buyers[k] || []).push(l); }
-    const brow = Object.keys(buyers).sort().map((k) => {
-      const ls = buyers[k], lv = ls.filter((l) => l.status !== 'REJECTED'), a = money(lv, (l) => l.req_qty), g = money(lv, (l) => l.approved);
-      const need = ls.filter((l) => NEEDS.includes(l.status)).length;
-      return `<tr class="pick" data-act="go" data-view="orders" data-buyer="${esc(l0(k))}"><td>${esc(k)}</td><td class="right">${inr(ls.length)}</td><td class="right ${need ? 'b' : 'muted'}">${need ? inr(need) : '-'}</td>
-        <td class="right">${rupees(a.val)}</td><td class="right">${rupees(g.val)}</td><td class="right">${pct(a.disc)}</td><td class="right">${pct(g.margin == null ? a.margin : g.margin)}</td></tr>`;
-    }).join('');
-    const buyerCard = Object.keys(buyers).length > 1 || !buyers['(buyer not set)'] ? `<div class="card stack"><h2>By buyer</h2>
-      <div class="tablewrap"><table><thead><tr><th>Buyer</th><th class="right">Lines</th><th class="right">Need action</th><th class="right">Value ordered</th><th class="right">Value approved</th><th class="right">Discount asked</th><th class="right">Margin</th></tr></thead><tbody>${brow}</tbody></table></div></div>` : '';
     short.sort((a, b) => (b[1].pending - Math.max(b[1].free, 0)) - (a[1].pending - Math.max(a[1].free, 0)));
-    const altFree = (arr) => arr.reduce((t, a) => t + Math.max(0, C.freeOf(M, a.article_code)), 0);
-    const shortRows = short.slice(0, 8).map(([c, p]) => {
-      const gap = p.pending - Math.max(p.free, 0), al = C.alternates(M, c), sf = altFree(al.same), df = altFree(al.diff);
-      const a = M.articles[c] || {}, ppo = (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0);
-      return `<tr class="pick" data-act="shortOpen" data-code="${esc(c)}"><td class="w">${esc(a.mc_name || '')}</td><td class="right">${inr(a.mrp)}</td><td>${esc(c)}</td><td class="w">${esc(a.description || '')}</td>
-        <td class="right">${inr(Math.max(p.free, 0))}</td><td class="right">${p.n_stores}</td><td class="right">${inr(p.pending)}</td>
-        <td class="right bad b">${inr(gap)}</td><td class="right">${ppo ? inr(ppo) : '-'}</td><td class="right">${inr(sf)}</td><td class="right">${inr(df)}</td><td class="right">${sf + df >= gap ? 'Yes' : sf + df ? 'Partly' : 'No'}</td></tr>`;
-    }).join('');
-    return `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>
+    const tabs = `<div class="segs dashtabs" role="tablist">${[['overview', 'Overview'], ['stock', 'Stock &amp; discount']].map(([k, t]) => `<button role="tab" aria-selected="${S.dash.tab === k}" class="${S.dash.tab === k ? 'on' : ''}" data-act="dashTab" data-v="${k}">${t}</button>`).join('')}</div>`;
+    const head = `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>${tabs}`;
+    if (S.dash.tab === 'stock') return head + dashStock(short, hasStock);
+    return `${head}
       ${tkDashCard()}
-      <div class="tiles">${tiles}</div>
+      <div class="tiles dtiles">${tiles}</div>
       ${qmOn() ? `<div id="qmcard" style="margin-top:12px">${qmDashHtml()}</div>` : ''}
-      <div class="grid2">
+      <div class="grid2 ovgrid">
         <div class="card stack"><h2>Needs attention</h2>
           ${items.length ? items.map(([tone, text, btn]) => `<div class="attn"><div class="note ${tone || 'info'}">${text}</div>${btn}</div>`).join('') : '<div class="note good">Nothing needs attention.</div>'}</div>
         <div class="stack"><div class="card stack"><h2>Where the ordered quantity stands</h2><div class="bars">
           ${parts.map(([n, q, col]) => `<span>${n}</span><div class="bar"><i style="width:${reqAll ? Math.min(100, q / reqAll * 100) : 0}%;background:${col}"></i></div><b class="right">${inr(q)}</b><span class="small right">${reqAll ? Math.round(q / reqAll * 100) : 0}%</span>`).join('')}
         </div><p class="small">${inr(appr)} of ${inr(req)} pcs approved (${req ? Math.round(appr / req * 100) : 0}%), not counting rejected lines; the bars are out of all ${inr(reqAll)} pcs ordered. Approved quantities are in full packs, so they can be a little above what was asked.</p></div>${moneyCard}</div>
       </div>
-      ${expDashCard()}
       ${lyDashCard()}
-      ${buyerCard ? `<div style="margin-top:12px">${buyerCard}</div>` : ''}
-      <div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Biggest shortages</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
-        ${short.length ? `<div class="tablewrap"><table><thead><tr><th>MC</th><th class="right">MRP</th><th>Article</th><th>Description</th><th class="right">Balance DC qty</th><th class="right">Stores waiting</th>
-          <th class="right">Pending order qty</th><th class="right">Short by</th><th class="right">Pending PO</th><th class="right">Balance in same design</th><th class="right">Balance in other designs</th><th class="right">Covered by alternates?</th></tr></thead><tbody>${shortRows}</tbody></table></div>`
-        : `<div class="note ${hasStock ? 'good' : 'info'}">${hasStock ? 'No article is short right now.' : 'Shortages appear once a DC stock report is loaded.'}</div>`}</div>`;
+      ${dashBreakdown(short)}`;
+  }
+
+  /* ---------- sortable tables: click a heading to sort, click again to reverse; the choice is remembered per table ---------- */
+  const TSORT = (() => { try { return JSON.parse(localStorage.getItem('allocdesk.sorts') || '{}') || {}; } catch (_) { return {}; } })();
+  const sortOf = (t, k, d) => (TSORT[t] && TSORT[t].k ? TSORT[t] : { k, d });
+  /* o: { cls, title, asc: true = the first click sorts A-Z / low to high (names); numbers start high to low } */
+  function sortTh(t, cur, k, label, o) {
+    o = o || {}; const on = cur.k === k;
+    return `<th class="${o.cls || ''} sortth${on ? ' on' : ''}"${o.title ? ` title="${esc(o.title)}"` : ''} aria-sort="${on ? (cur.d > 0 ? 'ascending' : 'descending') : 'none'}"><button type="button" class="sorth" data-act="sortBy" data-t="${t}" data-k="${k}" data-d="${o.asc ? 1 : -1}" data-cur="${on ? cur.d : ''}">${label} <span class="sarr" aria-hidden="true">${on ? (cur.d > 0 ? '&#9650;' : '&#9660;') : '&#8597;'}</span></button></th>`;
+  }
+  /* on a phone the headings are hidden (each line is a card): the same sort as a list. cols: [[key, label, name?]] */
+  function phSort(t, cur, cols) {
+    const o = [];
+    for (const [k, label, name] of cols) for (const d of name ? [1, -1] : [-1, 1]) {
+      const v = k + ':' + d;
+      o.push(`<option value="${v}" ${cur.k === k && cur.d === d ? 'selected' : ''}>Sort: ${esc(label)} - ${name ? (d > 0 ? 'A to Z' : 'Z to A') : d < 0 ? 'highest first' : 'lowest first'}</option>`);
+    }
+    return `<select class="phsort gsel" data-t="${t}" aria-label="Sort by">${o.join('')}</select>`;
+  }
+  /* blanks always go to the bottom, whichever way */
+  function sortRows(rows, cur, get) {
+    const blank = (x) => x == null || x === '' || (typeof x === 'number' && Number.isNaN(x));
+    return rows.map((r, i) => [r, get(r, cur.k), i]).sort((A, B) => {
+      const x = A[1], y = B[1];
+      if (blank(x) || blank(y)) return blank(x) && blank(y) ? A[2] - B[2] : blank(x) ? 1 : -1;
+      const c = typeof x === 'string' || typeof y === 'string' ? String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' }) : x - y;
+      return c * cur.d || A[2] - B[2];
+    }).map((x) => x[0]);
+  }
+
+  /* ---------- Dashboard: breakdown by buyer, MC, MC + MRP, store or article ---------- */
+  const BD = { buyer: ['Buyer', 'buyer'], mc: ['MC', 'MC'], mcmrp: ['MC + MRP', 'MC and MRP'], store: ['Store', 'store'], article: ['Article', 'article'] };
+  function dashBreakdown(short) {
+    const M = S.M, by = BD[S.dash.by] ? S.dash.by : 'buyer', today = C.today();
+    const shortOf = {}; short.forEach(([c, p]) => { shortOf[c] = p.pending - Math.max(p.free, 0); });
+    const keyOf = { buyer: (l) => l.buyer || '(buyer not set)', mc: (l) => l.mc_name || '(MC not set)', mcmrp: (l) => (l.mc_name || '(MC not set)') + '||' + (Number(l.mrp) || 0),
+      store: (l) => l.store_code, article: (l) => l.article_code }[by];
+    const G = new Map();
+    for (const l of M.lines) { const k = keyOf(l); let g = G.get(k); if (!g) { g = { k, ls: [] }; G.set(k, g); } g.ls.push(l); }
+    let rows = [];
+    for (const g of G.values()) {
+      const ls = g.ls, live = ls.filter((l) => l.status !== 'REJECTED'), need = ls.filter((l) => NEEDS.includes(l.status)), l1 = ls[0];
+      const a = money(live, (l) => l.req_qty), v = money(live, (l) => l.approved, true);
+      let old = null;
+      for (const l of need) if (l.order_date) { const d = C.dayDiff(l.order_date, today); if (d >= 0 && (old == null || d > old)) old = d; }
+      let sh = 0;
+      if (by === 'store') { for (const l of need) if (shortOf[l.article_code] && l.balance > 0) sh += Math.min(l.balance, shortOf[l.article_code]); }
+      else new Set(live.filter((l) => l.balance > 0).map((l) => l.article_code)).forEach((c) => { sh += shortOf[c] || 0; });
+      const mrp = Number(l1.mrp) || 0;
+      const name = by === 'mcmrp' ? `${l1.mc_name || '(MC not set)'}` : by === 'store' ? l1.store_code : by === 'article' ? l1.article_code : g.k;
+      const sub = by === 'mcmrp' ? `MRP ${inr(mrp)}` : by === 'store' ? (l1.store_name || '') : by === 'article' ? (l1.description || '') : '';
+      rows.push({ k: g.k, name, sub, sortName: by === 'mcmrp' ? name.toLowerCase() + ' ' + String(Math.round(mrp * 100)).padStart(12, '0') : (name + ' ' + sub).toLowerCase(),
+        lines: ls.length, need: need.length, old, ord: a.val, appr: v.val, short: sh, mwo: a.marginMrp, disc: a.disc, mar: a.margin,
+        pendVal: money(need, (l) => l.balance).val, today: ls.filter((l) => l.approved > 0 && l.approved_at && C.localDay(l.approved_at) === today).length, vm: v.margin, vd: v.disc, vval: v.val });
+    }
+    const cur = sortOf('bd', 'need', -1);
+    rows = sortRows(rows, cur, (r, k) => (k === 'n' ? r.sortName : r[k]));
+    /* the buyer view: four highlights */
+    let hi = '';
+    if (by === 'buyer' && rows.length > 1) {
+      const best = (f, ok) => rows.filter(ok || (() => true)).reduce((m, r) => (m == null || f(r) > f(m) ? r : m), null);
+      const w = best((r) => r.need, (r) => r.need > 0), o = best((r) => r.old, (r) => r.old != null), t = best((r) => r.today, (r) => r.today > 0), lm = best((r) => -r.vm, (r) => r.vval > 0 && r.vm != null);
+      const card = (cap, r, txt) => `<div class="bdhi"><span>${cap}</span><b>${r ? esc(r.name) : '-'}</b><span>${r ? txt : 'nothing yet'}</span></div>`;
+      hi = `<div class="bdhis">${card('Most waiting', w, w && `${inr(w.need)} ${plural(w.need, 'line')} &middot; ${crore(w.pendVal)} pending`)}${card('Oldest pending line', o, o && `booked ${o.old} ${plural(o.old, 'day')} ago`)}
+        ${card('Most approved today', t, t && `${inr(t.today)} ${plural(t.today, 'line')}`)}${card('Lowest margin approved', lm, lm && `${pct(lm.vm)} after ${pct(lm.vd)} discount`)}</div>`;
+    }
+    const total = rows.length, shown = S.dash.all ? rows : rows.slice(0, 50);
+    const th = (k, label, o) => sortTh('bd', cur, k, label, o);
+    const num = (v) => (v ? inr(v) : '<span class="muted">-</span>');
+    const body = shown.map((r) => `<tr class="pick" data-act="bdOpen" data-by="${by}" data-k="${esc(r.k)}" title="Open these lines">
+        <td class="bdname"><b>${esc(r.name)}</b>${r.sub ? `<div class="small">${esc(r.sub)}</div>` : ''}</td>
+        <td class="right" data-l="Lines">${inr(r.lines)}</td><td class="right b" data-l="Need action">${r.need ? inr(r.need) : '<span class="muted">-</span>'}</td>
+        <td class="right ${r.old != null && r.old >= 7 ? 'bad b' : ''}" data-l="Oldest pending">${r.old == null ? '<span class="muted">-</span>' : `${r.old} ${plural(r.old, 'day')}`}</td>
+        <td class="right" data-l="Value ordered">${crore(r.ord)}</td><td class="right" data-l="Value approved">${crore(r.appr)}</td>
+        <td class="right ${r.short ? 'bad b' : ''}" data-l="Pcs short">${num(r.short)}</td>
+        <td class="right" data-l="Margin without discount">${pct(r.mwo)}</td><td class="right ${r.disc > 0.0005 ? 'warn b' : ''}" data-l="Discount">${r.disc == null ? '-' : pct(r.disc)}</td>
+        <td class="right b" data-l="Margin after discount">${pct(r.mar)}</td></tr>`).join('');
+    return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Breakdown by ${BD[by][1]}</h2>
+        <div class="segs bdsegs" role="group" aria-label="Breakdown by">${Object.keys(BD).map((k) => `<button class="${k === by ? 'on' : ''}" data-act="dashBy" data-v="${k}">${BD[k][0]}</button>`).join('')}</div></div>
+      ${hi}
+      ${rows.length ? phSort('bd', cur, [['need', 'Need action'], ['n', BD[by][0], true], ['lines', 'Lines'], ['old', 'Oldest pending'], ['ord', 'Value ordered'], ['appr', 'Value approved'], ['short', 'Pcs short'], ['mwo', 'Margin without discount'], ['disc', 'Discount'], ['mar', 'Margin after discount']]) : ''}
+      ${rows.length ? `<div class="tablewrap fitwrap"><table class="fitcols resp bdtable"><colgroup><col class="c-bdn"><col><col><col><col class="c-val"><col class="c-val"><col><col><col><col></colgroup>
+        <thead><tr>${th('n', BD[by][0], { asc: true })}${th('lines', 'Lines', { cls: 'right' })}${th('need', 'Need action', { cls: 'right', title: 'Lines pending, partly approved or waiting for the store' })}
+          ${th('old', 'Oldest pending', { cls: 'right', title: 'Days since the oldest line still needing action was booked' })}${th('ord', 'Value ordered', { cls: 'right' })}${th('appr', 'Value approved', { cls: 'right' })}
+          ${th('short', 'Pcs short', { cls: 'right', title: by === 'store' ? 'Pending pcs of this store on articles the DC is short of' : 'Pcs the DC is short of, on these articles' })}
+          ${th('mwo', 'Margin without discount', { cls: 'right', title: 'The same pieces sold at MRP' })}${th('disc', 'Discount', { cls: 'right', title: 'Discount asked, on the value ordered' })}${th('mar', 'Margin after discount', { cls: 'right', title: 'At the price asked' })}</tr></thead>
+        <tbody>${body}</tbody></table></div>
+        ${total > 50 ? `<div class="row"><span class="small grow">${S.dash.all ? `All ${inr(total)} shown.` : `The first 50 of ${inr(total)} are shown, in the order chosen.`}</span><button class="btn sm" data-act="dashAll">${S.dash.all ? 'Show the first 50' : `Show all ${inr(total)}`}</button></div>` : ''}`
+        : '<div class="note info">No order lines yet.</div>'}
+      <p class="small">Click a heading to sort, again to reverse. Click a row to open its lines. Rejected lines are left out of the values; margins and discount are on the value ordered, at the price the store asked.</p></div>`;
+  }
+
+  /* ---------- Dashboard, second screen: pending by delivery date, discount spread, short articles ---------- */
+  function dashStock(short, hasStock) {
+    const M = S.M, open = M.lines.filter((l) => NEEDS.includes(l.status) && l.balance > 0);
+    const B = [['LATE', 'Overdue', 'can no longer reach the store by the date it asked for', '#FF9DBB'], ['SOON', 'Allocate today or tomorrow', '', '#F2C46B'],
+      ['WEEK', 'Allocate in 2 to 7 days', '', '#C9C2EA'], ['LATER', 'Allocate later', 'more than 7 days away', '#C9C2EA'], ['NODATE', 'No delivery date', 'no delivery date or lead time', '#E0DCEB']];
+    const bk = B.map(([f, t, tip, col]) => { const L = open.filter(FLAGS[f][1]); return { f, t, tip, col, n: L.length, q: L.reduce((x, l) => x + l.balance, 0) }; }).filter((b) => b.n || b.f !== 'NODATE');
+    const maxN = Math.max(1, ...bk.map((b) => b.n));
+    const pend = `<div class="card stack"><h2>Pending, by delivery date</h2>
+      <p class="small">${inr(open.length)} ${plural(open.length, 'line')} &middot; ${inr(open.reduce((x, l) => x + l.balance, 0))} pcs still to approve. "Allocate by" = the delivery date the store asked for, less the lead time. Click a row to open those lines.</p>
+      <div class="bars dbars">${bk.map((b) => `<button class="btn link dlabel" data-act="go" data-view="orders" data-flag="${b.f}"${b.tip ? ` title="${esc(b.tip)}"` : ''}>${b.t}</button><div class="bar"><i style="width:${b.n / maxN * 100}%;background:${b.col}"></i></div><b class="right">${inr(b.n)}</b><span class="small right">${inr(b.q)} pcs</span>`).join('')}</div></div>`;
+    /* value ordered by the discount the store asked */
+    const live = M.lines.filter((l) => l.status !== 'REJECTED' && l.req_qty > 0);
+    const D = [['At MRP', (d) => d <= 0.0005, '#C9C2EA'], ['Up to 5%', (d) => d <= 0.05, '#C9C2EA'], ['5 to 10%', (d) => d <= 0.10, '#F2C46B'], ['10 to 20%', (d) => d <= 0.20, '#F0A35E'], ['Over 20%', () => true, '#FF9DBB']]
+      .map(([t, f, col]) => ({ t, f, col, v: 0, n: 0 }));
+    let tv = 0;
+    for (const l of live) {
+      const d = l.price_missing || l.discount == null ? 0 : l.discount, v = l.req_qty * l.req_price;
+      const b = D.find((x) => x.f(d)); b.v += v; b.n++; tv += v;
+    }
+    const maxV = Math.max(1, ...D.map((b) => b.v));
+    const disc = `<div class="card stack"><h2>How much discount, on how much value</h2>
+      <p class="small">Value ordered (${crore(tv)}, rejected lines left out), by the discount the store asked. A line without a price counts at MRP.</p>
+      <div class="bars dbars">${D.map((b) => `<span>${b.t}</span><div class="bar"><i style="width:${b.v / maxV * 100}%;background:${b.col}"></i></div><b class="right">${crore(b.v)}</b><span class="small right">${tv ? Math.round(b.v / tv * 100) : 0}% &middot; ${inr(b.n)} ${plural(b.n, 'line')}</span>`).join('')}</div></div>`;
+    /* short articles and how they can be covered */
+    const altFree = (arr) => arr.reduce((t, a) => t + Math.max(0, C.freeOf(M, a.article_code)), 0);
+    let rows = short.map(([c, p]) => {
+      const a = M.articles[c] || {}, gap = p.pending - Math.max(p.free, 0), al = C.alternates(M, c), sf = altFree(al.same), df = altFree(al.diff), x = expPlan(c);
+      const cov = sf + df >= gap ? 2 : sf + df > 0 ? 1 : 0;
+      return { c, a, desc: a.description || '', mc: a.mc_name || '', mrp: Number(a.mrp) || 0, stores: p.n_stores, pend: p.pending, dc: Math.max(p.free, 0), gap, sf, df, cov,
+        ppo: (Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0), x, exp: x.total || 0 };
+    });
+    const cnt = { yes: rows.filter((r) => r.cov === 2).length, part: rows.filter((r) => r.cov === 1).length, exp: rows.filter((r) => r.x.ex.length).length, none: rows.filter((r) => r.cov === 0 && !r.x.ex.length).length };
+    const SF = { yes: (r) => r.cov === 2, part: (r) => r.cov === 1, exp: (r) => r.x.ex.length > 0, none: (r) => r.cov === 0 && !r.x.ex.length };
+    const sf = SF[S.dash.sf] ? S.dash.sf : '';
+    const chip = (k, n, t, cls) => `<button class="qmtile ${cls || ''} ${sf === k ? 'on' : ''}" data-act="dashSf" data-v="${k}" aria-pressed="${sf === k}"><b>${inr(n)}</b><span>${t}</span></button>`;
+    const cur = sortOf('short', 'gap', -1);
+    const list = sortRows(sf ? rows.filter(SF[sf]) : rows, cur, (r, k) => (k === 'c' ? r.c : r[k]));
+    const shown = S.dash.sall ? list : list.slice(0, 50);
+    const th = (k, label, o) => sortTh('short', cur, k, label, o);
+    const num = (v) => (v ? inr(v) : '<span class="muted">-</span>');
+    const COV = ['<span class="bad b">No</span>', '<span class="warn b">Partly</span>', '<span class="good b">Yes</span>'];
+    const expCell = (r) => (r.x.ex.length ? `<b>${inr(r.x.total)} pcs</b><div class="small">${r.x.ex.length > 1 ? 'first ' : ''}${when(r.x.ex[0].eta)}${r.x.ex.length > 1 ? `, +${r.x.ex.length - 1} more` : ''}${r.x.passed.length ? ' <span class="warn">(date passed)</span>' : ''}</div><div class="small">${expVerdict(r.x)}</div>`
+      : `<span class="${r.cov === 2 ? 'muted' : 'bad'}">${r.cov === 2 ? '-' : 'No date yet'}</span>`);
+    const body = shown.map((r) => `<tr class="pick" data-act="shortOpen" data-code="${esc(r.c)}" title="Share the stock out">
+        <td class="artcell"><b>${esc(r.c)}</b> <span class="small">${esc(r.desc)}</span>${r.mc ? `<div class="small mcline">${esc(r.mc)}</div>` : ''}</td>
+        <td class="right" data-l="MRP">${r.mrp ? inr(r.mrp) : '-'}</td><td class="right" data-l="Stores waiting">${inr(r.stores)}</td><td class="right" data-l="Pending qty">${inr(r.pend)}</td>
+        <td class="right" data-l="Balance DC qty">${inr(r.dc)}</td><td class="right bad b" data-l="Short by">${inr(r.gap)}</td>
+        <td class="right" data-l="Same design">${num(r.sf)}</td><td class="right" data-l="Other designs">${num(r.df)}</td><td class="right" data-l="Covered?">${COV[r.cov]}</td>
+        <td class="right" data-l="Pending PO">${num(r.ppo)}</td><td class="expcell" data-l="Expected at DC">${expCell(r)}</td></tr>`).join('');
+    const tot = rows.reduce((t, r) => t + r.gap, 0);
+    const shortCard = `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Short articles - and how much can be covered</h2><button class="btn sm" data-act="nav" data-view="shortages">Open Shortages</button></div>
+      ${!hasStock ? '<div class="note info">Shortages appear once a DC stock report is loaded.</div>' : !rows.length ? '<div class="note good">No article is short right now.</div>' : `
+      <div class="qmtiles dshchips">${chip('', rows.length, `${plural(rows.length, 'article')} short &middot; ${inr(tot)} pcs`)}${chip('yes', cnt.yes, 'fully covered by alternates', 'good')}${chip('part', cnt.part, 'partly covered by alternates', 'warn')}
+        ${chip('exp', cnt.exp, 'stock expected at the DC')}${chip('none', cnt.none, 'no cover yet', 'bad')}</div>
+      ${list.length ? phSort('short', cur, [['gap', 'Short by'], ['c', 'Article', true], ['stores', 'Stores waiting'], ['pend', 'Pending qty'], ['dc', 'Balance DC qty'], ['sf', 'Balance, same design'], ['df', 'Balance, other designs'], ['cov', 'Covered?'], ['ppo', 'Pending PO'], ['exp', 'Expected at DC'], ['mrp', 'MRP']]) : ''}
+      ${list.length ? `<div class="tablewrap fitwrap"><table class="fitcols resp shtable"><colgroup><col class="c-art"><col class="c-mrp"><col><col><col><col><col><col><col class="c-cov"><col><col class="c-exp"></colgroup>
+        <thead><tr>${th('c', 'Article', { asc: true })}${th('mrp', 'MRP', { cls: 'right' })}${th('stores', 'Stores waiting', { cls: 'right' })}${th('pend', 'Pending qty', { cls: 'right' })}${th('dc', 'Balance DC qty', { cls: 'right' })}
+          ${th('gap', 'Short by', { cls: 'right' })}${th('sf', 'Balance, same design', { cls: 'right', title: 'Balance DC qty of alternates in the same design' })}${th('df', 'Balance, other designs', { cls: 'right', title: 'Balance DC qty of alternates in another design at the same price' })}
+          ${th('cov', 'Covered?', { cls: 'right', title: 'Do the alternates hold enough to cover what is short?' })}${th('ppo', 'Pending PO', { cls: 'right' })}${th('exp', 'Expected at DC', { title: 'Stock you noted as expected at the DC' })}</tr></thead>
+        <tbody>${body}</tbody></table></div>
+        ${list.length > 50 ? `<div class="row"><span class="small grow">${S.dash.sall ? `All ${inr(list.length)} shown.` : `The first 50 of ${inr(list.length)} are shown, in the order chosen.`}</span><button class="btn sm" data-act="dashSall">${S.dash.sall ? 'Show the first 50' : `Show all ${inr(list.length)}`}</button></div>` : ''}`
+        : '<div class="note info">No article in this group.</div>'}
+      <p class="small">Covered? = the balance DC qty of the alternates in the same design and in other designs at the same price, against what is short. Click a heading to sort; click a row to share the stock out.</p>`}</div>`;
+    return `<div class="grid2 even">${pend}${disc}</div>${shortCard}`;
   }
   const l0 = (k) => (k === '(buyer not set)' ? '-' : k);
 
@@ -1740,6 +1880,14 @@
   }
 
   /* The dashboard card: the order trend this year against last year, up to yesterday */
+  /* The discount, this year against last year: on what was ordered (price asked against MRP) or on what was approved */
+  function lyDiscBig(ly, ty, ap) {
+    const d = (v, m) => (m > 0 ? 1 - v / m : null), a = ap ? d(ly.fvm, ly.fm) : d(ly.wvm, ly.mv), b = ap ? d(ty.fvm, ty.fm) : d(ty.wvm, ty.mv);
+    const pts = a != null && b != null ? (b - a) * 100 : null;
+    const ch = pts == null ? '<span class="muted">-</span>' : Math.abs(pts) < 0.05 ? '<span class="muted b">same as last year</span>'
+      : `<span class="${pts > 0 ? 'bad' : 'good'} b">${pts > 0 ? '+' : ''}${pts.toFixed(1)} pts ${pts > 0 ? 'more' : 'less'}</span>`;
+    return `<div class="lybig lydisc" title="Value at the price ${ap ? 'approved' : 'asked'} against the same pieces at MRP (lines with an MRP)"><span>${ap ? 'Discount given' : 'Discount asked'}</span><b>${b == null ? '-' : pct(b)}</b><span class="small">last year ${a == null ? '-' : pct(a)}</span><span>${ch}</span></div>`;
+  }
   function lyDashCard() {
     if (!lyOn()) return '';
     if (!hasLy()) return editor() ? `<div class="card stack" style="margin-top:12px"><div class="row"><h2 class="grow">Orders vs last year</h2></div><div class="note info">Load last year's order tracker (Data, step 10) to follow this year's orders against last year, day by day from D-30.</div><div><button class="btn sm" data-act="nav" data-view="data">Open Data</button></div></div>` : '';
@@ -1751,8 +1899,8 @@
     const sw = `<div class="segs lydash">${[['ordered', 'Ordered'], ['approved', 'Approved']].map(([k, t]) => `<button class="${(ap ? 'approved' : 'ordered') === k ? 'on' : ''}" data-act="lyDash" data-v="${k}">${t}</button>`).join('')}</div>`;
     return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Orders vs last year, ${SE.label(0)} to ${SE.label(u)}</h2>${sw}<button class="btn sm" data-act="nav" data-view="lastyear">Open</button></div>
       <p class="small">Total so far: this year ${esc(r.ty)}, last year ${esc(r.ly)} (the same D-days, up to yesterday). ${ap ? 'Approved = the qty approved and its value (last year: final qty to store and order value).' : 'Ordered = qty wanted at the price wanted, rejected lines included.'}</p>
-      <div class="lybigs">${ap ? big('Value approved', ly.fv, ty.fv, crore) + big('Qty approved', ly.fq, ty.fq, pcsShort) + big('Orders', ly.o, ty.o, inr) + big('Value ordered', ly.wv, ty.wv, crore)
-        : big('Value ordered', ly.wv, ty.wv, crore) + big('Qty ordered', ly.wq, ty.wq, pcsShort) + big('Orders', ly.o, ty.o, inr) + big('Value approved', ly.fv, ty.fv, crore)}</div>
+      <div class="lybigs ${SE.hasDisc ? 'five' : ''}">${ap ? big('Value approved', ly.fv, ty.fv, crore) + big('Qty approved', ly.fq, ty.fq, pcsShort) + big('Orders', ly.o, ty.o, inr) + big('Value ordered', ly.wv, ty.wv, crore)
+        : big('Value ordered', ly.wv, ty.wv, crore) + big('Qty ordered', ly.wq, ty.wq, pcsShort) + big('Orders', ly.o, ty.o, inr) + big('Value approved', ly.fv, ty.fv, crore)}${SE.hasDisc ? lyDiscBig(ly, ty, ap) : ''}</div>
       ${seasonChart(SE, ap ? 'fv' : 'wv', { h: 190, mini: true })}</div>`;
   }
 
@@ -3333,6 +3481,28 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     signout: async () => { clearInterval(poller); poller = null; await A.sb.auth.signOut().catch(() => {}); S.M = null; S.me = null; screenLogin(); },
     refresh: () => run(async () => {}),
     nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
+    dashTab: (el) => { S.dash.tab = el.dataset.v === 'stock' ? 'stock' : 'overview'; try { localStorage.setItem('allocdesk.dashtab', S.dash.tab); } catch (_) { /* only a convenience */ } render(); },
+    dashBy: (el) => { S.dash.by = el.dataset.v; S.dash.all = false; try { localStorage.setItem('allocdesk.dashby', S.dash.by); } catch (_) { /* only a convenience */ } render(); },
+    dashAll: () => { S.dash.all = !S.dash.all; render(); },
+    dashSall: () => { S.dash.sall = !S.dash.sall; render(); },
+    dashSf: (el) => { S.dash.sf = S.dash.sf === el.dataset.v ? '' : el.dataset.v; render(); },
+    sortBy: (el) => {
+      const t = el.dataset.t, k = el.dataset.k, now = +el.dataset.cur;   // data-cur: this column is the one sorted on, in that direction
+      TSORT[t] = now ? { k, d: -now } : { k, d: +el.dataset.d || -1 };
+      try { localStorage.setItem('allocdesk.sorts', JSON.stringify(TSORT)); } catch (_) { /* only a convenience */ }
+      render();
+    },
+    bdOpen: (el) => {
+      const by = el.dataset.by, k = el.dataset.k;
+      S.view = 'orders';
+      Object.assign(S.o, { status: '', flag: '', q: '', buyer: '', store: '', mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear();
+      if (by === 'buyer') S.o.buyer = k === '(buyer not set)' ? '-' : k;
+      else if (by === 'mc') S.o.mc = k === '(MC not set)' ? '' : k;
+      else if (by === 'mcmrp') { const mc = k.split('||')[0]; S.o.mc = mc === '(MC not set)' ? '' : mc; }
+      else if (by === 'store') S.o.store = k;
+      else S.o.q = k;
+      render();
+    },
     go: (el) => {
       S.view = el.dataset.view; S.o.sel = null;
       if (S.view === 'approved') { Object.assign(S.a, { seg: 'todo', q: el.dataset.q || '', flag: '', store: '', mc: '', buyer: '', limit: 300, collapsed: false }); S.a.toggled.clear(); }
@@ -3821,6 +3991,11 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
     else if (t.id === 'ostore') { sec().store = t.value; relist(); }
     else if (t.id === 'omc') { sec().mc = t.value; relist(); }
     else if (t.id === 'obuyer') { sec().buyer = t.value; relist(); }
+    else if (t.classList && t.classList.contains('phsort')) {
+      const [k, d] = t.value.split(':'); TSORT[t.dataset.t] = { k, d: +d || -1 };
+      try { localStorage.setItem('allocdesk.sorts', JSON.stringify(TSORT)); } catch (_) { /* only a convenience */ }
+      render();
+    }
     else if (t.id === 'osort') { const st = sec(); st.sort = t.value; st.limit = 300; render(); }
     else if (t.id === 'ogroup') { const st = sec(); st.group = t.value; st.collapsed = false; st.toggled.clear(); st.limit = 300; render(); }
     else if (t.id === 'ccat') { S.c.cat = t.value; setHtml('cgrid', cGridHtml()); setHtml('cmrpbox', cMrpHtml()); hydrate(); }
