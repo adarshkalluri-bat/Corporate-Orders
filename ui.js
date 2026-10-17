@@ -1955,26 +1955,34 @@
     const tot = mcs.reduce((t, g) => { for (const k in t) t[k] += g.t[k]; return t; }, { lq: 0, tq: 0, lv: 0, tv: 0, lqa: 0, lva: 0 }), whole = L.period !== 'all';
     const mrow = (cls, label, x, attrs) => `<tr class="${cls}" ${attrs || ''}><td>${label}</td><td class="right">${pcs(x.lq)}</td><td class="right b">${pcs(x.tq)}</td><td class="right">${growHtml(x.tq, x.lq)}</td>
       <td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td>${whole ? `<td class="right lyall">${pcs(x.lqa)}</td><td class="right lyall">${rs(x.lva)}</td>` : ''}</tr>`;
-    const body = shown.map((g) => { const open = L.all || L.open.has(g.key);
+    const mcur = TSORT.lymc && TSORT.lymc.k ? TSORT.lymc : { k: '', d: -1 };      // nothing chosen: the usual order (bigger value first)
+    const lyv = (x, k) => (k === 'qc' ? C.growth(x.tq, x.lq) : k === 'vc' ? C.growth(x.tv, x.lv) : x[k]);
+    const shownS = mcur.k ? sortRows(shown, mcur, (g, k) => (k === 'n' ? g.mc : lyv(g.t, k))) : shown;
+    const mrps = (g) => (mcur.k ? sortRows(g.rows, mcur, (x, k) => (k === 'n' ? x.mrp : lyv(x, k))) : g.rows);
+    const mth = (k, label, o) => sortTh('lymc', mcur, k, label, Object.assign({ cls: 'right' }, o));
+    const body = shownS.map((g) => { const open = L.all || L.open.has(g.key);
       return mrow('mc pick', `<span class="caret">${open ? '&#9662;' : '&#9656;'}</span> <b>${esc(g.mc)}</b> <span class="small">${g.rows.length} MRP${g.rows.length === 1 ? '' : 's'}</span>`, g.t, `data-act="lyMc" data-mc="${esc(g.key)}"`) +
-        (open ? g.rows.map((x) => mrow('mrp', `<span class="ind">MRP Rs ${inr2(x.mrp)}</span>`, x)).join('') : ''); }).join('');
+        (open ? mrps(g).map((x) => mrow('mrp', `<span class="ind">MRP Rs ${inr2(x.mrp)}</span>`, x)).join('') : ''); }).join('');
     const mcCard = `<div class="card stack"><div class="row wrap"><h2 class="grow">By MC and MRP (${word})</h2>
         <input type="search" id="lymq" placeholder="Find an MC ..." value="${esc(L.q)}" style="max-width:240px"><button class="btn sm" data-act="lyAll">${L.all ? 'Close all' : 'Open all MRPs'}</button></div>
-      ${wait}<div class="tablewrap"><table class="tight lymc"><thead><tr><th>MC / MRP</th><th class="right">Qty<br>last year</th><th class="right">Qty<br>this year</th><th class="right">Qty<br>change</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Value<br>change</th>${whole ? '<th class="right lyall">Qty last year<br>whole season</th><th class="right lyall">Value last year<br>whole season (Rs)</th>' : ''}</tr></thead>
+      ${wait}<div class="tablewrap"><table class="tight lymc"><thead><tr>${mth('n', 'MC / MRP', { cls: '', asc: true })}${mth('lq', 'Qty<br>last year')}${mth('tq', 'Qty<br>this year')}${mth('qc', 'Qty<br>change')}${mth('lv', 'Value last year<br>(Rs)')}${mth('tv', 'Value this year<br>(Rs)')}${mth('vc', 'Value<br>change')}${whole ? mth('lqa', 'Qty last year<br>whole season', { cls: 'right lyall' }) + mth('lva', 'Value last year<br>whole season (Rs)', { cls: 'right lyall' }) : ''}</tr></thead>
       <tbody>${mrow('tot', '<b>All MCs</b>', tot)}${body || `<tr><td colspan="${whole ? 9 : 7}" class="muted">${L.loading ? 'Loading last year ...' : L.err ? esc(L.err) : 'No MC matches.'}</td></tr>`}</tbody></table></div>
-      <p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Tap an MC to see its MRPs. MCs are matched by name; this year's MC comes from the order line or the article.${L.period !== 'all' ? ' The last two columns are last year\'s whole season, for reference.' : ''}</p></div>`;
+      <p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Tap an MC to see its MRPs; click a heading to sort (the MRPs inside each MC follow the same order), again to reverse. MCs are matched by name; this year's MC comes from the order line or the article.${L.period !== 'all' ? ' The last two columns are last year\'s whole season, for reference.' : ''}</p></div>`;
     /* by store */
     const st = lyByStore(SE, cut), sq = L.sq.trim().toLowerCase();
     const missing = st.filter((x) => x.lyAll > 0 && !x.tyAll), missV = missing.reduce((t, x) => t + x.lyAllV, 0);
     let srows = st.filter((x) => (!L.sonly || (x.lyAll > 0 && !x.tyAll)) && (!sq || (x.s + ' ' + x.name).toLowerCase().includes(sq)));
+    const scur = TSORT.lyst && TSORT.lyst.k ? TSORT.lyst : { k: '', d: -1 };
+    if (scur.k) srows = sortRows(srows, scur, (x, k) => (k === 'n' ? x.s : k === 'ch' ? C.growth(x.tv, x.lv) : x[k]));
+    const sth = (k, label, o) => sortTh('lyst', scur, k, label, Object.assign({ cls: 'right' }, o));
     const more = srows.length > 300; srows = srows.slice(0, 300);
     const storeCard = `<div class="card stack"><div class="row wrap"><h2 class="grow">By store (${word})</h2>
         <input type="search" id="lysq" placeholder="Find a store ..." value="${esc(L.sq)}" style="max-width:220px">
         <label class="row small"><input type="checkbox" id="lysonly" ${L.sonly ? 'checked' : ''}> Ordered last year, nothing yet this year</label></div>
       ${wait}${missing.length && L.stores ? `<div class="note warn"><b>${inr(missing.length)} ${plural(missing.length, 'store')}</b> ordered last year (${esc(crore(missV))} ${word} over the whole season) and ${missing.length === 1 ? 'has' : 'have'} not ordered anything this year yet.</div>` : ''}
-      <div class="tablewrap"><table class="tight lystore"><thead><tr><th>Store</th><th class="right">Lines<br>last year</th><th class="right">Lines<br>this year</th><th class="right">Value last year<br>(Rs)</th><th class="right">Value this year<br>(Rs)</th><th class="right">Change</th>${L.period !== 'all' ? '<th class="right lyall">Qty last year<br>whole season</th><th class="right lyall">Value last year<br>whole season (Rs)</th>' : ''}</tr></thead>
+      <div class="tablewrap"><table class="tight lystore"><thead><tr>${sth('n', 'Store', { cls: '', asc: true })}${sth('ln', 'Lines<br>last year')}${sth('tn', 'Lines<br>this year')}${sth('lv', 'Value last year<br>(Rs)')}${sth('tv', 'Value this year<br>(Rs)')}${sth('ch', 'Change')}${L.period !== 'all' ? sth('lyAllQ', 'Qty last year<br>whole season', { cls: 'right lyall' }) + sth('lyAllV', 'Value last year<br>whole season (Rs)', { cls: 'right lyall' }) : ''}</tr></thead>
       <tbody>${srows.map((x) => `<tr><td><b>${esc(x.s)}</b> <span class="small">${esc(x.name)}</span></td><td class="right">${inr(x.ln)}</td><td class="right b">${inr(x.tn)}</td><td class="right">${rs(x.lv)}</td><td class="right b">${rs(x.tv)}</td><td class="right">${growHtml(x.tv, x.lv)}</td>${L.period !== 'all' ? `<td class="right lyall">${inr(Math.round(x.lyAllQ))}</td><td class="right lyall">${rs(x.lyAllV)}</td>` : ''}</tr>`).join('') || `<tr><td colspan="${L.period !== 'all' ? 8 : 6}" class="muted">${L.loading ? 'Loading last year ...' : 'No store matches.'}</td></tr>`}</tbody></table></div>
-      ${more ? '<p class="small">Showing the first 300 stores; use the search box or Export for the rest.</p>' : ''}<p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Sorted by last year's value.${L.period !== 'all' ? ' The last two columns are last year\'s whole season.' : ''}</p></div>`;
+      ${more ? '<p class="small">Showing the first 300 stores; use the search box or Export for the rest.</p>' : ''}<p class="small">${L.period === 'all' ? 'Whole season, both years.' : `${esc(r.ly)} last year against ${esc(r.ty)} this year.`} Sorted by last year's value unless you click a heading to sort.${L.period !== 'all' ? ' The last two columns are last year\'s whole season.' : ''}</p></div>`;
     /* last year's lines */
     const lines = L.lines;
     const lineCard = `<div class="card stack"><h2>Look up last year's orders</h2>
