@@ -28,7 +28,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 30;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 31;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -267,6 +267,7 @@
     for (const st of [S.o, S.a]) st.checked.forEach((id) => { if (!S.M.byId[id]) st.checked.delete(id); });
     S.o.detail = null;
     render();
+    msCheck();
   }
   let poller = null;
   function startPolling() {
@@ -345,6 +346,71 @@
     wireCharts();
   }
   const setHtml = (id, html) => { const e = document.getElementById(id); if (e) e.innerHTML = html; };
+
+
+  /* ================= Crore milestones: a Diwali pop-up once per person, and a banner on the dashboard =================
+     Every crore of value approved (1 Cr, 2 Cr ...) is recorded once, by whoever opens the app first after it is reached. */
+  const msOn = () => !!S.M && S.M.schema >= 31;
+  const MS_BIG = '<svg viewBox="0 0 220 220" aria-hidden="true"><circle cx="214.0" cy="110.0" r="2.2" fill="#C9B8FF"/><circle cx="212.4" cy="128.1" r="2.2" fill="#C9B8FF"/><circle cx="207.7" cy="145.6" r="2.2" fill="#C9B8FF"/><circle cx="200.1" cy="162.0" r="2.2" fill="#C9B8FF"/><circle cx="189.7" cy="176.8" r="2.2" fill="#C9B8FF"/><circle cx="176.8" cy="189.7" r="2.2" fill="#C9B8FF"/><circle cx="162.0" cy="200.1" r="2.2" fill="#C9B8FF"/><circle cx="145.6" cy="207.7" r="2.2" fill="#C9B8FF"/><circle cx="128.1" cy="212.4" r="2.2" fill="#C9B8FF"/><circle cx="110.0" cy="214.0" r="2.2" fill="#C9B8FF"/><circle cx="91.9" cy="212.4" r="2.2" fill="#C9B8FF"/><circle cx="74.4" cy="207.7" r="2.2" fill="#C9B8FF"/><circle cx="58.0" cy="200.1" r="2.2" fill="#C9B8FF"/><circle cx="43.2" cy="189.7" r="2.2" fill="#C9B8FF"/><circle cx="30.3" cy="176.8" r="2.2" fill="#C9B8FF"/><circle cx="19.9" cy="162.0" r="2.2" fill="#C9B8FF"/><circle cx="12.3" cy="145.6" r="2.2" fill="#C9B8FF"/><circle cx="7.6" cy="128.1" r="2.2" fill="#C9B8FF"/><circle cx="6.0" cy="110.0" r="2.2" fill="#C9B8FF"/><circle cx="7.6" cy="91.9" r="2.2" fill="#C9B8FF"/><circle cx="12.3" cy="74.4" r="2.2" fill="#C9B8FF"/><circle cx="19.9" cy="58.0" r="2.2" fill="#C9B8FF"/><circle cx="30.3" cy="43.2" r="2.2" fill="#C9B8FF"/><circle cx="43.2" cy="30.3" r="2.2" fill="#C9B8FF"/><circle cx="58.0" cy="19.9" r="2.2" fill="#C9B8FF"/><circle cx="74.4" cy="12.3" r="2.2" fill="#C9B8FF"/><circle cx="91.9" cy="7.6" r="2.2" fill="#C9B8FF"/><circle cx="110.0" cy="6.0" r="2.2" fill="#C9B8FF"/><circle cx="128.1" cy="7.6" r="2.2" fill="#C9B8FF"/><circle cx="145.6" cy="12.3" r="2.2" fill="#C9B8FF"/><circle cx="162.0" cy="19.9" r="2.2" fill="#C9B8FF"/><circle cx="176.8" cy="30.3" r="2.2" fill="#C9B8FF"/><circle cx="189.7" cy="43.2" r="2.2" fill="#C9B8FF"/><circle cx="200.1" cy="58.0" r="2.2" fill="#C9B8FF"/><circle cx="207.7" cy="74.4" r="2.2" fill="#C9B8FF"/><circle cx="212.4" cy="91.9" r="2.2" fill="#C9B8FF"/><ellipse cx="194.0" cy="110.0" rx="16" ry="7" transform="rotate(0.0 194.0 110.0)" fill="#FFC9A8"/><ellipse cx="187.6" cy="142.1" rx="16" ry="7" transform="rotate(22.5 187.6 142.1)" fill="#FFB3CB"/><ellipse cx="169.4" cy="169.4" rx="16" ry="7" transform="rotate(45.0 169.4 169.4)" fill="#FFC9A8"/><ellipse cx="142.1" cy="187.6" rx="16" ry="7" transform="rotate(67.5 142.1 187.6)" fill="#FFB3CB"/><ellipse cx="110.0" cy="194.0" rx="16" ry="7" transform="rotate(90.0 110.0 194.0)" fill="#FFC9A8"/><ellipse cx="77.9" cy="187.6" rx="16" ry="7" transform="rotate(112.5 77.9 187.6)" fill="#FFB3CB"/><ellipse cx="50.6" cy="169.4" rx="16" ry="7" transform="rotate(135.0 50.6 169.4)" fill="#FFC9A8"/><ellipse cx="32.4" cy="142.1" rx="16" ry="7" transform="rotate(157.5 32.4 142.1)" fill="#FFB3CB"/><ellipse cx="26.0" cy="110.0" rx="16" ry="7" transform="rotate(180.0 26.0 110.0)" fill="#FFC9A8"/><ellipse cx="32.4" cy="77.9" rx="16" ry="7" transform="rotate(202.5 32.4 77.9)" fill="#FFB3CB"/><ellipse cx="50.6" cy="50.6" rx="16" ry="7" transform="rotate(225.0 50.6 50.6)" fill="#FFC9A8"/><ellipse cx="77.9" cy="32.4" rx="16" ry="7" transform="rotate(247.5 77.9 32.4)" fill="#FFB3CB"/><ellipse cx="110.0" cy="26.0" rx="16" ry="7" transform="rotate(270.0 110.0 26.0)" fill="#FFC9A8"/><ellipse cx="142.1" cy="32.4" rx="16" ry="7" transform="rotate(292.5 142.1 32.4)" fill="#FFB3CB"/><ellipse cx="169.4" cy="50.6" rx="16" ry="7" transform="rotate(315.0 169.4 50.6)" fill="#FFC9A8"/><ellipse cx="187.6" cy="77.9" rx="16" ry="7" transform="rotate(337.5 187.6 77.9)" fill="#FFB3CB"/><ellipse cx="169.9" cy="126.0" rx="15" ry="8" transform="rotate(15.0 169.9 126.0)" fill="#FFE08A"/><ellipse cx="153.8" cy="153.8" rx="15" ry="8" transform="rotate(45.0 153.8 153.8)" fill="#C9B8FF"/><ellipse cx="126.0" cy="169.9" rx="15" ry="8" transform="rotate(75.0 126.0 169.9)" fill="#A8E6CC"/><ellipse cx="94.0" cy="169.9" rx="15" ry="8" transform="rotate(105.0 94.0 169.9)" fill="#FFE08A"/><ellipse cx="66.2" cy="153.8" rx="15" ry="8" transform="rotate(135.0 66.2 153.8)" fill="#C9B8FF"/><ellipse cx="50.1" cy="126.0" rx="15" ry="8" transform="rotate(165.0 50.1 126.0)" fill="#A8E6CC"/><ellipse cx="50.1" cy="94.0" rx="15" ry="8" transform="rotate(195.0 50.1 94.0)" fill="#FFE08A"/><ellipse cx="66.2" cy="66.2" rx="15" ry="8" transform="rotate(225.0 66.2 66.2)" fill="#C9B8FF"/><ellipse cx="94.0" cy="50.1" rx="15" ry="8" transform="rotate(255.0 94.0 50.1)" fill="#A8E6CC"/><ellipse cx="126.0" cy="50.1" rx="15" ry="8" transform="rotate(285.0 126.0 50.1)" fill="#FFE08A"/><ellipse cx="153.8" cy="66.2" rx="15" ry="8" transform="rotate(315.0 153.8 66.2)" fill="#C9B8FF"/><ellipse cx="169.9" cy="94.0" rx="15" ry="8" transform="rotate(345.0 169.9 94.0)" fill="#A8E6CC"/><circle cx="110" cy="110" r="50" fill="#EFE8FF"/><circle cx="110" cy="110" r="45" fill="#fff"/></svg>', MS_SMALL = '<svg viewBox="0 0 140 140" aria-hidden="true"><ellipse cx="118.0" cy="70.0" rx="13" ry="6" transform="rotate(0.0 118.0 70.0)" fill="#FFC9A8"/><ellipse cx="113.2" cy="90.8" rx="13" ry="6" transform="rotate(25.7 113.2 90.8)" fill="#FFB3CB"/><ellipse cx="99.9" cy="107.5" rx="13" ry="6" transform="rotate(51.4 99.9 107.5)" fill="#FFC9A8"/><ellipse cx="80.7" cy="116.8" rx="13" ry="6" transform="rotate(77.1 80.7 116.8)" fill="#FFB3CB"/><ellipse cx="59.3" cy="116.8" rx="13" ry="6" transform="rotate(102.9 59.3 116.8)" fill="#FFC9A8"/><ellipse cx="40.1" cy="107.5" rx="13" ry="6" transform="rotate(128.6 40.1 107.5)" fill="#FFB3CB"/><ellipse cx="26.8" cy="90.8" rx="13" ry="6" transform="rotate(154.3 26.8 90.8)" fill="#FFC9A8"/><ellipse cx="22.0" cy="70.0" rx="13" ry="6" transform="rotate(180.0 22.0 70.0)" fill="#FFB3CB"/><ellipse cx="26.8" cy="49.2" rx="13" ry="6" transform="rotate(205.7 26.8 49.2)" fill="#FFC9A8"/><ellipse cx="40.1" cy="32.5" rx="13" ry="6" transform="rotate(231.4 40.1 32.5)" fill="#FFB3CB"/><ellipse cx="59.3" cy="23.2" rx="13" ry="6" transform="rotate(257.1 59.3 23.2)" fill="#FFC9A8"/><ellipse cx="80.7" cy="23.2" rx="13" ry="6" transform="rotate(282.9 80.7 23.2)" fill="#FFB3CB"/><ellipse cx="99.9" cy="32.5" rx="13" ry="6" transform="rotate(308.6 99.9 32.5)" fill="#FFC9A8"/><ellipse cx="113.2" cy="49.2" rx="13" ry="6" transform="rotate(334.3 113.2 49.2)" fill="#FFB3CB"/><circle cx="70" cy="70" r="34" fill="#EFE8FF"/><circle cx="70" cy="70" r="30" fill="#fff"/></svg>', MS_FAINT = '<svg class="msfaint" viewBox="0 0 140 140" aria-hidden="true"><ellipse cx="118.0" cy="70.0" rx="13" ry="6" transform="rotate(0.0 118.0 70.0)" fill="#DDD0FF"/><ellipse cx="113.2" cy="90.8" rx="13" ry="6" transform="rotate(25.7 113.2 90.8)" fill="#DDD0FF"/><ellipse cx="99.9" cy="107.5" rx="13" ry="6" transform="rotate(51.4 99.9 107.5)" fill="#DDD0FF"/><ellipse cx="80.7" cy="116.8" rx="13" ry="6" transform="rotate(77.1 80.7 116.8)" fill="#DDD0FF"/><ellipse cx="59.3" cy="116.8" rx="13" ry="6" transform="rotate(102.9 59.3 116.8)" fill="#DDD0FF"/><ellipse cx="40.1" cy="107.5" rx="13" ry="6" transform="rotate(128.6 40.1 107.5)" fill="#DDD0FF"/><ellipse cx="26.8" cy="90.8" rx="13" ry="6" transform="rotate(154.3 26.8 90.8)" fill="#DDD0FF"/><ellipse cx="22.0" cy="70.0" rx="13" ry="6" transform="rotate(180.0 22.0 70.0)" fill="#DDD0FF"/><ellipse cx="26.8" cy="49.2" rx="13" ry="6" transform="rotate(205.7 26.8 49.2)" fill="#DDD0FF"/><ellipse cx="40.1" cy="32.5" rx="13" ry="6" transform="rotate(231.4 40.1 32.5)" fill="#DDD0FF"/><ellipse cx="59.3" cy="23.2" rx="13" ry="6" transform="rotate(257.1 59.3 23.2)" fill="#DDD0FF"/><ellipse cx="80.7" cy="23.2" rx="13" ry="6" transform="rotate(282.9 80.7 23.2)" fill="#DDD0FF"/><ellipse cx="99.9" cy="32.5" rx="13" ry="6" transform="rotate(308.6 99.9 32.5)" fill="#DDD0FF"/><ellipse cx="113.2" cy="49.2" rx="13" ry="6" transform="rotate(334.3 113.2 49.2)" fill="#DDD0FF"/><ellipse cx="98.5" cy="79.3" rx="10" ry="5" transform="rotate(18.0 98.5 79.3)" fill="#FFD3BA"/><ellipse cx="87.6" cy="94.3" rx="10" ry="5" transform="rotate(54.0 87.6 94.3)" fill="#FFD3BA"/><ellipse cx="70.0" cy="100.0" rx="10" ry="5" transform="rotate(90.0 70.0 100.0)" fill="#FFD3BA"/><ellipse cx="52.4" cy="94.3" rx="10" ry="5" transform="rotate(126.0 52.4 94.3)" fill="#FFD3BA"/><ellipse cx="41.5" cy="79.3" rx="10" ry="5" transform="rotate(162.0 41.5 79.3)" fill="#FFD3BA"/><ellipse cx="41.5" cy="60.7" rx="10" ry="5" transform="rotate(198.0 41.5 60.7)" fill="#FFD3BA"/><ellipse cx="52.4" cy="45.7" rx="10" ry="5" transform="rotate(234.0 52.4 45.7)" fill="#FFD3BA"/><ellipse cx="70.0" cy="40.0" rx="10" ry="5" transform="rotate(270.0 70.0 40.0)" fill="#FFD3BA"/><ellipse cx="87.6" cy="45.7" rx="10" ry="5" transform="rotate(306.0 87.6 45.7)" fill="#FFD3BA"/><ellipse cx="98.5" cy="60.7" rx="10" ry="5" transform="rotate(342.0 98.5 60.7)" fill="#FFD3BA"/><circle cx="70" cy="70" r="14" fill="#FFE79A"/></svg>', MS_DIYA = '<svg viewBox="0 0 60 60" aria-hidden="true"><circle cx="30" cy="22" r="13" fill="#FFE79A" opacity="0.6"/><path d="M30 7 C36 17 36 24 30 29 C24 24 24 17 30 7Z" fill="#FFC24A"/><path d="M30 15 C33 20 33 24 30 27 C27 24 27 20 30 15Z" fill="#FF9B5C"/><path d="M6 33 H54 C52 45 42 52 30 52 C18 52 8 45 6 33Z" fill="#F4A26B"/><path d="M6 33 H54" stroke="#E8862A" stroke-width="3" stroke-linecap="round"/></svg>';
+  /* the value approved, as on the dashboard tile: approved + dispatched at the price approved, rejected lines left out */
+  function approvedValue(M) { let v = 0; for (const l of M.lines) if (l.status !== 'REJECTED' && l.approved > 0) v += Number(l.value) || 0; return v; }
+  /* D-day of the day it was reached, and when last year reached the same value */
+  function msInfo(m) {
+    const ly = lyOn() && hasLy(), SE = C.season(S.M, ly ? S.M.lyDaily : []), day = C.localDay(m.reached_at), k = C.dayDiff(SE.ty0, day);
+    const out = { dd: k >= 0 && k <= 30 ? SE.label(k) : '', ly: '', lys: '', lyl: '', cls: 'good' };
+    if (!ly || !(k >= 0)) return out;
+    const kl = SE.lyCum.findIndex((x) => x.fv >= m.crore * 1e7);
+    if (kl < 0) { out.ly = `last year did not reach ${m.crore} crore`; out.lys = 'Beyond last year'; out.lyl = `last year stayed below ${m.crore} crore`; return out; }
+    const d = kl - k;
+    out.ly = d > 0 ? `${d} ${plural(d, 'day')} earlier than last year` : d < 0 ? `${-d} ${plural(-d, 'day')} later than last year` : 'the same D-day as last year';
+    out.lys = d > 0 ? `${d} ${plural(d, 'day')} earlier` : d < 0 ? `${-d} ${plural(-d, 'day')} later` : 'Same D-day';
+    out.lyl = 'than last year'; out.cls = d >= 0 ? 'good' : 'warn';
+    return out;
+  }
+  function msBanner() {
+    if (!msOn() || !S.M.milestones.length) return '';
+    const ms = S.M.milestones, m = ms[ms.length - 1];
+    let hid = 0; try { hid = +localStorage.getItem('allocdesk.mshide') || 0; } catch (_) { /* only a convenience */ }
+    if (hid >= m.crore) return '';
+    const val = approvedValue(S.M), i = msInfo(m), nx = Math.max(m.crore, Math.floor(val / 1e7)) + 1;
+    const pc = Math.max(0, Math.min(100, (val - (nx - 1) * 1e7) / 1e7 * 100)), togo = Math.max(0, nx * 1e7 - val);
+    return `<section class="card msban" aria-label="Milestone reached">${MS_FAINT}
+      <div class="msbadge" aria-hidden="true">${MS_SMALL}<div><b>${m.crore}</b><span>CRORE</span></div></div>
+      <div class="msmid"><h3 class="mscap">Diwali corporate orders &middot; milestone</h3>
+        <div class="mstitle">Congratulations, team &ndash; <span>${m.crore} crore</span> approved!</div>
+        <div class="small">${crore(val)} approved &middot; reached ${when(m.reached_at)}${i.dd ? ` (${i.dd})` : ''}${i.ly ? ` &middot; <b class="${i.cls}">${i.ly}</b>` : ''}</div>
+        <div class="mschips">${ms.map((x) => `<span class="mschip"><b>${x.crore} Cr</b> ${esc(dmy(C.localDay(x.reached_at)))}</span>`).join('')}</div></div>
+      <div class="msnext"><div class="row"><span class="small grow">NEXT MILESTONE</span><b>${nx} crore</b></div>
+        <div class="msbar" role="progressbar" aria-label="Progress to ${nx} crore" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(pc)}"><i style="width:${pc.toFixed(1)}%"></i></div>
+        <div class="row"><span class="small grow">${crore(togo)} to go</span><button class="btn link" data-act="msHide" data-v="${m.crore}" title="Hide this banner until the next crore">Hide</button></div></div></section>`;
+  }
+  function msPopup() {
+    if (!msOn() || !S.M.milestones.length || $('#modal').children.length) return;
+    const m = S.M.milestones[S.M.milestones.length - 1];
+    if (m.crore <= S.M.msSeen || S.msShown === m.crore) return;
+    S.msShown = m.crore;
+    const val = approvedValue(S.M), i = msInfo(m), yr = C.localDay(m.reached_at).slice(0, 4);
+    const d = pop(`<div class="mspop">
+      <div class="msart">${MS_DIYA}<div class="msring">${MS_BIG}<div><b>${m.crore}</b><span>CRORE</span></div></div>${MS_DIYA}</div>
+      <h3 class="mscap">Happy Diwali</h3><h2>${m.crore} crore approved!</h2>
+      <p>Congratulations to the whole team &ndash; Diwali corporate orders ${esc(yr)} have crossed <b>Rs ${m.crore} crore</b> in approvals.</p>
+      <div class="msstats"><div class="stat"><b>${crore(val)}</b><span>approved</span></div><div class="stat"><b>${esc(dmy(C.localDay(m.reached_at)))}</b><span>reached${i.dd ? ' &middot; ' + i.dd : ''}</span></div>${i.lys ? `<div class="stat"><b class="${i.cls}">${esc(i.lys)}</b><span>${esc(i.lyl)}</span></div>` : ''}</div>
+      <button class="btn primary msok" data-ok>Thank you, team!</button>
+      <span class="small">Shown once to each person. The banner stays on the dashboard.</span></div>`, 'msp');
+    const ok = $('[data-ok]', d);
+    ok.onclick = () => { d.close(); S.M.msSeen = Math.max(S.M.msSeen, m.crore); A.rpc('milestone_seen', { p_crore: m.crore }).catch(() => { /* asked again next time */ }); };
+    ok.focus();
+  }
+  /* after each refresh: record a crore just reached (any team member can), then show its pop-up if not seen yet */
+  async function msCheck() {
+    if (!msOn() || !S.me) return;
+    const M = S.M, top = M.milestones.length ? M.milestones[M.milestones.length - 1].crore : 0;
+    if (Math.floor(approvedValue(M) / 1e7 + 1e-9) > top && S.msTried !== M.rev) {
+      S.msTried = M.rev;
+      try { const r = await A.rpc('milestone_sync'); if (r && r.added) { await reload(); return; } } catch (_) { /* tried again on the next refresh */ }
+    }
+    msPopup();
+  }
 
   /* ================= Dashboard ================= */
   /* Value at MRP, value at the price wanted, the discount that is, and the margin left after it.
@@ -460,6 +526,7 @@
     const head = `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>${tabs}`;
     if (S.dash.tab === 'stock') return head + dashStock(short, hasStock);
     return `${head}
+      ${msBanner()}
       ${tkDashCard()}
       <div class="tiles dtiles">${tiles}</div>
       ${qmOn() ? `<div id="qmcard" style="margin-top:12px">${qmDashHtml()}</div>` : ''}
@@ -3489,6 +3556,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     signout: async () => { clearInterval(poller); poller = null; await A.sb.auth.signOut().catch(() => {}); S.M = null; S.me = null; screenLogin(); },
     refresh: () => run(async () => {}),
     nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
+    msHide: (el) => { try { localStorage.setItem('allocdesk.mshide', el.dataset.v); } catch (_) { /* only a convenience */ } render(); },
     dashTab: (el) => { S.dash.tab = el.dataset.v === 'stock' ? 'stock' : 'overview'; try { localStorage.setItem('allocdesk.dashtab', S.dash.tab); } catch (_) { /* only a convenience */ } render(); },
     dashBy: (el) => { S.dash.by = el.dataset.v; S.dash.all = false; try { localStorage.setItem('allocdesk.dashby', S.dash.by); } catch (_) { /* only a convenience */ } render(); },
     dashAll: () => { S.dash.all = !S.dash.all; render(); },
