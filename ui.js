@@ -63,6 +63,7 @@
     approved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="m8 12.5 3 3 5-6"/></svg>',
     data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>',
     sales: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><rect x="5" y="11" width="3" height="7" rx="1"/><rect x="10.5" y="7" width="3" height="11" rx="1"/><rect x="16" y="4" width="3" height="14" rx="1"/></svg>',
+    search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
     label: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg>',
     queries: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.3 2.4c-.5.2-.8.6-.8 1.1v.5M12 16.2v.3"/></svg>',
     tasks: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 9 2 2 4-4"/><path d="M8 15h8"/></svg>',
@@ -323,13 +324,14 @@
       <aside class="side">
         <div class="brand">Allocation Desk</div><div class="brandsub">CORPORATE ORDERS</div>
         ${role ? `<div style="margin-bottom:10px">${role}</div>` : ''}
+        <input type="search" id="findord" placeholder="Find any order ..." aria-label="Find order" title="Order number (or part of it): every line of the order, whatever its status - also deleted lines">
         <input type="search" id="find" placeholder="Find any article ..." aria-label="Find article">
         <button class="btn sm labelbtn" data-act="label" title="Choose a photo of an article label (for example one a store sent on WhatsApp); the app reads the article code and shows its stock and orders">${ICON.label} Check a label</button>
         ${NAV.map(([k, t]) => `<button class="nav ${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${NAV_LONG[k] || t}${navBadge(k)}</button>`).join('')}
         <div class="foot">${stockLine(M)}<br>${inr(M.lines.length)} order lines<br>
           ${esc(S.me.name || S.me.email)} (${editor() ? 'editor' : 'viewer'})<br><span data-sync data-act="refresh" style="cursor:pointer">${esc(syncText())}</span></div>
       </aside>
-      <div class="topbar"><span class="brand">Allocation Desk</span>${role}<span class="grow"></span><button class="iconbtn" data-act="label" title="Check a label" aria-label="Check a label">${ICON.label}</button><span class="sync" data-sync data-act="refresh">${esc(syncText())}</span></div>
+      <div class="topbar"><span class="brand">Allocation Desk</span>${role}<span class="grow"></span><button class="iconbtn" data-act="orderFind" title="Find any order" aria-label="Find any order">${ICON.search}</button><button class="iconbtn" data-act="label" title="Check a label" aria-label="Check a label">${ICON.label}</button><span class="sync" data-sync data-act="refresh">${esc(syncText())}</span></div>
       <main data-keep="main">${views[S.view]()}</main>
       <nav class="tabs">${NAV.map(([k, t]) => `<button class="${S.view === k ? 'on' : ''}" data-act="nav" data-view="${k}">${ICON[k]}${t}${navBadge(k)}</button>`).join('')}</nav>
     </div>`;
@@ -410,6 +412,62 @@
       try { const r = await A.rpc('milestone_sync'); if (r && r.added) { await reload(); return; } } catch (_) { /* tried again on the next refresh */ }
     }
     msPopup();
+  }
+
+
+  /* ================= Find any order: every line of an order, whatever its status - deleted lines too ================= */
+  const OF_ORDER = ['PENDING', 'AWAITING', 'PARTIAL', 'APPROVED', 'DISPATCHED', 'REJECTED'];
+  function orderFindHtml(q, del) {
+    const M = S.M, Q = q.toUpperCase(), hit = (o) => String(o || '').toUpperCase().includes(Q);
+    const G = new Map(), grp = (o) => { let g = G.get(o); if (!g) { g = { o, lines: [], dels: [] }; G.set(o, g); } return g; };
+    for (const l of M.lines) if (hit(l.order_no) || (l.sap_appr && l.sap_appr.po && String(l.sap_appr.po).toUpperCase() === Q)) grp(l.order_no).lines.push(l);
+    for (const r of del || []) if (hit(r.order_no)) grp(r.order_no).dels.push(r);
+    const all = Array.from(G.values()).sort((a, b) => (String(b.o).toUpperCase() === Q) - (String(a.o).toUpperCase() === Q) || String(a.o).localeCompare(String(b.o), undefined, { numeric: true }));
+    if (!all.length) return `<div class="note info">No order with <b>${esc(q)}</b> in the tracker - it is not in any orders file loaded, and not among the deleted lines. Check the number, or load the latest SAP export.</div>`;
+    const list = all.slice(0, 25);
+    const card = (g) => {
+      const ls = g.lines.slice().sort((a, b) => (a.parent_id ? 1 : 0) - (b.parent_id ? 1 : 0) || String(a.article_code).localeCompare(String(b.article_code))), f = ls[0] || g.dels[0];
+      const st = M.stores[f.store_code] || {}, storeName = st.store_name || f.store_name || '';
+      const cnt = {}; ls.forEach((l) => { cnt[l.status] = (cnt[l.status] || 0) + 1; });
+      const chips = OF_ORDER.filter((k) => cnt[k]).map((k) => `${pill(k)} <b>${cnt[k]}</b>`).concat(g.dels.length ? [`<span class="pill CANCELLED">Deleted</span> <b>${g.dels.length}</b>`] : []).join(' &nbsp; ');
+      const live = ls.filter((l) => l.status !== 'REJECTED'), ordV = live.reduce((t, l) => t + l.req_qty * l.req_price, 0), apV = live.reduce((t, l) => t + (l.approved > 0 ? Number(l.value) || 0 : 0), 0);
+      const where = (l) => (NEEDS.includes(l.status) ? 'Pending orders' : l.status === 'REJECTED' ? 'Approved orders > Rejected' : l.status === 'DISPATCHED' ? 'Approved orders > Dispatched' : 'Approved orders');
+      const rows = ls.map((l) => `<tr><td class="w artcell"><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span>${l.parent_id ? '<div class="small">alternate given in place of the ordered article</div>' : ''}</td>
+          <td class="right" data-l="Qty wanted">${inr(l.req_qty)}</td><td class="right b" data-l="Approved">${l.approved ? inr(l.approved) : '<span class="muted">-</span>'}</td>
+          <td data-l="Status">${pill(l.status)}${noteOf(l) ? `<div class="small">${noteOf(l)}</div>` : ''}</td>
+          <td class="right ofwhere"><button class="btn sm" data-act="ofOpen" data-id="${l.id}" title="Open it in ${where(l)}">Open</button><div class="small muted">${where(l)}</div></td></tr>`).join('')
+        + g.dels.map((r) => `<tr class="ofdel"><td class="w artcell"><b>${esc(r.article_code)}</b> <span class="small">${esc(r.description || '')}</span></td><td class="right" data-l="Qty wanted">${inr(r.req_qty)}</td><td class="right" data-l="Approved"><span class="muted">-</span></td>
+          <td data-l="Status"><span class="pill CANCELLED">Deleted</span><div class="small">${when(r.deleted_at)}${r.deleted_by ? ' by ' + esc(r.deleted_by) : ''}</div></td>
+          <td class="right ofwhere">${editor() ? `<button class="btn sm" data-restore="${r.id}" title="Bring the line back, pending, nothing approved">Bring back</button>` : '<span class="small muted">Data > Deleted order lines</span>'}</td></tr>`).join('');
+      return `<div class="card stack ofcard"><div class="row wrap"><h2 class="grow">Order ${esc(g.o)}</h2><span class="small">${inr(ls.length + g.dels.length)} ${plural(ls.length + g.dels.length, 'line')}</span></div>
+        <div class="small"><b>${esc(f.store_code || '')}</b> ${esc(storeName)}${f.order_date ? ` &middot; booked ${esc(dmy(f.order_date, true))}` : ''}${f.del_date ? ` &middot; delivery ${esc(dmy(f.del_date, true))}` : ''}${f.poc_name ? ` &middot; ${esc(f.poc_name)}` : ''}</div>
+        <div class="ofchips">${chips}</div>
+        ${ls.length ? `<div class="small">Value ordered ${rupees(ordV)} &middot; approved ${rupees(apV)}</div>` : ''}
+        <div class="tablewrap"><table class="tight oftable resp"><thead><tr><th>Article</th><th class="right">Qty wanted</th><th class="right">Approved</th><th>Status</th><th class="right">Where</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    };
+    return `${all.length > 25 ? `<p class="small">${inr(all.length)} orders match; the first 25 are shown - type more of the number.</p>` : ''}${list.map(card).join('')}`;
+  }
+  let ofDel = null, ofDelRev = null;
+  async function orderFind(q0) {
+    const d = pop(`<div class="row"><h2 class="grow">Find any order</h2><button class="btn sm" data-act="closePop">Close</button></div>
+      <input type="search" id="ofq" placeholder="Order number, or part of it (or the SAP PO number)" value="${esc(q0 || '')}" aria-label="Order number" autocomplete="off">
+      <div id="ofres" class="ofres"></div>`, 'big ofpop');
+    const inp = $('#ofq', d), out = $('#ofres', d);
+    const show = async () => {
+      const q = inp.value.trim();
+      if (q.length < 3) { out.innerHTML = '<p class="small">Type at least 3 characters of the order number. Every line of the order is listed with its status - pending, approved, dispatched, rejected or deleted - and where to find it.</p>'; return; }
+      if (!ofDel || ofDelRev !== S.M.rev) { try { ofDel = await A.rpc('deleted_lines'); ofDelRev = S.M.rev; } catch (_) { ofDel = []; } }
+      if (inp.value.trim() === q) out.innerHTML = orderFindHtml(q, ofDel);
+    };
+    let t = null;
+    inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(show, 200); });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); clearTimeout(t); show(); } });
+    d.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-restore]'); if (!b) return;
+      b.disabled = true;
+      try { await A.rpc('restore_lines', { p_lines: [+b.dataset.restore] }); ofDel = null; await reload(); toast('Line brought back as it was (pending, nothing approved)'); show(); } catch (err) { b.disabled = false; await tell('Not done', err.message); }
+    });
+    inp.focus(); show();
   }
 
   /* ================= Dashboard ================= */
@@ -3556,6 +3614,20 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     signout: async () => { clearInterval(poller); poller = null; await A.sb.auth.signOut().catch(() => {}); S.M = null; S.me = null; screenLogin(); },
     refresh: () => run(async () => {}),
     nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
+    orderFind: () => orderFind(''),
+    ofOpen: (el) => {
+      const l = S.M.byId[+el.dataset.id]; if (!l) return;
+      $$('#modal .overlay').forEach((o) => o.close ? o.close() : o.remove());
+      if (NEEDS.includes(l.status)) {
+        S.view = 'orders'; Object.assign(S.o, { status: '', flag: '', q: l.order_no, buyer: '', store: '', mc: '', limit: 300, collapsed: false }); S.o.toggled.clear();
+      } else {
+        const seg = Object.keys(SEGS).find((k) => SEGS[k][1](l)) || 'todo';
+        S.view = 'approved'; Object.assign(S.a, { seg, q: l.order_no, flag: '', store: '', mc: '', buyer: '', limit: 300, collapsed: false }); S.a.toggled.clear();
+      }
+      S.o.sel = l.id; S.o.detail = null;
+      const f = $('#findord'); if (f) f.value = '';
+      render();
+    },
     msHide: (el) => { try { localStorage.setItem('allocdesk.mshide', el.dataset.v); } catch (_) { /* only a convenience */ } render(); },
     dashTab: (el) => { S.dash.tab = el.dataset.v === 'stock' ? 'stock' : 'overview'; try { localStorage.setItem('allocdesk.dashtab', S.dash.tab); } catch (_) { /* only a convenience */ } render(); },
     dashBy: (el) => { S.dash.by = el.dataset.v; S.dash.all = false; try { localStorage.setItem('allocdesk.dashby', S.dash.by); } catch (_) { /* only a convenience */ } render(); },
@@ -4124,6 +4196,7 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
     loadTeam();
   });
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.id === 'findord') { e.preventDefault(); orderFind(e.target.value.trim()); return; }
     if (e.key === 'Enter' && e.target.id === 'find' && e.target.value.trim()) {
       const q = e.target.value.trim(), code = C.code(q);
       S.c.q = q; S.c.cat = ''; S.c.scope = 'master'; S.view = 'catalogue';

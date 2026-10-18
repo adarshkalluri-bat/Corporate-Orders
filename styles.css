@@ -566,3 +566,16 @@ h3.mscap { color: #946600; }
 .msring b { font-size: 46px; color: var(--accent-deep); font-variant-numeric: tabular-nums; } .msring span { font-size: 11px; font-weight: 700; letter-spacing: .16em; color: #946600; margin-top: 3px; }
 .msstats { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; width: 100%; } .msstats .stat { text-align: left; }
 .msok { width: 100%; }
+/* ---------- Find any order (version 3.27) ---------- */
+.ofpop #ofq { margin: 10px 0 12px; }
+.ofres { display: flex; flex-direction: column; gap: 10px; }
+.ofcard { background: #FCFBFF; }
+.ofchips { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; font-size: 13px; }
+table.oftable td { vertical-align: top; } table.oftable td.w { min-width: 220px; }
+table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
+@media (max-width: 760px) {
+  .ofcard .tablewrap { border: 0; background: transparent; overflow: visible; }
+  table.oftable.resp td.ofwhere { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; }
+  table.oftable.resp td.w { min-width: 0; }
+}
+@media (max-width: 760px) { table.oftable.resp tr.ofdel { background: #FAF8FC; } table.oftable.resp tr.ofdel td { background: transparent; } }
