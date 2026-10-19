@@ -162,7 +162,7 @@
     const locOrder = String(snap.loc_order || DEFAULT_LOC_ORDER).split(',').filter((k) => LOC_NAME[k] && k !== 'oth');
     return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [], hasStoreStock: hasSS,
              oldestOffer: snap.oldest_offer, rev: snap.rev, counts: snap.counts || {}, schema: snap.schema || 1, lyDaily: snap.ly_daily || [], expected: snap.expected || [], tasks: snap.tasks || [], task_opts: snap.task_opts || [],
-             milestones: snap.milestones || [], msSeen: snap.ms_seen || 0 };
+             milestones: snap.milestones || [], msSeen: snap.ms_seen || 0, trev: snap.trev || 0 };
   }
 
   /* Two kinds of alternate: the same design (other colour or vendor), and a different

@@ -28,7 +28,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 31;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 32;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -259,9 +259,32 @@
   }
 
   /* ================= data in / refresh ================= */
+  /* Stock at the stores comes on its own (version 32) and is fetched again only when it can have changed:
+     a new store stock report, or orders from more stores or for more articles. */
+  const SSC = { key: null, data: {} };
+  async function storeStockFor(snap) {
+    if ((snap.schema || 1) < 32 || snap.store_stock) return;
+    const L = snap.lines || [], st = new Set(), ar = new Set();
+    for (const l of L) { st.add(l.store_code); ar.add(l.article_code); }
+    const key = [(snap.meta || {}).sstock_batch || 0, st.size, ar.size, (snap.articles || []).length].join('|');
+    if (key !== SSC.key) {
+      if (!(snap.meta || {}).sstock_batch) { SSC.data = {}; SSC.key = key; }
+      else { SSC.data = await A.rpc('store_stock_map'); SSC.key = key; }
+    }
+    snap.store_stock = SSC.data;
+  }
+  /* Tasks only (a teammate answered one): no need to load all the order data again */
+  async function tasksRefresh() {
+    const d = await A.rpc('tasks_data');
+    if (!S.M) return;
+    S.M.tasks = d.tasks || []; S.M.task_opts = d.task_opts || S.M.task_opts; S.M.trev = d.trev || 0;
+    S.lastSync = new Date();
+    render();
+  }
   async function reload() {
     const snap = await A.rpc('snapshot');
     if ((snap.schema || 1) < NEED_SCHEMA) { const e = new Error('The database needs the newer setup script.'); e.oldDb = true; throw e; }
+    await storeStockFor(snap);
     if (snap.me) S.me = snap.me;
     S.M = C.build(snap); S.lastSync = new Date(); S.stale = false; S.online = true;
     if (S.o.sel && !S.M.byId[S.o.sel]) S.o.sel = null;
@@ -277,12 +300,18 @@
     const check = async () => {
       if (document.hidden || S.busy || !S.M) return;
       try {
-        const rev = await A.rpc('rev');
+        const two = S.M.schema >= 32, r = two ? await A.rpc('rev2') : { rev: await A.rpc('rev'), trev: 0 };
         S.online = true;
-        if (rev !== S.M.rev) {
-          const el = document.activeElement;
-          const typing = el && /INPUT|TEXTAREA|SELECT/.test(el.tagName) && el.id !== 'oq' && el.id !== 'cq';
-          if (typing || $('#modal').children.length) { S.stale = true; syncLabel(); } else await reload();
+        const el = document.activeElement;
+        const typing = el && /INPUT|TEXTAREA|SELECT/.test(el.tagName) && el.id !== 'oq' && el.id !== 'cq';
+        if (+r.rev !== +S.M.rev) {
+          if (typing || $('#modal').children.length) { S.stale = true; syncLabel(); }
+          else {
+            await new Promise((res) => setTimeout(res, Math.random() * 2500));   // the team's screens do not all ask at the same moment
+            if (!S.busy) await reload();
+          }
+        } else if (two && +r.trev !== +S.M.trev) {
+          if (typing || $('#modal').children.length) syncLabel(); else await tasksRefresh();
         } else syncLabel();
       } catch (e) { S.online = false; syncLabel(); }
     };
@@ -1448,7 +1477,7 @@
       await A.rpc('task_respond', { p_task: id, p_lines: lines, p_remarks: d.remarks, p_done: !!doneFlag });
       delete S.tk.draft[id];
       toast(doneFlag ? `Task for ${t.store_code} marked done` : 'Saved');
-      await reload();
+      if (S.M.schema >= 32) await tasksRefresh(); else await reload();
     } catch (e) { await tell('Not saved', e.message); } finally { S.busy = false; }
   }
   function exportTasks() {
