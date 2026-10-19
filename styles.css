@@ -481,7 +481,7 @@ table.shtable.fitcols th { hyphens: manual; overflow-wrap: normal; }
 .qmtile b { font-size: 20px; } .qmtile span { font-size: 12px; color: var(--muted); } .qmtile.good b { color: #0F7A55; } .qmtile.bad b { color: #C7366A; } .qmtile.warn b { color: #946600; }
 /* Queries list: every column in view; long text wraps inside its own column */
 table.qtable.fitcols col.c-qlog { width: 84px; } table.qtable.fitcols col.c-qstore { width: 14%; } table.qtable.fitcols col.c-qprice { width: 100px; }
-table.qtable.fitcols col.c-qty { width: 58px; } table.qtable.fitcols col.c-val { width: 92px; } table.qtable.fitcols col.c-qm { width: 18%; } table.qtable.fitcols col.c-qrem { width: 11%; } table.qtable.fitcols col.c-qact { width: 46px; }
+table.qtable.fitcols col.c-qty { width: 58px; } table.qtable.fitcols col.c-val { width: 92px; } table.qtable.fitcols col.c-qm { width: 18%; } table.qtable.fitcols col.c-qrem { width: 11%; } table.qtable.fitcols col.c-qact { width: 84px; }
 table.qtable.fitcols td { white-space: normal; overflow-wrap: anywhere; } table.qtable.fitcols td.right { white-space: nowrap; overflow-wrap: normal; } table.qtable td.artcell { overflow-wrap: break-word; }
 table.qtable td.qmtd { overflow: hidden; } .qmcell { white-space: normal; overflow-wrap: anywhere; width: 100%; max-width: 100%; box-sizing: border-box; }
 .qmcell b, .qmcell span, .qmcell i { display: block; max-width: 100%; }
@@ -598,3 +598,18 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
 .pporders { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
 .ppo { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line, #e4e0f0); border-radius: 8px; flex-wrap: wrap; }
 .ppo .grow { min-width: 0; }
+
+/* v3.31 calls on a task, correcting a query */
+.tkcalls { background: #F7F4FF; border-radius: 10px; padding: 8px 10px; }
+.tkcalls details summary { cursor: pointer; margin-top: 4px; }
+.tkcalls .row { gap: 8px; }
+.tkcall { display: inline; }
+.tkcalls .stack .tkcall { display: block; padding: 2px 0; }
+@media (min-width: 1000px) { .grid2.tkopts3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.qerows { display: flex; flex-direction: column; gap: 8px; max-height: 46vh; overflow: auto; }
+.qerow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 8px; border: 1px solid var(--line, #e4e0f0); border-radius: 10px; }
+.qerow input { width: 100%; min-width: 0; }
+.qerow .qex { display: flex; align-items: center; gap: 6px; font-size: 13px; padding-top: 22px; white-space: nowrap; }
+.qerow .qex input { width: auto; }
+@media (max-width: 600px) { .qerow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .qerow > label.f:first-child { grid-column: 1 / -1; } .qerow .qex { padding-top: 0; } }
+.qact { white-space: nowrap; }

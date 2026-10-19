@@ -28,7 +28,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 33;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 34;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1558,7 +1558,19 @@ Household Category Team`;
   const taskPill = (t) => { const [txt, cls] = TASK_STATE[taskState(t)]; return `<span class="pill ${cls}">${txt}</span>`; };
   const taskLate = (t) => t.status === 'OPEN' && t.due && t.due < C.today();
   const mineTask = (t) => S.me && t.assignee === S.me.user_id;
-  const canAnswer = (t) => t.status === 'OPEN' && (mineTask(t) || editor());
+  /* the teammate (or the editor) answers an open task, and can still correct the answers after "Mark done" until the lines are decided (version 34) */
+  const callsOn = () => !!S.M && S.M.schema >= 34;
+  const canAnswer = (t) => (t.status === 'OPEN' || (callsOn() && t.status === 'DONE' && taskState(t) === 'done')) && (mineTask(t) || editor());
+  const tkCalls = (t) => (callsOn() && t.calls) || [];
+  /* the call-back the store asked for on the latest call, while the task is open */
+  const tkCallback = (t) => { const c = tkCalls(t)[0]; return t.status === 'OPEN' && c && c.callback_at ? new Date(c.callback_at) : null; };
+  const hm = (d) => { const x = new Date(d), today = new Date(); const t = x.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+    return x.toDateString() === today.toDateString() ? 'today ' + t : x.toDateString() === new Date(Date.now() + 864e5).toDateString() ? 'tomorrow ' + t : when(x.toISOString()) ; };
+  function tkCbBadge(t) {
+    const cb = tkCallback(t); if (!cb) return '';
+    const late = cb < new Date();
+    return `<span class="badge ${late ? 'bad' : 'warn'}" title="The store asked to be called back">${late ? 'Call back overdue' : 'Call back'} ${esc(hm(cb))}</span>`;
+  }
   const myOpenTasks = () => (taskOn() ? (S.M.tasks || []).filter((t) => mineTask(t) && t.status === 'OPEN') : []);
   const taskChip = (l) => { const t = taskOfLine(l.id); if (!t) return '';
     const st = taskState(t); return `<span class="badge task ${st}" title="${esc(`${t.reason}${t.note ? ' - ' + t.note : ''} (assigned to ${t.assignee_name})`)}">Task: ${esc(t.assignee_name)} &middot; ${st === 'open' ? (taskLate(t) ? 'overdue' : 'open') : st === 'done' ? 'done' : 'closed'}</span>`; };
@@ -1616,7 +1628,8 @@ Household Category Team`;
       if (!words.length) return true;
       const s = S.M.stores[t.store_code] || {}, txt = [t.store_code, s.store_name, s.state, t.reason, t.note, t.assignee_name, t.remarks].concat(taskLines(t).map((r) => r.l.order_no + ' ' + r.l.article_code + ' ' + (r.l.description || ''))).join(' ').toLowerCase();
       return words.every((w) => txt.includes(w));
-    }).sort((a, b) => (taskLate(b) - taskLate(a)) || String(a.due || '9').localeCompare(String(b.due || '9')) || b.id - a.id);
+    }).sort((a, b) => { const ca = tkCallback(a), cb = tkCallback(b);
+      return (!!cb - !!ca) || (ca && cb ? ca - cb : 0) || (taskLate(b) - taskLate(a)) || String(a.due || '9').localeCompare(String(b.due || '9')) || b.id - a.id; });
   }
   /* the tasks of one store under one heading; click the heading to open or close it */
   function tkGroupsHtml(list) {
@@ -1632,7 +1645,7 @@ Household Category Team`;
             <span class="chev">${open ? '&#9662;' : '&#9656;'}</span><h2 style="margin:0">${esc(sc)} <span class="sname">${esc(s.store_name || '')}</span></h2>
             <span class="small muted">${esc(s.state || '')}${s.lead_time != null ? ` &middot; lead time ${s.lead_time} ${plural(s.lead_time, 'day')}` : ''}</span><span class="grow"></span>
             <span class="small">${ts.map((t) => `${esc(t.reason)} &middot; <b>${esc(t.assignee_name)}</b>${t.due ? ` &middot; <span class="${taskLate(t) ? 'bad b' : ''}">due ${when(t.due)}</span>` : ''}`).join('<br>')}</span>
-            <span class="small">${inr(lines)} ${plural(lines, 'line')}</span>${ts.map(taskPill).join(' ')}${late ? '<span class="pill REJECTED">Overdue</span>' : ''}</div>
+            <span class="small">${inr(lines)} ${plural(lines, 'line')}</span>${ts.map(tkCbBadge).join(' ')}${ts.map(taskPill).join(' ')}${late ? '<span class="pill REJECTED">Overdue</span>' : ''}</div>
           ${open ? ts.map(tkCardHtml).join('<hr class="tksep">') : ''}</div>`;
       }).join('');
   }
@@ -1651,12 +1664,37 @@ Household Category Team`;
     return `<div class="stack tkcard ${S.tk.focus === t.id ? 'focus' : ''}" id="task-${t.id}">
       <div class="row wrap tkmeta">${taskPill(t)}<span class="tkreason">${esc(t.reason)}</span><span>Assigned to <b>${esc(t.assignee_name)}</b></span><span class="small muted">by ${esc(t.created_by || '')}, ${when(t.created_at)}</span>${t.due ? `<span class="${taskLate(t) ? 'bad b' : ''}">Due ${when(t.due)}${taskLate(t) ? ' (overdue)' : ''}</span>` : ''}</div>
       ${t.note ? `<div class="note info"><b>Instruction:</b> ${esc(t.note)}</div>` : ''}
+      ${tkCallsHtml(t)}
       ${phones.length ? `<div class="small">Call: ${phones.map(([ph, who]) => `<a href="tel:${esc(ph.replace(/\D/g, ''))}">${esc(ph)}</a>${who ? ' (' + esc(who) + ')' : ''}`).join(' &middot; ')}${s.email ? ` &middot; <a href="mailto:${esc(s.email)}">${esc(s.email)}</a>` : ''}</div>` : ''}
       <div class="tablewrap fitwrap"><table class="tight tktable resp fitcols"><colgroup><col class="c-ord"><col><col class="c-mrp"><col class="c-n"><col class="c-n"><col class="c-now"><col class="c-resp"></colgroup><thead><tr><th>Order</th><th>Article</th><th class="right">MRP</th><th class="right">Qty<br>wanted</th><th class="right">Price<br>wanted</th><th>Now</th><th>Store's response <span class="thsub">and remarks (optional)</span></th></tr></thead><tbody>${rows.map(lineRow).join('')}</tbody></table></div>
       ${ans ? `<label class="f">Remarks for the editor<textarea class="tkall" data-task="${t.id}" rows="2" maxlength="1000" placeholder="What the store said, who you spoke to ...">${esc(d.remarks)}</textarea></label>
-        <div class="row wrap"><button class="btn" data-act="tkSave" data-id="${t.id}">Save</button><button class="btn primary" data-act="tkDone" data-id="${t.id}">Mark done</button><span class="grow"></span>${ed ? tkEdBtns(t) : ''}</div>`
+        ${t.status === 'OPEN' ? `<div class="row wrap"><button class="btn" data-act="tkSave" data-id="${t.id}">Save</button>${callsOn() ? `<button class="btn" data-act="tkCall" data-id="${t.id}" title="The store did not pick up, asked to call back ...: the task stays open">Log a call ...</button>` : ''}<button class="btn primary" data-act="tkDone" data-id="${t.id}">Mark done</button><span class="grow"></span>${ed ? tkEdBtns(t) : ''}</div>`
+          : `${t.done_by ? `<div class="small muted">Done by ${esc(t.done_by)}, ${when(t.done_at)}. The answers and remarks can still be changed until the lines are approved or rejected.</div>` : ''}
+        <div class="row wrap"><button class="btn" data-act="tkSave" data-id="${t.id}">Save changes</button>${ed ? `<button class="btn primary" data-act="tkToOrders" data-store="${esc(t.store_code)}">Approve / reject in Pending orders</button>` : ''}<span class="grow"></span>${ed ? tkEdBtns(t) : ''}</div>`}`
         : `${t.remarks ? `<div><b>Remarks:</b> ${esc(t.remarks)}</div>` : ''}${t.done_by ? `<div class="small muted">Done by ${esc(t.done_by)}, ${when(t.done_at)}</div>` : ''}
         <div class="row wrap">${ed ? `<button class="btn primary" data-act="tkToOrders" data-store="${esc(t.store_code)}">Approve / reject in Pending orders</button><span class="grow"></span>${tkEdBtns(t)}` : ''}</div>`}</div>`;
+  }
+  function tkCallsHtml(t) {
+    const cs = tkCalls(t); if (!cs.length) return '';
+    const one = (c) => `<span class="tkcall"><b>${esc(c.outcome)}</b> &middot; ${when(c.at)}${c.by_name ? ' ' + esc(c.by_name) : ''}${c.note ? ` &middot; ${esc(c.note)}` : ''}${c.callback_at ? ` &middot; call back ${esc(hm(c.callback_at))}` : ''}</span>`;
+    return `<div class="tkcalls"><div class="row wrap"><span class="small"><b>${cs.length === 1 ? '1 call' : cs.length + ' calls'}</b> &middot; last: ${one(cs[0])}</span>${tkCbBadge(t)}</div>
+      ${cs.length > 1 ? `<details><summary class="small">All calls</summary><div class="stack small">${cs.map(one).join('')}</div></details>` : ''}</div>`;
+  }
+  async function tkCall(id) {
+    const t = (S.M.tasks || []).find((x) => x.id === id); if (!t) return;
+    const outs = taskOpts('call'), now = new Date();
+    const v = await ask(`Call to ${t.store_code} ${(S.M.stores[t.store_code] || {}).store_name || ''}`, `<p class="small">The task stays open. The call is kept with the task and in the history of its lines.</p>
+      <div class="formgrid"><label class="f">What happened<select name="outcome" required>${outs.map((o) => `<option>${esc(o.label)}</option>`).join('')}</select></label>
+        <label class="f">Call back at (if the store asked)<input type="datetime-local" name="cb" min="${localInput(now)}"></label></div>
+      <label class="f">Note (optional)<input type="text" name="note" maxlength="500" placeholder="e.g. SM in a meeting, asked to call after 4"></label>`, 'Save the call');
+    if (!v) return;
+    if (!v.outcome) return tell('Log a call', 'Choose what happened on the call.');
+    S.busy = true;
+    try {
+      await A.rpc('task_call', { p_task: id, p_outcome: v.outcome, p_note: v.note, p_callback: v.cb ? new Date(v.cb).toISOString() : '' });
+      toast('Call saved - the task stays open');
+      await tasksRefresh();
+    } catch (e) { await tell('Not saved', e.message); } finally { S.busy = false; }
   }
   const tkEdBtns = (t) => `${t.status === 'OPEN' ? `<button class="btn sm" data-act="tkReassign" data-id="${t.id}">Change ...</button>` : `<button class="btn sm" data-act="tkReopen" data-id="${t.id}">Reopen</button>`}<button class="btn sm danger" data-act="tkCancel" data-id="${t.id}">Cancel task</button>`;
   function tkManageHtml() {
@@ -1664,7 +1702,7 @@ Household Category Team`;
     const col = (k, h) => `<div class="stack"><h3 style="margin:0">${h}</h3>${taskOpts(k).map(row).join('')}<div class="row tkopt"><input type="text" id="tknew-${k}" maxlength="120" placeholder="Add a new one ..."><button class="btn sm" data-act="tkOptAdd" data-kind="${k}">Add</button></div></div>`;
     return `<div class="card stack"><div class="row"><h2 class="grow" style="margin:0">Reasons and responses</h2><button class="btn sm" data-act="tkManage">Close</button></div>
       <p class="small">Change the text and click outside the box to save it. Removing one takes it out of the lists; tasks that already use it keep their text.</p>
-      <div class="grid2">${col('reason', 'Reasons for a task')}${col('response', "The store's response")}</div></div>`;
+      <div class="grid2 tkopts3">${col('reason', 'Reasons for a task')}${col('response', "The store's response")}${callsOn() ? col('call', 'What happened on a call') : ''}</div></div>`;
   }
   function vTasks() {
     const head = `<div class="head"><h1>Tasks</h1><span class="sub">Stores to call: ${editor() ? 'you assign them' : 'the editor assigns them'}; the teammate writes what the store said</span></div>`;
@@ -1690,7 +1728,7 @@ Household Category Team`;
     if (!mine.length && !(editor() && (openAll.length || done.length))) return '';
     const item = (t) => { const s = S.M.stores[t.store_code] || {}, n = taskLines(t).length;
       return `<tr class="pick" data-act="taskGo" data-id="${t.id}"><td><b>${esc(t.store_code)}</b> <span class="small">${esc(s.store_name || '')}</span></td><td>${esc(t.reason)}${t.note ? `<div class="small muted">${esc(t.note)}</div>` : ''}</td>
-        <td class="right">${n}</td><td class="${taskLate(t) ? 'bad b' : ''}">${t.due ? when(t.due) : '-'}</td>${editor() ? `<td>${esc(t.assignee_name)}</td>` : ''}</tr>`; };
+        <td class="right">${n}</td><td class="${taskLate(t) ? 'bad b' : ''}">${t.due ? when(t.due) : '-'}${tkCallback(t) ? `<div>${tkCbBadge(t)}</div>` : ''}</td>${editor() ? `<td>${esc(t.assignee_name)}</td>` : ''}</tr>`; };
     const byPerson = Array.from(openAll.reduce((m, t) => m.set(t.assignee_name, (m.get(t.assignee_name) || 0) + 1), new Map()).entries());
     return `<div class="card stack tkdash"><div class="row wrap"><h2 class="grow">${mine.length ? `My tasks: ${mine.length} ${plural(mine.length, 'store')} to call` : 'Tasks'}</h2><button class="btn sm" data-act="nav" data-view="tasks">Open Tasks</button></div>
       ${editor() ? `<div class="row wrap expsum"><span><b>${inr(openAll.length)}</b> open${byPerson.length ? ' (' + byPerson.map(([n, c]) => `${esc(n)} ${c}`).join(', ') + ')' : ''}</span><span class="${done.length ? 'good' : ''}"><b>${inr(done.length)}</b> done, waiting for your decision</span>${openAll.filter(taskLate).length ? `<span class="bad"><b>${openAll.filter(taskLate).length}</b> overdue</span>` : ''}</div>` : ''}
@@ -1707,7 +1745,7 @@ Household Category Team`;
     try {
       await A.rpc('task_respond', { p_task: id, p_lines: lines, p_remarks: d.remarks, p_done: !!doneFlag });
       delete S.tk.draft[id];
-      toast(doneFlag ? `Task for ${t.store_code} marked done` : 'Saved');
+      toast(doneFlag ? `Task for ${t.store_code} marked done` : t.status === 'DONE' ? 'Changes saved - kept in the line history' : 'Saved');
       if (S.M.schema >= 32) await tasksRefresh(); else await reload();
     } catch (e) { await tell('Not saved', e.message); } finally { S.busy = false; }
   }
@@ -1715,9 +1753,10 @@ Household Category Team`;
     const list = tkList();
     if (!list.length) return tell('Export', 'There is no task here to export.');
     return excelFile('Tasks', false, (sheet) => {
-      sheet('Tasks', ['Task No', 'Status', 'Store Code', 'Store Name', 'Reason', 'Instruction', 'Assigned To', 'Assigned By', 'Assigned On', 'Due', 'Order No', 'Article Code', 'Description', 'MRP', 'Qty Wanted', 'Price Wanted', 'Line Status', "Store's Response", 'Line Remarks', 'Task Remarks', 'Done By', 'Done On'],
+      sheet('Tasks', ['Task No', 'Status', 'Store Code', 'Store Name', 'Reason', 'Instruction', 'Assigned To', 'Assigned By', 'Assigned On', 'Due', 'Order No', 'Article Code', 'Description', 'MRP', 'Qty Wanted', 'Price Wanted', 'Line Status', "Store's Response", 'Line Remarks', 'Task Remarks', 'Done By', 'Done On', 'Calls', 'Last Call', 'Call Back At'],
         list.flatMap((t) => taskLines(t).map((r) => [t.id, TASK_STATE[taskState(t)][0], t.store_code, (S.M.stores[t.store_code] || {}).store_name || '', t.reason, t.note || '', t.assignee_name, t.created_by || '', when(t.created_at), t.due || '',
-          r.l.order_no, r.l.article_code, r.l.description || '', +r.l.mrp, r.l.req_qty, +r.l.req_price, C.STATUS_LABEL[r.l.status], r.x.response || '', r.x.remarks || '', t.remarks || '', t.done_by || '', t.done_at ? when(t.done_at) : ''])));
+          r.l.order_no, r.l.article_code, r.l.description || '', +r.l.mrp, r.l.req_qty, +r.l.req_price, C.STATUS_LABEL[r.l.status], r.x.response || '', r.x.remarks || '', t.remarks || '', t.done_by || '', t.done_at ? when(t.done_at) : '',
+          tkCalls(t).length, tkCalls(t)[0] ? `${tkCalls(t)[0].outcome}, ${when(tkCalls(t)[0].at)} ${tkCalls(t)[0].by_name || ''}${tkCalls(t)[0].note ? ' - ' + tkCalls(t)[0].note : ''}` : '', tkCallback(t) ? when(tkCallback(t).toISOString()) : ''])));
       return `Exported ${inr(list.length)} ${plural(list.length, 'task')}`;
     });
   }
@@ -1909,6 +1948,41 @@ Household Category Team`;
     const f = Q.mstat && QM_FILTERS[Q.mstat] && qmAll() ? QM_FILTERS[Q.mstat][1] : null;
     return (Q.list || []).filter((r) => (!words.length || words.every((w) => [r.store_code, r.store_name, r.state, r.article_code, r.description, r.mc_name, r.by_name, r.remarks].join(' ').toLowerCase().includes(w))) && (!f || f(qmOf(r))));
   }
+  const qEditOn = () => !!S.M && S.M.schema >= 34;
+  const qEdited = (r) => (r && r.edited_at ? `<div class="small muted" title="${esc('Corrected ' + when(r.edited_at))}">corrected by ${esc(r.edited_by || '')}</div>` : '');
+  /* correct a query: store, remarks, each article's price and quantity; remove a wrong article or add a missed one */
+  async function qEdit(id) {
+    const r0 = (S.qy.list || []).find((x) => String(x.id) === String(id)); if (!r0) return;
+    const rows = r0.grp ? S.qy.list.filter((x) => x.grp === r0.grp).sort((a, b) => a.id - b.id) : [r0];
+    const line = (r, i) => `<div class="qerow"><label class="f">Article${r ? '' : ' (new)'}<input type="text" name="a${i}" value="${esc(r ? r.article_code : '')}" placeholder="${r ? '' : 'Article code'}">${r ? `<span class="small">${esc(r.description || '')}</span>` : ''}</label>
+      <label class="f">Final price (Rs)<input type="number" name="p${i}" step="0.01" min="0" value="${r ? Number(r.price) : ''}"></label>
+      <label class="f">Qty<input type="number" name="q${i}" step="1" min="0" value="${r ? r.qty : ''}"></label>
+      ${r ? `<label class="qex"><input type="checkbox" name="x${i}"> Remove</label>` : '<span></span>'}</div>`;
+    const extra = 2;
+    const v = await ask('Correct the query', `<div class="stack">
+      <p class="small">Logged by ${esc(r0.by_name || '')} on ${when(r0.created_at)}. The discount and the order value are worked out again; the correction is kept in the history.</p>
+      <div class="formgrid"><label class="f">Store code<input type="text" name="store" value="${esc(r0.store_code)}" required></label></div>
+      <div class="qerows">${rows.map((r, i) => line(r, i)).join('')}${Array.from({ length: extra }, (_, k) => line(null, rows.length + k)).join('')}</div>
+      <p class="small">To add an article that was missed, fill in one of the empty rows.</p>
+      <label class="f">Remarks<input type="text" name="remarks" maxlength="500" value="${esc(r0.remarks || '')}"></label></div>`, 'Save the correction', { cls: 'wide', noFocus: true });
+    if (!v) return;
+    const out = [];
+    for (let i = 0; i < rows.length + extra; i++) {
+      const old = rows[i], art = String(v['a' + i] || '').trim();
+      if (old) { out.push(v['x' + i] ? { id: old.id, remove: true } : { id: old.id, article: art, price: v['p' + i], qty: v['q' + i] }); continue; }
+      if (!art && !v['p' + i] && !v['q' + i]) continue;
+      if (!art) return tell('Correct the query', 'Type the article code of the new row, or leave the row empty.');
+      out.push({ article: art, price: v['p' + i], qty: v['q' + i] });
+    }
+    if (!out.some((x) => !x.remove)) return tell('Correct the query', 'The query needs at least one article. To remove the whole query, use the cross instead.');
+    S.busy = true;
+    try {
+      const res = await A.rpc('query_update', { p: { id: r0.id, store: v.store, remarks: v.remarks, rows: out } });
+      S.qy.last = res.grp || res.id;
+      await qLoad(true);
+      toast('Query corrected');
+    } catch (e) { await tell('Not saved', e.message); } finally { S.busy = false; }
+  }
   function qListHtml() {
     const Q = S.qy, ed = editor();
     if (!Q.list) return `<div class="empty card">${Q.err ? esc(Q.err) : 'Loading the queries ...'}</div>`;
@@ -1916,20 +1990,20 @@ Household Category Team`;
     if (!rows.length) return `<div class="empty card">${Q.list.length ? 'No query matches the search.' : 'No query logged yet.'}</div>`;
     const tv = rows.reduce((t, r) => t + Number(r.value || 0), 0), tq = rows.reduce((t, r) => t + (r.qty || 0), 0);
     const shown = rows.slice(0, 500), seen = new Set(), html = [];
-    const one = (r, child) => `<tr class="${r.id === Q.last || (r.grp && r.grp === Q.last) ? 'new' : ''} ${child ? 'qchild' : ''}"><td class="qlog ${child ? 'qsub' : ''}">${child ? '<span class="muted">&#8627;</span>' : `${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div>`}</td>
+    const one = (r, child) => `<tr class="${r.id === Q.last || (r.grp && r.grp === Q.last) ? 'new' : ''} ${child ? 'qchild' : ''}"><td class="qlog ${child ? 'qsub' : ''}">${child ? '<span class="muted">&#8627;</span>' : `${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div>${qEdited(r)}`}</td>
         <td class="qstore ${child ? 'qsub' : ''}">${child ? '' : `<b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div>`}</td>
         <td class="artcell"><b class="nowrap">${esc(r.article_code)}</b><div class="small">${esc(r.description || '')}</div><div class="small muted">${esc(r.mc_name || '')}</div></td>
         <td class="right qprice" data-l="Final price"><b>${inr2(Number(r.price))}</b><div class="small">${r.discount == null ? '' : (Number(r.discount) * 100).toFixed(2) + '% off'}</div><div class="small muted">MRP ${r.mrp == null ? '-' : inr2(Number(r.mrp))}</div></td><td class="right b" data-l="Qty">${inr(r.qty)}</td><td class="right b" data-l="Order value">${inr2(Number(r.value))}</td>
-        ${qmOn() ? `<td class="qmtd">${qmCell(qmOf(r), r.id)}</td>` : ''}<td class="small qrem ${child || !r.remarks ? 'qsub' : ''}" data-l="Remarks">${child ? '' : esc(r.remarks || '')}</td><td class="qact">${!child && (r.mine || ed) ? `<button class="btn sm ghost qdel" data-act="qDel" data-id="${r.id}" title="Remove this query" aria-label="Remove this query">&#10005;</button>` : ''}</td></tr>`;
+        ${qmOn() ? `<td class="qmtd">${qmCell(qmOf(r), r.id)}</td>` : ''}<td class="small qrem ${child || !r.remarks ? 'qsub' : ''}" data-l="Remarks">${child ? '' : esc(r.remarks || '')}</td><td class="qact">${!child && (r.mine || ed) ? `${qEditOn() ? `<button class="btn sm ghost qdel" data-act="qEdit" data-id="${r.id}" title="Correct this query" aria-label="Correct this query">&#9998;</button>` : ''}<button class="btn sm ghost qdel" data-act="qDel" data-id="${r.id}" title="Remove this query" aria-label="Remove this query">&#10005;</button>` : ''}</td></tr>`;
     for (const r of shown) {
       if (r.grp == null) { html.push(one(r)); continue; }
       if (seen.has(r.grp)) continue;
       seen.add(r.grp);
       const g = rows.filter((x) => x.grp === r.grp), val = g.reduce((t, x) => t + Number(x.value || 0), 0), q = g.reduce((t, x) => t + (x.qty || 0), 0), atMrp = g.reduce((t, x) => t + (x.mrp == null ? Number(x.price) : Number(x.mrp)) * x.qty, 0);
-      html.push(`<tr class="qgrp ${r.grp === Q.last ? 'new' : ''}"><td class="qlog">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div></td>
+      html.push(`<tr class="qgrp ${r.grp === Q.last ? 'new' : ''}"><td class="qlog">${when(r.created_at)}<div class="small">${esc(r.by_name || '')}</div>${qEdited(g.slice().sort((a, b) => String(b.edited_at || '').localeCompare(String(a.edited_at || '')))[0])}</td>
         <td class="qstore"><b>${esc(r.store_code)}</b> <span class="small">${esc(r.store_name || '')}</span><div class="small">${esc(r.state || '')}${r.lead_time != null ? ` &middot; lead time ${r.lead_time} ${plural(r.lead_time, 'day')}` : ''}</div></td>
         <td class="artcell"><b>Query of ${g.length} articles</b><div class="small muted">${esc(Array.from(new Set(g.map((x) => x.mc_name).filter(Boolean))).join(', '))}</div></td><td class="right qprice" data-l="Discount"><div class="small">${atMrp ? (Math.max(0, 1 - val / atMrp) * 100).toFixed(2) + '% off' : ''}</div><div class="small muted">overall</div></td><td class="right b" data-l="Qty">${inr(q)}</td><td class="right b" data-l="Order value">${inr2(val)}</td>
-        ${qmOn() ? `<td class="small qmtd">${(() => { const ms = g.map(qmOf).filter((x) => x && x.state !== 'replaced'), n = ms.filter((x) => x.state === 'received').length; return `<b>${n} of ${ms.length} received</b>`; })()}</td>` : ''}<td class="small qrem ${r.remarks ? '' : 'qsub'}" data-l="Remarks">${esc(r.remarks || '')}</td><td class="qact">${r.mine || ed ? `<button class="btn sm ghost qdel" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)" aria-label="Remove this query">&#10005;</button>` : ''}</td></tr>`);
+        ${qmOn() ? `<td class="small qmtd">${(() => { const ms = g.map(qmOf).filter((x) => x && x.state !== 'replaced'), n = ms.filter((x) => x.state === 'received').length; return `<b>${n} of ${ms.length} received</b>`; })()}</td>` : ''}<td class="small qrem ${r.remarks ? '' : 'qsub'}" data-l="Remarks">${esc(r.remarks || '')}</td><td class="qact">${r.mine || ed ? `${qEditOn() ? `<button class="btn sm ghost qdel" data-act="qEdit" data-id="${r.id}" title="Correct this query" aria-label="Correct this query">&#9998;</button>` : ''}<button class="btn sm ghost qdel" data-act="qDel" data-id="${r.id}" title="Remove this query (all its articles)" aria-label="Remove this query">&#10005;</button>` : ''}</td></tr>`);
       g.forEach((x) => html.push(one(x, true)));
     }
     const nq = (L) => L.filter((x) => x.grp == null).length + new Set(L.filter((x) => x.grp != null).map((x) => x.grp)).size;
@@ -4021,6 +4095,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     tkOptAdd: (el) => { const i = document.getElementById('tknew-' + el.dataset.kind); const v = i ? i.value.trim() : ''; if (!v) return; run(() => A.rpc('task_opt_save', { p: { kind: el.dataset.kind, label: v } }), 'Added'); },
     tkOptDel: (el) => run(() => A.rpc('task_opt_save', { p: { id: +el.dataset.id, active: false } }), 'Removed from the list'),
     tkSave: (el) => tkSend(+el.dataset.id, false),
+    tkCall: (el) => tkCall(+el.dataset.id),
     tkDone: (el) => tkSend(+el.dataset.id, true),
     tkToOrders: (el) => { Object.assign(S.o, { seg: 'list', status: '', flag: '', q: el.dataset.store, buyer: '', store: '', mc: '', sel: null, limit: 300 }); S.view = 'orders'; render(); window.scrollTo(0, 0); },
     tkReopen: (el) => run(() => A.rpc('task_edit', { p_task: +el.dataset.id, p: { status: 'OPEN' } }), 'Task reopened'),
@@ -4061,6 +4136,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     dealToQueries: (el, e) => { if (e) e.preventDefault(); $$('.overlay').forEach((o) => { try { o.close(); } catch (_) { /* already shut */ } }); S.view = 'queries'; render(); window.scrollTo(0, 0); },
     qExport: () => exportQueries(),
     qClear: () => { S.qy.form = QBLANK(); render(); const i = $('#qf-store'); if (i) i.focus(); },
+    qEdit: (el) => qEdit(el.dataset.id),
     qDel: async (el) => {
       const r = (S.qy.list || []).find((x) => String(x.id) === el.dataset.id); if (!r) return;
       const nGrp = r.grp ? S.qy.list.filter((x) => x.grp === r.grp).length : 0;
