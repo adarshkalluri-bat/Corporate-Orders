@@ -581,7 +581,7 @@
       <p class="small">Values in rupees, rejected lines left out. "Ordered" and "Still pending" use the price the store asked; "Approved so far" uses the price approved. Margin without discount = the same pieces at MRP. Margin = (price without GST - cost) / price without GST, on the cost of the ordered article.${asked.noCost ? ` ${asked.noCost} ${plural(asked.noCost, 'line')} left out of the margin because the article has no cost on file.` : ''}</p></div>`;
     short.sort((a, b) => (b[1].pending - Math.max(b[1].free, 0)) - (a[1].pending - Math.max(a[1].free, 0)));
     const tabs = `<div class="segs dashtabs" role="tablist">${[['overview', 'Overview'], ['stock', 'Stock &amp; discount']].map(([k, t]) => `<button role="tab" aria-selected="${S.dash.tab === k}" class="${S.dash.tab === k ? 'on' : ''}" data-act="dashTab" data-v="${k}">${t}</button>`).join('')}</div>`;
-    const head = `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div>${tabs}`;
+    const head = `<div class="head"><h1>Dashboard</h1><span class="sub">${sub}</span></div><div class="row wrap dashtabrow">${tabs}<span class="grow"></span><button class="btn sm" data-act="exportAll" title="One Excel file with every order line - pending, approved, dispatched, rejected and deleted - with all the details">Download all orders</button></div>`;
     if (S.dash.tab === 'stock') return head + dashStock(short, hasStock);
     return `${head}
       ${msBanner()}
@@ -2507,7 +2507,7 @@
       </div>
       <div class="row wrap chipsbar" id="ochips">${chipsHtml(view)}</div>
       <div class="row wrap bulkbar">${g.h1 ? `<button class="btn sm" data-act="collapseAll">${o.collapsed ? 'Open all groups' : 'Close all groups (summary only)'}</button>` : ''}
-        <button class="btn sm" id="oexport" data-act="exportView" title="Excel file of exactly the lines listed below"></button><span class="grow"></span>${bulk}</div>
+        <button class="btn sm" id="oexport" data-act="exportView" title="Excel file of exactly the lines listed below"></button><button class="btn sm" data-act="exportAll" title="One Excel file with every order line - pending, approved, dispatched, rejected and deleted - with all the details">Download all orders</button><span class="grow"></span>${bulk}</div>
       <div id="olist">${oListHtml(view)}</div>${detail}`;
   }
   async function loadDetail() {
@@ -3530,6 +3530,32 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       return `Exported ${inr(rows.length)} ${plural(rows.length, 'line')}` + (filtered ? ' (the filters you have on were applied)' : '');
     });
   }
+
+  /* Every order line in one file, whatever its status: one sheet with them all (a Status column first), a sheet per
+     status as on the screens, the deleted lines, and a summary. Partly approved lines show in both Pending and
+     Approved, as on the screens; on "All order lines" each line is there once. */
+  async function exportAll() {
+    const M = S.M;
+    if (!M.lines.length) return tell('Download all orders', 'There are no order lines yet.');
+    let del = [];
+    try { del = await A.rpc('deleted_lines'); } catch (_) { /* the file then goes without the deleted lines */ }
+    const RANK = { PENDING: 0, AWAITING: 1, PARTIAL: 2, APPROVED: 3, DISPATCHED: 4, REJECTED: 5 };
+    const all = M.lines.slice().sort((a, b) => (RANK[a.status] ?? 9) - (RANK[b.status] ?? 9) || rowOrder(a, b));
+    const groups = [['Pending', (l) => NEEDS.includes(l.status)], ['Approved', SEGS.todo[1]], ['Dispatched', SEGS.done[1]], ['Rejected', SEGS.rej[1]]];
+    return excelFile('All_Order_Lines', true, (sheet, ex, byLine) => {
+      const sum = (L, f) => L.reduce((t, l) => t + (Number(f(l)) || 0), 0);
+      const sRows = groups.map(([t, f]) => { const L = all.filter(f); return [t, L.length, sum(L, (l) => l.req_qty), Math.round(sum(L, (l) => l.req_qty * l.req_price)), sum(L, (l) => l.approved), Math.round(sum(L, (l) => (l.approved > 0 ? l.value : 0)))]; });
+      sRows.push(['Deleted', del.length, sum(del, (r) => r.req_qty), Math.round(sum(del, (r) => r.req_qty * r.req_price)), '', '']);
+      sRows.push(['All order lines (each once, deleted left out)', all.length, sum(all, (l) => l.req_qty), Math.round(sum(all, (l) => l.req_qty * l.req_price)), sum(all, (l) => l.approved), Math.round(sum(all, (l) => (l.approved > 0 ? l.value : 0)))]);
+      sRows.push([], ['Downloaded', when(new Date())], ['Note', 'Partly approved lines are on both the Pending and the Approved sheets, as on the screens.']);
+      sheet('Summary', ['Status', 'Lines', 'Qty wanted', 'Value wanted (Rs)', 'Qty approved', 'Value approved (Rs)'], sRows);
+      sheet('All order lines', ORDER_HEAD, all.map((l) => orderRow(l, ex, byLine)));
+      for (const [t, f] of groups) sheet(t, ORDER_HEAD, all.filter(f).map((l) => orderRow(l, ex, byLine)));
+      sheet('Deleted', ['Status', 'Site', 'Store Name', 'Order No', 'Article Code', 'Article Desc', 'MC Desc', 'MRP', 'Qty Wanted', 'Price Wanted', 'Book Date', 'Deleted on', 'Deleted by'],
+        del.map((r) => ['Deleted', r.store_code, r.store_name || '', r.order_no, r.article_code, r.description || '', r.mc_name || '', +r.mrp, r.req_qty, +r.req_price, r.order_date || '', when(r.deleted_at), r.deleted_by || '']));
+      return `Downloaded ${inr(all.length)} order ${plural(all.length, 'line')}${del.length ? ` and ${inr(del.length)} deleted` : ''}`;
+    });
+  }
   /* Every article on the Shortages screen, and the order lines waiting for each. */
   function exportShortages() {
     const M = S.M, rows = shortRows();
@@ -3788,6 +3814,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     clearFilter: (el) => { const st = sec(); st[el.dataset.key] = ''; st.limit = 300; render(); },
     clearFilters: () => { Object.assign(sec(), { q: '', status: '', flag: '', store: '', mc: '', buyer: '', limit: 300 }); render(); },
     exportView: () => exportLines(S.view),
+    exportAll: () => exportAll(),
     exportShort: () => exportShortages(),
     rowLocs: (el) => { const l = S.M.byId[+el.dataset.id], i = $(`.rowq[data-id="${el.dataset.id}"]`), pr = priceFrom(l, $(`.rowp[data-id="${el.dataset.id}"]`)); if (!pr.ok) return tell('Approve', pr.msg); approveWithLocs(l, i && i.value, pr.price); },
     apLocs: () => { const l = cur(), i = $('#ap-qty'), pr = priceFrom(l, $('#ap-price')); if (!pr.ok) return tell('Approve', pr.msg); approveWithLocs(l, i && i.value, pr.price); },

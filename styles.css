@@ -579,3 +579,5 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
   table.oftable.resp td.w { min-width: 0; }
 }
 @media (max-width: 760px) { table.oftable.resp tr.ofdel { background: #FAF8FC; } table.oftable.resp tr.ofdel td { background: transparent; } }
+/* Download all orders, next to the dashboard tabs (version 3.28) */
+.dashtabrow { margin-bottom: 12px; gap: 8px; } .dashtabrow .dashtabs.segs { margin-bottom: 0; }
