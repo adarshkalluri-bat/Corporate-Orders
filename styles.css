@@ -581,3 +581,20 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
 @media (max-width: 760px) { table.oftable.resp tr.ofdel { background: #FAF8FC; } table.oftable.resp tr.ofdel td { background: transparent; } }
 /* Download all orders, next to the dashboard tabs (version 3.28) */
 .dashtabrow { margin-bottom: 12px; gap: 8px; } .dashtabrow .dashtabs.segs { margin-bottom: 0; }
+
+/* v3.30 payment proof */
+.ppintro p { margin: 0; }
+.pph { margin: 4px 2px 0; }
+.ppgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 12px; }
+.pptitle { font-size: 15px; }
+.pptable td { white-space: normal; vertical-align: top; }
+.pptable td.ppords { min-width: 220px; }
+.pptable td.right { white-space: nowrap; }
+.ppcard details summary { cursor: pointer; }
+.ppbtns { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+.ppcard .ppbtns { justify-content: flex-start; }
+.ppord { display: inline-block; white-space: nowrap; background: #F3F0FB; border-radius: 6px; padding: 1px 6px; margin: 1px 2px; font-size: 12px; }
+.ppord.big { background: #FFDCE7; color: #8E2350; }
+.pporders { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.ppo { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line, #e4e0f0); border-radius: 8px; flex-wrap: wrap; }
+.ppo .grow { min-width: 0; }

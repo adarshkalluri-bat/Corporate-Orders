@@ -12,7 +12,7 @@
   const S = {
     me: null, M: null, view: 'dashboard', wide: wideMQ.matches, lastSync: null, online: true, stale: false, busy: false,
     /* o = the Pending orders screen, a = the Approved orders screen. The line open in the side panel (o.sel) is shared. */
-    o: { q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
+    o: { seg: 'list', q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
     a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'none', sort: 'latest', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
     s: { only: true, q: '', art: null, qty: {}, cover: '' },
     c: { q: '', scope: 'master', cat: '', mrp: '', results: null, loading: false, asked: '' },
@@ -28,7 +28,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 32;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 33;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -460,7 +460,7 @@
       const cnt = {}; ls.forEach((l) => { cnt[l.status] = (cnt[l.status] || 0) + 1; });
       const chips = OF_ORDER.filter((k) => cnt[k]).map((k) => `${pill(k)} <b>${cnt[k]}</b>`).concat(g.dels.length ? [`<span class="pill CANCELLED">Deleted</span> <b>${g.dels.length}</b>`] : []).join(' &nbsp; ');
       const live = ls.filter((l) => l.status !== 'REJECTED'), ordV = live.reduce((t, l) => t + l.req_qty * l.req_price, 0), apV = live.reduce((t, l) => t + (l.approved > 0 ? Number(l.value) || 0 : 0), 0);
-      const where = (l) => (NEEDS.includes(l.status) ? 'Pending orders' : l.status === 'REJECTED' ? 'Approved orders > Rejected' : l.status === 'DISPATCHED' ? 'Approved orders > Dispatched' : 'Approved orders');
+      const where = (l) => (NEEDS.includes(l.status) ? (ppWaiting(l) ? 'Pending orders > Payment proof' : 'Pending orders') : l.status === 'REJECTED' ? 'Approved orders > Rejected' : l.status === 'DISPATCHED' ? 'Approved orders > Dispatched' : 'Approved orders');
       const rows = ls.map((l) => `<tr><td class="w artcell"><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span>${l.parent_id ? '<div class="small">alternate given in place of the ordered article</div>' : ''}</td>
           <td class="right" data-l="Qty wanted">${inr(l.req_qty)}</td><td class="right b" data-l="Approved">${l.approved ? inr(l.approved) : '<span class="muted">-</span>'}</td>
           <td data-l="Status">${pill(l.status)}${noteOf(l) ? `<div class="small">${noteOf(l)}</div>` : ''}</td>
@@ -499,6 +499,229 @@
     inp.focus(); show();
   }
 
+
+  /* ================= Payment proof (version 33) =================
+     A store's pending orders of Rs 1 lakh and above - one order on its own, or all its pending orders together - are approved
+     only after the store sends proof of the customer's advance payment. Only the quantity still pending counts (balance x
+     price asked). Lines already in a request (waiting, or proof received) do not count again, so a new order after that is
+     counted on its own. It is a warning: approving is still allowed, after a question. */
+  const ppOn = () => !!S.M && S.M.schema >= 33;
+  const PP_SUBJECT = 'Advance payment proof required - corporate order(s) {orders} - {store}';
+  const PP_BODY = `Dear {store} team,
+
+We have received the following Diwali corporate order(s) from your store, with a total pending value of Rs {value}:
+
+{table}
+
+As per process, orders of Rs {limit} and above are approved only after proof of the advance payment received from the customer.
+
+Please reply to this email with the proof (payment receipt / NEFT or UTR reference / bank screenshot, and the advance amount) for the order(s) above. We will take up the order(s) for approval as soon as we receive it.
+
+Regards,
+Household Category Team`;
+  const PP_REMIND = `Dear {store} team,
+
+This is a reminder of our email of {asked} asking for proof of the advance payment on the corporate order(s) below (pending value Rs {value}):
+
+{table}
+
+The order(s) will be taken up for approval as soon as we receive the proof. Please share it at the earliest.
+
+Regards,
+Household Category Team`;
+  function ppSet() {
+    let o = {};
+    try { o = JSON.parse(((S.M && S.M.meta) || {}).pp_settings || '{}') || {}; } catch (_) { o = {}; }
+    return { limit: +o.limit > 0 ? +o.limit : 100000, to: o.to || '', cc: o.cc || '', subject: o.subject || PP_SUBJECT, body: o.body || PP_BODY };
+  }
+  const ppVal = (l) => (NEEDS.includes(l.status) && l.balance > 0 ? l.balance * l.req_price : 0);
+  const PP_RANK = { ASKED: 3, RECEIVED: 2, REJECTED: 1 };
+  /* worked out once per data load */
+  function PP() {
+    const M = S.M;
+    if (M._pp) return M._pp;
+    const z = { caseOf: new Map(), asked: [], done: [], flag: new Map(), stores: [], waitLines: 0 };
+    M._pp = z;
+    if (!ppOn()) return z;
+    const lim = ppSet().limit;
+    for (const r of M.proofs || []) {
+      (r.status === 'ASKED' ? z.asked : z.done).push(r);
+      for (const id of r.lines || []) { const c = z.caseOf.get(+id); if (!c || PP_RANK[r.status] > PP_RANK[c.status] || (PP_RANK[r.status] === PP_RANK[c.status] && r.id > c.id)) z.caseOf.set(+id, r); }
+    }
+    const covered = (l) => { const c = z.caseOf.get(l.id); return !!c && (c.status === 'ASKED' || c.status === 'RECEIVED'); };
+    const open = M.lines.filter((l) => ppVal(l) > 0 && !covered(l));
+    const byOrd = new Map(), bySt = new Map();
+    for (const l of open) { const v = ppVal(l); byOrd.set(l.order_no, (byOrd.get(l.order_no) || 0) + v); bySt.set(l.store_code, (bySt.get(l.store_code) || 0) + v); }
+    const st = new Map();
+    for (const l of open) {
+      const ov = byOrd.get(l.order_no), sv = bySt.get(l.store_code);
+      if (sv < lim && ov < lim) continue;
+      z.flag.set(l.id, { ov, sv, big: ov >= lim });
+      let g = st.get(l.store_code); if (!g) { g = { store: l.store_code, lines: [], value: sv, orders: new Map() }; st.set(l.store_code, g); }
+      g.lines.push(l);
+      if (!g.orders.has(l.order_no)) g.orders.set(l.order_no, { order_no: l.order_no, value: ov, big: ov >= lim, date: l.order_date || '' });
+    }
+    z.stores = Array.from(st.values()).map((g) => Object.assign(g, { orders: Array.from(g.orders.values()).sort((a, b) => b.value - a.value) })).sort((a, b) => b.value - a.value);
+    z.waitLines = M.lines.filter((l) => NEEDS.includes(l.status) && (z.caseOf.get(l.id) || {}).status === 'ASKED').length;
+    z.asked.sort((a, b) => new Date(a.asked_at) - new Date(b.asked_at));
+    z.done.sort((a, b) => new Date(b.resolved_at || b.asked_at) - new Date(a.resolved_at || a.asked_at));
+    return z;
+  }
+  const ppCase = (l) => (ppOn() ? (PP().caseOf.get(l.id) || {}).status || '' : '');
+  const ppWaiting = (l) => ppCase(l) === 'ASKED';
+  function ppTag(l) {
+    if (!ppOn()) return '';
+    const z = PP(), c = z.caseOf.get(l.id), f = z.flag.get(l.id);
+    if (c && c.status === 'ASKED' && NEEDS.includes(l.status)) return `<span class="badge warn" title="${esc(`Payment proof asked from the store on ${when(c.asked_at)} (request ${c.id})`)}">Payment proof asked</span>`;
+    if (c && c.status === 'RECEIVED') return `<span class="badge good" title="${esc(`Payment proof received ${when(c.resolved_at)}${c.resolved_by ? ' (' + c.resolved_by + ')' : ''}${c.note ? ': ' + c.note : ''}`)}">Proof received</span>`;
+    if (f) return `<span class="badge bad" title="${esc(`${f.big ? 'This order' : "The store's pending orders together"} come to ${rupees(f.big ? f.ov : f.sv)} - at or above ${rupees(ppSet().limit)}. Ask the store for proof of the advance payment before approving.`)}">Needs payment proof</span>`;
+    return '';
+  }
+  /* before an approval: lines that need proof, or are waiting for it, ask first */
+  async function ppApproveOk(ls) {
+    if (!ppOn()) return true;
+    ls = (ls || []).filter(Boolean);
+    const z = PP(), wait = ls.filter((l) => ppWaiting(l)), need = ls.filter((l) => z.flag.has(l.id));
+    if (!wait.length && !need.length) return true;
+    const lim = ppSet().limit, n = wait.length + need.length, one = ls.length === 1;
+    const stores = Array.from(new Set(wait.concat(need).map((l) => l.store_code)));
+    const text = `${one ? 'This line is' : `${inr(n)} of the ${inr(ls.length)} lines are`} on orders of ${rupees(lim)} or more (store ${stores.slice(0, 5).join(', ')}${stores.length > 5 ? ' ...' : ''}).\n\n`
+      + (wait.length ? `Payment proof was asked from the store${one ? '' : ` for ${inr(wait.length)} of them`} and has not come yet.\n` : '')
+      + (need.length ? `Proof of the advance payment has not been asked for${one ? '' : ` ${inr(need.length)} of them`} yet.\n` : '')
+      + '\nApprove anyway?';
+    return confirmBox('Payment proof not received', text, 'Approve anyway', true);
+  }
+  /* the email: text with {table} turned into a table of the orders and lines */
+  function ppTable(ls) {
+    const td = 'border:1px solid #ccc;padding:4px 8px;font-size:13px', th = td + ';background:#f3f0fb;text-align:left';
+    const rows = ls.slice().sort((a, b) => String(a.order_no).localeCompare(String(b.order_no)) || String(a.article_code).localeCompare(String(b.article_code)));
+    let tot = 0;
+    const body = rows.map((l) => { const v = ppVal(l) || l.balance * l.req_price; tot += v; return `<tr><td style="${td}">${esc(l.order_no)}</td><td style="${td}">${esc(dmy(l.order_date || '', true))}</td><td style="${td}">${esc(l.article_code)}</td><td style="${td}">${esc(l.description || '')}</td><td style="${td};text-align:right">${inr(l.balance)}</td><td style="${td};text-align:right">${inr2(l.req_price)}</td><td style="${td};text-align:right">${inr(Math.round(v))}</td></tr>`; }).join('');
+    return `<table style="border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif"><tr><th style="${th}">Order No</th><th style="${th}">Booked</th><th style="${th}">Article</th><th style="${th}">Description</th><th style="${th}">Qty</th><th style="${th}">Price (Rs)</th><th style="${th}">Value (Rs)</th></tr>${body}<tr><td style="${td};font-weight:bold" colspan="6">Total</td><td style="${td};text-align:right;font-weight:bold">${inr(Math.round(tot))}</td></tr></table>`;
+  }
+  function ppFill(t, o) { return String(t).replace(/\{(store|orders|value|limit|asked)\}/g, (m, k) => (o[k] != null ? String(o[k]) : m)); }
+  function ppMail(body, o, ls) {
+    const parts = ppFill(body, o).split('{table}').map((x) => esc(x).replace(/\r?\n/g, '<br>'));
+    return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222">${parts.join(ppTable(ls))}${parts.length === 1 ? '<br><br>' + ppTable(ls) : ''}</div>`;
+  }
+  const ppMails = (...a) => Array.from(new Set(a.join(',').split(/[;,\s]+/).map((x) => x.trim()).filter(Boolean))).join('; ');
+  function ppDialogMail(o) {
+    return `<label class="f">To<input type="text" name="to" value="${esc(o.to)}" placeholder="store email; more than one with ;"></label>
+      <label class="f">Cc<input type="text" name="cc" value="${esc(o.cc)}"></label>
+      <label class="f">Subject<input type="text" name="subject" value="${esc(o.subject)}"></label>
+      <label class="f">Email text<textarea name="body" rows="11">${esc(o.body)}</textarea></label>
+      <p class="small">{store}, {orders}, {value} and {limit} are filled in, and {table} becomes a table of the orders with their lines. A change here is for this email only - for every email, use <b>Limit and email ...</b> on the Payment proof screen.</p>`;
+  }
+  function ppSaveEml(to, cc, subject, html, store) {
+    saveBlob(new Blob([C.buildEml({ to, cc, subject, html })], { type: 'message/rfc822' }), `Payment_proof_${store}.eml`);
+  }
+  async function ppAsk(store, ids) {
+    const M = S.M, z = PP(), set = ppSet(), st = M.stores[store] || {};
+    let ls = ids ? ids.map((id) => M.byId[id]) : ((z.stores.find((x) => x.store === store) || {}).lines || []);
+    ls = ls.filter((l) => l && l.store_code === store && ppVal(l) > 0 && !ppWaiting(l));
+    if (!ls.length) return tell('Ask payment proof', 'None of these lines has a pending quantity that is not already waiting for proof.');
+    const G = new Map();
+    for (const l of ls) { let g = G.get(l.order_no); if (!g) { g = { o: l.order_no, lines: [], value: 0, date: l.order_date || '' }; G.set(l.order_no, g); } g.lines.push(l); g.value += ppVal(l); }
+    const ords = Array.from(G.values()).sort((a, b) => b.value - a.value);
+    const v = await ask(`Ask ${store} ${st.store_name || ''} for payment proof`, `<div class="stack">
+      <p class="small">Tick the orders to ask about (only what is still pending is counted). The request is recorded, the lines move to the Payment proof screen, and an Outlook draft is downloaded - open it and press Send.</p>
+      <div class="pporders">${ords.map((o, i) => `<label class="ppo"><input type="checkbox" name="o${i}" checked><span class="grow"><b>${esc(o.o)}</b> <span class="small">${inr(o.lines.length)} ${plural(o.lines.length, 'line')}${o.date ? ', booked ' + esc(dmy(o.date, true)) : ''}</span></span>${o.value >= set.limit ? '<span class="badge bad">over the limit on its own</span>' : ''}<b>${rupees(Math.round(o.value))}</b></label>`).join('')}</div>
+      ${ppDialogMail({ to: ppMails(st.email || '', set.to), cc: set.cc, subject: set.subject, body: set.body })}
+      ${st.email ? '' : '<p class="note warn">No email address is on file for this store - type it in To.</p>'}</div>`, 'Record and make the email', { cls: 'big', noFocus: true });
+    if (!v) return;
+    const pick = ords.filter((o, i) => v['o' + i]);
+    if (!pick.length) return tell('Ask payment proof', 'Tick at least one order.');
+    const L = pick.flatMap((o) => o.lines), value = Math.round(L.reduce((t, l) => t + ppVal(l), 0));
+    const fill = { store: `${store} ${st.store_name || ''}`.trim(), orders: pick.map((o) => o.o).join(', '), value: inr(value), limit: inr(set.limit) };
+    const subject = ppFill(v.subject.trim() || set.subject, fill), to = v.to.trim(), cc = v.cc.trim();
+    S.busy = true;
+    try {
+      await A.rpc('proof_ask', { p: { store, lines: L.map((l) => l.id), value, to, cc, subject, kind: pick.some((o) => o.value >= set.limit) ? 'order' : 'store' } });
+      ppSaveEml(to, cc, subject, ppMail(v.body || set.body, fill, L), store);
+      S.o.checked.clear();
+      await reload();
+      toast('Recorded - the email draft is downloaded: open it and press Send');
+    } catch (e) { await tell('Not done', e.message); } finally { S.busy = false; }
+  }
+  async function ppRemind(id) {
+    const M = S.M, r = (M.proofs || []).find((x) => x.id === id); if (!r) return;
+    const st = M.stores[r.store_code] || {}, ls = r.lines.map((x) => M.byId[x]).filter((l) => l && NEEDS.includes(l.status));
+    if (!ls.length) return tell('Reminder', 'Nothing is pending on this request any more.');
+    const v = await ask(`Reminder to ${r.store_code} ${st.store_name || ''}`, `<div class="stack">${ppDialogMail({ to: r.email_to || st.email || '', cc: r.email_cc || '', subject: 'Reminder: ' + (r.subject || ''), body: PP_REMIND })}</div>`, 'Record and make the email', { cls: 'big', noFocus: true });
+    if (!v) return;
+    const value = Math.round(ls.reduce((t, l) => t + ppVal(l), 0));
+    const fill = { store: `${r.store_code} ${st.store_name || ''}`.trim(), orders: Array.from(new Set(ls.map((l) => l.order_no))).join(', '), value: inr(value), limit: inr(ppSet().limit), asked: dmy(String(r.asked_at).slice(0, 10), true) };
+    S.busy = true;
+    try {
+      await A.rpc('proof_update', { p_id: id, p_action: 'reminder', p_note: '' });
+      ppSaveEml(v.to.trim(), v.cc.trim(), ppFill(v.subject.trim(), fill), ppMail(v.body || PP_REMIND, fill, ls), r.store_code);
+      await reload();
+      toast('Reminder recorded - the email draft is downloaded');
+    } catch (e) { await tell('Not done', e.message); } finally { S.busy = false; }
+  }
+  async function ppDo(id, a) {
+    const r = (S.M.proofs || []).find((x) => x.id === id); if (!r) return;
+    const who = `${r.store_code} (orders ${r.orders.join(', ')})`;
+    if (a === 'received') {
+      const v = await ask('Payment proof received', `<p class="small">From ${esc(who)}. The lines go back to the Pending list marked <b>Proof received</b>, ready to approve.</p>
+        <label class="f">Proof details (optional)<input type="text" name="note" maxlength="300" placeholder="e.g. UTR 4567..., Rs 60,000 advance"></label>`, 'Proof received');
+      if (!v) return;
+      return run(() => A.rpc('proof_update', { p_id: id, p_action: 'received', p_note: v.note.trim() }), 'Proof received - the lines are back in Pending, ready to approve');
+    }
+    if (a === 'reject') {
+      const v = await ask('No payment proof - reject the lines', `<p class="small">Every line of this request (${esc(who)}) is rejected. Anything approved or offered on them is released; dispatched lines are left alone.</p>
+        <label class="f">Reason<input type="text" name="note" value="No advance payment proof" maxlength="300"></label>`, 'Reject lines', { danger: true, noFocus: true });
+      if (!v) return;
+      return run(() => A.rpc('proof_update', { p_id: id, p_action: 'reject', p_note: v.note.trim() || 'No advance payment proof' }), (x) => `Rejected ${inr(x.done || 0)} ${plural(x.done || 0, 'line')}`);
+    }
+    if (a === 'cancel') {
+      if (!(await confirmBox('Cancel the request', `Drop the payment proof request for ${who}?\n\nThe lines go back to the Pending list and count towards the limit again.`, 'Cancel the request'))) return;
+      return run(() => A.rpc('proof_update', { p_id: id, p_action: 'cancel', p_note: '' }), 'Request cancelled');
+    }
+    if (a === 'reopen') return run(() => A.rpc('proof_update', { p_id: id, p_action: 'reopen', p_note: '' }), 'Back to waiting for proof');
+  }
+  async function ppSettings() {
+    const set = ppSet();
+    const v = await ask('Payment proof: limit and email', `<div class="stack">
+      <label class="f">Ask for proof from (Rs) - one order, or a store's pending orders together<input type="number" name="limit" min="1" step="1" value="${set.limit}" required></label>
+      <label class="f">Always add to To (besides the store's email)<input type="text" name="to" value="${esc(set.to)}"></label>
+      <label class="f">Cc<input type="text" name="cc" value="${esc(set.cc)}"></label>
+      <label class="f">Subject<input type="text" name="subject" value="${esc(set.subject)}"></label>
+      <label class="f">Email text<textarea name="body" rows="12">${esc(set.body)}</textarea></label>
+      <p class="small">{store}, {orders}, {value} and {limit} are filled in; {table} becomes the table of orders and lines. Leave the subject or the text empty to go back to the standard wording.</p></div>`, 'Save for everyone', { cls: 'big', noFocus: true });
+    if (!v) return;
+    const p = { limit: Math.round(+v.limit || 0), to: v.to.trim(), cc: v.cc.trim(), subject: v.subject.trim() === PP_SUBJECT ? '' : v.subject.trim(), body: v.body.trim() === PP_BODY.trim() ? '' : v.body.trim() };
+    run(() => A.rpc('pp_settings', { p }), 'Payment proof settings saved');
+  }
+  function vProof() {
+    const M = S.M, z = PP(), set = ppSet(), ed = editor(), lim = set.limit;
+    const sname = (c) => esc((M.stores[c] || {}).store_name || '');
+    const intro = `<div class="card ppintro"><div class="row wrap"><p class="small grow">Pending orders of <b>${rupees(lim)}</b> or more - one order, or all of a store's pending orders together - need proof of the customer's advance payment before approval. Only the quantity still pending counts. Lines already asked about do not count again, so a new order after that is counted on its own.</p>${ed ? '<button class="btn sm" data-act="ppSettings">Limit and email ...</button>' : ''}</div></div>`;
+    const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${inr(z.stores.length)} ${plural(z.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders pending (Rs)</th><th class="right">Lines</th><th class="right">Pending value</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
+        <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div></td>
+        <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}" title="${o.big ? 'Over the limit on its own' : ''}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
+        <td class="right">${inr(g.lines.length)}</td><td class="right b">${rupees(Math.round(g.value))}</td>
+        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="note good">No store is at or above the limit without proof asked.</div>'}</div>`;
+    const lineTable = (ls) => `<div class="tablewrap"><table class="tight"><thead><tr><th>Order</th><th>Article</th><th class="right">Pending pcs</th><th class="right">Value (Rs)</th><th>Status</th></tr></thead><tbody>${ls.map((l) => `<tr><td>${esc(l.order_no)}</td><td><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span></td><td class="right">${inr(l.balance)}</td><td class="right">${inr(Math.round(ppVal(l)))}</td><td>${pill(l.status)}</td></tr>`).join('')}</tbody></table></div>`;
+    const card = (r) => {
+      const ls = r.lines.map((x) => M.byId[x]).filter(Boolean), pend = ls.filter((l) => NEEDS.includes(l.status)), days = Math.floor((Date.now() - new Date(r.asked_at)) / 864e5);
+      const val = Math.round(pend.reduce((t, l) => t + ppVal(l), 0));
+      return `<div class="card stack ppcard"><div class="row wrap"><div class="grow pptitle"><b>${esc(r.store_code)}</b> ${sname(r.store_code)}</div><span class="badge ${days >= 2 ? 'bad' : 'warn'}">${days < 1 ? 'asked today' : `waiting ${days} ${plural(days, 'day')}`}</span></div>
+        <div class="small">Orders <b>${r.orders.map(esc).join(', ')}</b> &middot; ${inr(pend.length)} of ${inr(ls.length)} ${plural(ls.length, 'line')} pending &middot; ${rupees(val)} pending now${Math.round(+r.value) !== val ? ` (${rupees(Math.round(+r.value))} when asked)` : ''}</div>
+        <div class="small muted">Asked ${when(r.asked_at)}${r.asked_by ? ' by ' + esc(r.asked_by) : ''}${r.email_to ? ' &middot; to ' + esc(r.email_to) : ''}${r.reminders ? ` &middot; ${inr(r.reminders)} ${plural(r.reminders, 'reminder')}, last ${when(r.last_reminder_at)}` : ''}</div>
+        ${pend.length ? '' : '<div class="note info">Nothing is pending on it any more (approved or rejected since). Cancel the request to clear it.</div>'}
+        <details><summary class="small">The lines</summary>${lineTable(ls)}</details>
+        ${ed ? `<div class="row wrap ppbtns"><button class="btn sm primary" data-act="ppDo" data-a="received" data-id="${r.id}">Proof received ...</button><button class="btn sm" data-act="ppRemind" data-id="${r.id}">Send reminder ...</button><button class="btn sm danger" data-act="ppDo" data-a="reject" data-id="${r.id}">No proof - reject ...</button><button class="btn sm" data-act="ppDo" data-a="cancel" data-id="${r.id}">Cancel request</button></div>` : ''}</div>`;
+    };
+    const wait = `<div class="stack"><h2 class="pph">Waiting for proof <span class="small">${inr(z.asked.length)} ${plural(z.asked.length, 'request')}, oldest first</span></h2>${z.asked.length ? `<div class="ppgrid">${z.asked.map(card).join('')}</div>` : '<div class="card"><div class="note info">No request is waiting for proof.</div></div>'}</div>`;
+    const done = z.done.length ? `<div class="card stack"><h2>Done <span class="small">latest first</span></h2><div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders</th><th class="right">Value asked</th><th>Result</th><th>Note</th><th></th></tr></thead><tbody>${z.done.slice(0, 60).map((r) => `<tr>
+        <td><b>${esc(r.store_code)}</b> ${sname(r.store_code)}</td><td>${r.orders.map(esc).join(', ')}</td><td class="right">${rupees(Math.round(+r.value))}</td>
+        <td>${r.status === 'RECEIVED' ? '<span class="badge good">Proof received</span>' : '<span class="badge bad">Rejected - no proof</span>'}<div class="small">${when(r.resolved_at)}${r.resolved_by ? ' ' + esc(r.resolved_by) : ''}</div></td>
+        <td class="small">${esc(r.note || '')}</td>
+        <td class="right"><div class="ppbtns">${r.status === 'RECEIVED' ? `<button class="btn sm" data-act="ppList" data-store="${esc(r.store_code)}" data-flag="PROOFOK">Lines</button>${ed ? `<button class="btn sm" data-act="ppDo" data-a="reopen" data-id="${r.id}" title="Back to waiting for proof">Undo</button>` : ''}` : ''}</div></td></tr>`).join('')}</tbody></table></div></div>` : '';
+    return `<div class="stack ppscreen">${intro}${need}${wait}${done}</div>`;
+  }
+
   /* ================= Dashboard ================= */
   /* Value at MRP, value at the price wanted, the discount that is, and the margin left after it.
      qf(line) = the quantity to count for that line. */
@@ -530,7 +753,9 @@
     STOREFULL: ['Store already holds the qty wanted (incl. alternates)', (l) => !!l.ss && l.req_qty > 0 && l.ss.family >= l.req_qty],
     STOREHAS: ['Store has stock of it or an alternate', (l) => !!l.ss && l.ss.family > 0],
     SAPDIFF: ['Differs from the SAP approval file', (l) => !!(l.sap_appr && l.sap_appr.conflict)],
-    SAPDONE: ['Approved or rejected in SAP', (l) => !!l.sap_appr]
+    SAPDONE: ['Approved or rejected in SAP', (l) => !!l.sap_appr],
+    PROOF: ['Needs payment proof (not asked yet)', (l) => ppOn() && PP().flag.has(l.id)],
+    PROOFOK: ['Payment proof received', (l) => ppOn() && ppCase(l) === 'RECEIVED']
   };
   const dupText = (l) => `entered ${l.dup_count} times in the SAP export (qty ${l.dup_qty || '?'})`;
   const dupBadge = (l) => (l.dup_count > 0 ? `<span class="badge bad" title="${esc('The same article is ' + dupText(l) + '. It is taken once.')}">Duplicate article</span>` : '');
@@ -569,6 +794,12 @@
     }
     const sapDiff = cnt('SAPDIFF');
     if (sapDiff) items.push(['bad', `${inr(sapDiff)} ${plural(sapDiff, 'line')}: the SAP approval file says something different from this tracker - nothing was changed on ${sapDiff === 1 ? 'it' : 'them'}, please check`, go('Open', { flag: 'SAPDIFF' })]);
+    if (ppOn()) {
+      const z = PP(), lim = ppSet().limit, ppGo = '<button class="btn sm" data-act="ppGo">Open</button>';
+      if (z.stores.length) items.push(['bad', `${inr(z.stores.length)} ${plural(z.stores.length, 'store')} with pending orders of ${rupees(lim)} or more and no payment proof asked yet (${rupees(z.stores.reduce((t, x) => t + x.value, 0))} pending)`, ppGo]);
+      const old = z.asked.filter((r) => Date.now() - new Date(r.asked_at) >= 2 * 864e5);
+      if (old.length) items.push(['warn', `${inr(old.length)} payment proof ${plural(old.length, 'request')} waiting 2 days or more (${old.slice(0, 6).map((r) => esc(r.store_code)).join(', ')}${old.length > 6 ? ' ...' : ''})`, ppGo]);
+    }
     const fullAtStore = lines.filter((l) => NEEDS.includes(l.status) && FLAGS.STOREFULL[1](l)).length;
     if (fullAtStore) items.push(['warn', `${inr(fullAtStore)} pending ${plural(fullAtStore, 'line')}: the store already holds at least the quantity it wants, in the article or its alternates (closing stock + in transit)`, go('Open', { flag: 'STOREFULL' })]);
     if (cnt('SAP')) items.push(['warn', `${inr(cnt('SAP'))} ${plural(cnt('SAP'), 'line')}: quantity changed in SAP after import`, go('Review', { flag: 'SAP' })]);
@@ -2235,7 +2466,7 @@
   const sec = (view) => ((view || S.view) === 'approved' ? S.a : S.o);
   const SEGS = { todo: ['Approved', (l) => l.approved_open > 0 || (!!l.appr_manual && l.status === 'APPROVED' && !l.dispatched)], done: ['Dispatched', (l) => l.dispatched > 0 || (!!l.appr_manual && !!l.disp_manual)], rej: ['Rejected', (l) => l.status === 'REJECTED'] };
   const ticks = (view) => editor() && S.wide && ((view || S.view) !== 'approved' || S.a.seg !== 'done' || delDispOn());   // tick boxes: Pending orders, and Approved (to mark dispatched, or delete)
-  const baseLines = (view) => (view === 'approved' ? S.M.lines.filter(SEGS[S.a.seg][1]) : S.M.lines.filter((l) => NEEDS.includes(l.status)));
+  const baseLines = (view) => (view === 'approved' ? S.M.lines.filter(SEGS[S.a.seg][1]) : S.M.lines.filter((l) => NEEDS.includes(l.status) && !ppWaiting(l)));
   function ordersFiltered(view) {
     view = view === 'approved' || (!view && S.view === 'approved') ? 'approved' : 'orders';
     const o = sec(view), words = o.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -2401,7 +2632,7 @@
   /* the store's remark on the article (from "Article Remarks" in the orders file): a one-liner on the line when there is one */
   const remOn = () => !!S.M && S.M.schema >= 19;
   const remLine = (l) => (l.art_remarks ? `<div class="aremark" title="${esc('Remark from the store: ' + l.art_remarks)}"><span>Store remark:</span> ${esc(l.art_remarks)}</div>` : '');
-  const lineTags = (l) => [dupBadge(l), taskChip(l), l.orig_article ? `<span class="badge alt" title="${esc('The store ordered ' + l.orig_article + ' ' + l.orig_desc)}">In place of ${esc(l.orig_article)}</span>` : '',
+  const lineTags = (l) => [dupBadge(l), ppTag(l), taskChip(l), l.orig_article ? `<span class="badge alt" title="${esc('The store ordered ' + l.orig_article + ' ' + l.orig_desc)}">In place of ${esc(l.orig_article)}</span>` : '',
     l.art_status === 'In-Active' ? '<span class="badge bad">In-Active</span>' : '',
     l.late ? '<span class="badge bad" title="The allocate-by date has passed">Late</span>' : l.tight ? '<span class="badge warn">Allocate now</span>' : '',
     l.ss && l.req_qty > 0 && l.ss.family >= l.req_qty && NEEDS.includes(l.status) ? `<span class="badge warn" title="${esc(ssTitle(l))}">Store holds ${inr(l.ss.family)}</span>` : ''].filter(Boolean).join(' ');
@@ -2518,12 +2749,15 @@
     const tick = ed && S.wide ? '<label class="row tickall"><input type="checkbox" data-act="chkAll" aria-label="Tick all lines shown"> Tick all shown</label><span class="small">With the ticked lines:</span>' : '';
     const delBtn = '<button class="btn sm danger" data-act="bulkDelete" title="Delete the ticked lines from the tracker (lines added by mistake)">Delete ...</button>';
     const bulk = !ed || !S.wide ? '' : view === 'approved' ? (S.a.seg === 'todo' ? `${tick}<button class="btn sm primary" data-act="bulkDispatch" title="The ticked lines have left the DC">Mark dispatched ...</button>${sfOn() ? '<button class="btn sm" data-act="bulkSapFix" title="Ticked lines that differ from the SAP approval file: take SAP\'s figure, or keep this tracker\'s">Settle SAP differences ...</button>' : ''}${dedOn() ? '<button class="btn sm" data-act="bulkDeduct" title="Ticked lines approved in SAP: take them off the DC balance too (for approvals the latest stock report does not have out yet)">Take off DC stock ...</button>' : ''}${delBtn}` : S.a.seg === 'rej' || delDispOn() ? tick + delBtn : '') : `${tick}<button class="btn sm" data-act="bulkApprove" title="Approves the full pending quantity of every ticked line where the DC has enough balance, rounded up to full packs">Approve in full</button>
-        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button>${nsOn() ? '<button class="btn sm" data-act="bulkNoStock" title="Mark the ticked lines approved without giving stock here">Approve without stock ...</button>' : ''}${sfOn() && M.lines.some((l) => l.sap_appr && l.sap_appr.conflict && l.status === 'PENDING') ? '<button class="btn sm" data-act="bulkSapFix" title="Ticked lines that differ from the SAP approval file: take SAP\'s figure, or keep this tracker\'s">Settle SAP differences ...</button>' : ''}<button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
+        <button class="btn sm" data-act="bulkClose" title="For ticked lines that are partly approved: the store gets only what is approved, the rest is no longer pending">Close pending qty ...</button>${nsOn() ? '<button class="btn sm" data-act="bulkNoStock" title="Mark the ticked lines approved without giving stock here">Approve without stock ...</button>' : ''}${sfOn() && M.lines.some((l) => l.sap_appr && l.sap_appr.conflict && l.status === 'PENDING') ? '<button class="btn sm" data-act="bulkSapFix" title="Ticked lines that differ from the SAP approval file: take SAP\'s figure, or keep this tracker\'s">Settle SAP differences ...</button>' : ''}${ppOn() ? '<button class="btn sm" data-act="bulkProof" title="Email the store for proof of the advance payment on the ticked lines (one store at a time)">Ask payment proof ...</button>' : ''}<button class="btn sm danger" data-act="bulkReject">Reject ...</button><button class="btn sm danger" data-act="bulkDelete">Delete ...</button>${taskOn() ? '<button class="btn sm" data-act="bulkTask" title="Give the ticked lines to a teammate to call the store (one task per store)">Assign task ...</button>' : ''}`;
+    const ppN = view !== 'approved' && ppOn() ? PP() : null;
+    const pseg = ppN ? `<div class="segs"><button class="${S.o.seg !== 'proof' ? 'on' : ''}" data-act="oseg" data-seg="list">Pending <b>${inr(base.length)}</b></button><button class="${S.o.seg === 'proof' ? 'on' : ''}" data-act="oseg" data-seg="proof" title="Orders of ${esc(rupees(ppSet().limit))} and above: ask the store for proof of the advance payment">Payment proof <b>${inr(ppN.waitLines)}</b>${ppN.stores.length ? ` <span class="badge bad">${inr(ppN.stores.length)} to ask</span>` : ''}</button></div>` : '';
+    if (ppN && S.o.seg === 'proof') return `<div class="head"><h1>Pending orders</h1><span class="sub">Payment proof for orders of ${esc(rupees(ppSet().limit))} and above</span></div>${pseg}${vProof()}`;
     const seg = view === 'approved' ? `<div class="segs">${Object.keys(SEGS).map((k) => `<button class="${S.a.seg === k ? 'on' : ''}" data-act="seg" data-seg="${k}">${SEGS[k][0]} <b>${inr(M.lines.filter(SEGS[k][1]).length)}</b></button>`).join('')}</div>` : '';
     const g = GROUPS[o.group] || GROUPS.store_order;
     const detail = `<div id="odetail" class="detail ${S.o.sel ? (S.wide ? 'drawer' : 'sheetpage') : ''}" data-keep="odetail" ${S.o.sel ? '' : 'hidden'}>${S.o.sel ? oDetailHtml() : ''}</div>`;
     return `<div class="head"><h1>${view === 'approved' ? 'Approved orders' : 'Pending orders'}</h1><span class="sub" id="osum"></span></div>
-      ${seg}
+      ${seg}${pseg}
       <div class="toolbar eight">
         <input type="search" id="oq" class="wide search" placeholder="Search store, order, article, MC, who booked ..." value="${esc(o.q)}" aria-label="Search orders">
         <select id="ogroup" class="gsel" aria-label="Group by" title="How the lines are grouped">${Object.keys(GROUPS).map((k) => opt(k, 'Group by: ' + GROUPS[k].label, o.group)).join('')}</select>
@@ -2764,6 +2998,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
   const priceNote = (l, price) => (price != null ? ` at Rs ${inr2(price)} (store asked ${inr2(l.req_price)})` : '');
   async function approveWithLocs(l, typedQty, price, warned) {
     if (!l) return;
+    if (!warned && !(await ppApproveOk([l]))) return;
     const top = canGive(l);
     if (!top) return tell('Approve', 'Nothing can be approved on this line right now: there is no balance DC quantity for a full pack.');
     const q = Math.min(Math.max(1, Math.round(+typedQty || 0) || l.open_qty), top);
@@ -3670,11 +3905,25 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     refresh: () => run(async () => {}),
     nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
     orderFind: () => orderFind(''),
+    oseg: (el) => { S.o.seg = el.dataset.seg; S.o.checked.clear(); S.o.sel = null; S.o.limit = 300; render(); },
+    ppGo: () => { S.view = 'orders'; S.o.seg = 'proof'; S.o.sel = null; render(); },
+    ppAsk: (el) => ppAsk(el.dataset.store),
+    ppRemind: (el) => ppRemind(+el.dataset.id),
+    ppDo: (el) => ppDo(+el.dataset.id, el.dataset.a),
+    ppSettings: () => ppSettings(),
+    ppList: (el) => { S.view = 'orders'; Object.assign(S.o, { seg: 'list', status: '', flag: el.dataset.flag || '', q: '', buyer: '', store: el.dataset.store, mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear(); render(); },
+    bulkProof: () => {
+      const ls = Array.from(S.o.checked).map((id) => S.M.byId[id]).filter((l) => l && ppVal(l) > 0 && !ppWaiting(l));
+      if (!ls.length) return tell('Ask payment proof', 'Tick one or more pending order lines first.');
+      const st = Array.from(new Set(ls.map((l) => l.store_code)));
+      if (st.length > 1) return tell('Ask payment proof', `The ticked lines are from ${st.length} stores (${st.slice(0, 6).join(', ')}${st.length > 6 ? ' ...' : ''}). Tick the lines of one store at a time - each store gets its own email.`);
+      return ppAsk(st[0], ls.map((l) => l.id));
+    },
     ofOpen: (el) => {
       const l = S.M.byId[+el.dataset.id]; if (!l) return;
       $$('#modal .overlay').forEach((o) => o.close ? o.close() : o.remove());
       if (NEEDS.includes(l.status)) {
-        S.view = 'orders'; Object.assign(S.o, { status: '', flag: '', q: l.order_no, buyer: '', store: '', mc: '', limit: 300, collapsed: false }); S.o.toggled.clear();
+        S.view = 'orders'; Object.assign(S.o, { seg: ppWaiting(l) ? 'proof' : 'list', status: '', flag: '', q: l.order_no, buyer: '', store: '', mc: '', limit: 300, collapsed: false }); S.o.toggled.clear();
       } else {
         const seg = Object.keys(SEGS).find((k) => SEGS[k][1](l)) || 'todo';
         S.view = 'approved'; Object.assign(S.a, { seg, q: l.order_no, flag: '', store: '', mc: '', buyer: '', limit: 300, collapsed: false }); S.a.toggled.clear();
@@ -3698,7 +3947,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     bdOpen: (el) => {
       const by = el.dataset.by, k = el.dataset.k;
       S.view = 'orders';
-      Object.assign(S.o, { status: '', flag: '', q: '', buyer: '', store: '', mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear();
+      Object.assign(S.o, { seg: 'list', status: '', flag: '', q: '', buyer: '', store: '', mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear();
       if (by === 'buyer') S.o.buyer = k === '(buyer not set)' ? '-' : k;
       else if (by === 'mc') S.o.mc = k === '(MC not set)' ? '' : k;
       else if (by === 'mcmrp') { const mc = k.split('||')[0]; S.o.mc = mc === '(MC not set)' ? '' : mc; }
@@ -3709,7 +3958,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     go: (el) => {
       S.view = el.dataset.view; S.o.sel = null;
       if (S.view === 'approved') { Object.assign(S.a, { seg: 'todo', q: el.dataset.q || '', flag: '', store: '', mc: '', buyer: '', limit: 300, collapsed: false }); S.a.toggled.clear(); }
-      if (el.dataset.view === 'orders') { Object.assign(S.o, { status: el.dataset.status || '', flag: el.dataset.flag || '', q: el.dataset.q || '', buyer: el.dataset.buyer || '', store: '', mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear(); }
+      if (el.dataset.view === 'orders') { Object.assign(S.o, { seg: 'list', status: el.dataset.status || '', flag: el.dataset.flag || '', q: el.dataset.q || '', buyer: el.dataset.buyer || '', store: '', mc: '', sel: null, limit: 300, collapsed: false }); S.o.toggled.clear(); }
       if (S.view === 'orders' && S.o.flag && !ordersFiltered('orders').length) {          // the flagged lines are all approved already: show them there
         const flag = S.o.flag;
         for (const k of Object.keys(SEGS)) { Object.assign(S.a, { seg: k, flag, q: '', store: '', mc: '', buyer: '' }); if (ordersFiltered('approved').length) { S.view = 'approved'; S.o.flag = ''; break; } }
@@ -3773,7 +4022,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     tkOptDel: (el) => run(() => A.rpc('task_opt_save', { p: { id: +el.dataset.id, active: false } }), 'Removed from the list'),
     tkSave: (el) => tkSend(+el.dataset.id, false),
     tkDone: (el) => tkSend(+el.dataset.id, true),
-    tkToOrders: (el) => { Object.assign(S.o, { status: '', flag: '', q: el.dataset.store, buyer: '', store: '', mc: '', sel: null, limit: 300 }); S.view = 'orders'; render(); window.scrollTo(0, 0); },
+    tkToOrders: (el) => { Object.assign(S.o, { seg: 'list', status: '', flag: '', q: el.dataset.store, buyer: '', store: '', mc: '', sel: null, limit: 300 }); S.view = 'orders'; render(); window.scrollTo(0, 0); },
     tkReopen: (el) => run(() => A.rpc('task_edit', { p_task: +el.dataset.id, p: { status: 'OPEN' } }), 'Task reopened'),
     tkCancel: async (el) => { if (!(await confirmBox('Cancel this task?', 'It is taken off the lists and the teammate no longer sees it. The order lines stay as they are.', 'Cancel task', true))) return;
       run(() => A.rpc('task_edit', { p_task: +el.dataset.id, p: { status: 'CANCELLED' } }), 'Task cancelled'); },
@@ -3862,6 +4111,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       /* The approval is sent with exactly the locations the row shows, so what is recorded is what was on screen. */
       const pr = priceFrom(l, $(`.rowp[data-id="${el.dataset.id}"]`));
       if (!pr.ok) return tell('Approve', pr.msg);
+      if (!(await ppApproveOk([l]))) return;
       if (!(await qmApproveOk(l, pr.price))) return;
       if (!(await overOk(l, f))) return;
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
@@ -3912,6 +4162,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       if (f > (+i.max || 0)) return tell('Approve', `${inr(f)} pcs (${inr(q)} rounded up to full packs of ${l.pack}) is more than the balance DC quantity allows: ${inr(+i.max || 0)} pcs.`);
       const pr = priceFrom(l, $('#ap-price'));
       if (!pr.ok) return tell('Approve', pr.msg);
+      if (!(await ppApproveOk([l]))) return;
       if (!(await qmApproveOk(l, pr.price))) return;
       if (!(await overOk(l, f))) return;
       const sp = locsOn() ? C.autoSplit(S.M, l.article_code, f) : null;
@@ -3922,6 +4173,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     approveAlts: async () => {
       const l = cur(), picks = altPicks();
       if (!picks.length) return tell('Alternates', 'Enter a quantity against at least one alternate.');
+      if (!(await ppApproveOk([l]))) return;
       if (!(await confirmBox('Approve alternates', 'Approve these alternates on this order (the store has already agreed)?\n\n' + picks.map(pickLine).join('\n'), 'Approve'))) return;
       run(async () => { const res = await allocMany(picks.map((p) => ({ line: l.id, article: p.article, qty: p.qty }))); const f = failures(res); if (f) throw new Error(f); }, 'Alternates approved');
     },
@@ -4005,6 +4257,7 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
     },
     noStock: async (el) => {
       const l = S.M.byId[+el.dataset.id]; if (!l) return;
+      if (!(await ppApproveOk([l]))) return;
       const v = await ask('Approve without stock', `<pre>${esc(`${l.store_code} ${l.store_name}, order ${l.order_no}\n${l.article_code} ${l.description}\nQty wanted ${inr(l.req_qty)}${l.approved ? `, ${inr(l.approved)} already approved` : ''}`)}</pre>
         <p class="small">The line moves to Approved orders. Nothing is taken from the DC balance of this article. You can put it back to pending from its details.</p>
         <label class="f">Note (optional)<input type="text" name="note" maxlength="300" placeholder="e.g. given in 1005110, order TW26000201"></label>`, 'Approve without stock');
@@ -4042,6 +4295,7 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
     bulkNoStock: async () => {
       const ids = Array.from(sec().checked).filter((id) => S.M.byId[id] && S.M.byId[id].open_qty > 0);
       if (!ids.length) return tell('Approve without stock', 'Tick one or more pending order lines first.');
+      if (!(await ppApproveOk(ids.map((id) => S.M.byId[id])))) return;
       const v = await ask(`Approve ${ids.length} ${plural(ids.length, 'line')} without stock`, `<p class="small">They move to Approved orders. Nothing is taken from the DC balance.</p>
         <label class="f">Note (optional)<input type="text" name="note" maxlength="300" placeholder="e.g. given in another article"></label>`, 'Approve without stock');
       if (!v) return;
@@ -4052,6 +4306,7 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
       if (!ids.length) return tell('Approve in full', 'Tick one or more order lines first.');
       const items = ids.map((id) => S.M.byId[id]).filter((l) => l && !l.rejected && l.open_qty > 0).map((l) => ({ line: l.id, article: l.article_code, qty: l.open_qty }));
       if (!items.length) return tell('Approve in full', 'None of the ticked lines has a pending quantity.');
+      if (!(await ppApproveOk(items.map((x) => S.M.byId[x.line])))) return;
       S.busy = true;
       try {
         const res = await allocMany(items);
@@ -4083,6 +4338,7 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
     applySplit: async () => {
       const items = Object.entries(S.s.qty).filter(([, q]) => +q > 0).map(([id, q]) => ({ line: +id, article: S.s.art, qty: Math.round(+q) }));
       if (!items.length) return;
+      if (!(await ppApproveOk(items.map((x) => S.M.byId[x.line])))) return;
       S.busy = true;
       try {
         const res = await allocMany(items);
