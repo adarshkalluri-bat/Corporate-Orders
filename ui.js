@@ -21,7 +21,7 @@
       by: (() => { try { return localStorage.getItem('allocdesk.dashby') || 'buyer'; } catch (_) { return 'buyer'; } })(), all: false, sf: '', sall: false },
     ly: { dash: (() => { try { return localStorage.getItem('allocdesk.lydash') || 'ordered'; } catch (_) { return 'ordered'; } })(), basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
-    pp: { q: '', store: '', sort: 'old', open: new Set() },
+    pp: { q: '', store: '', sort: 'old', open: new Set(), openS: new Set() },
     tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false, opened: new Set(), closed: new Set() },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
     qp: { mc: '', mcText: '', mrp: '', q: '', res: null, mcs: null, mcsLoading: false, seq: 0, err: '', ssc: {}, state: '', sstock: false },
@@ -815,6 +815,16 @@ Household Category Team`;
     const p = { limit: Math.round(+v.limit || 0), to: v.to.trim(), cc: v.cc.trim(), subject: v.subject.trim() === PP_SUBJECT ? '' : v.subject.trim(), body: v.body.trim() === PP_BODY.trim() ? '' : v.body.trim() };
     run(() => A.rpc('pp_settings', { p }), 'Payment proof settings saved');
   }
+  /* the orders of a store, each with the items in it (version 3.38); state(g) adds the proof column on a request */
+  function ppOrderBlocks(gs, state) {
+    return `<div class="ppobs">${gs.map((g) => {
+      const items = g.lines.slice().sort((a, b) => String(a.article_code).localeCompare(String(b.article_code)));
+      return `<div class="ppob"><div class="row wrap ppobh"><b>${g.n ? `#${g.n} ` : ''}${esc(g.o)}</b><span class="small">${esc(g.cust || '')}${g.cust ? ' &middot; ' : ''}booked ${esc(dmy(String(g.date || '').slice(0, 10), true) || '-')}${g.del ? ` &middot; delivery ${esc(dmy(String(g.del).slice(0, 10), true))}` : ''} &middot; ${inr(items.length)} ${plural(items.length, 'item')}</span><span class="grow"></span>${state ? `<span class="ppobst">${state(g)}</span>` : ''}<b>${rupees(Math.round(g.value))}</b></div>
+        <div class="tablewrap"><table class="tight ppitems"><thead><tr><th>Article</th><th>Description</th><th class="right">MRP</th><th class="right">Qty</th><th class="right">Price (Rs)</th><th class="right">Value (Rs)</th><th>Status</th></tr></thead><tbody>${items.map((l) => `<tr>
+          <td><b>${esc(l.article_code)}</b></td><td>${esc(l.description || '')}<div class="small muted">${esc(l.mc_name || '')}</div></td><td class="right">${inr(l.mrp)}</td>
+          <td class="right b">${inr(ppVal(l) > 0 ? l.balance : l.req_qty)}${ppVal(l) > 0 && l.balance !== l.req_qty ? `<div class="small">of ${inr(l.req_qty)}</div>` : ''}</td><td class="right">${inr2(l.req_price)}</td><td class="right">${inr(Math.round(ppVal(l)))}</td><td>${pill(l.status)}</td></tr>`).join('')}</tbody></table></div></div>`;
+    }).join('')}</div>`;
+  }
   /* search, store and sort on the Payment proof screen (version 3.37) */
   function ppMatch(storeCode, orders) {
     const P = S.pp; if (P.store && storeCode !== P.store) return false;
@@ -842,19 +852,19 @@ Household Category Team`;
       asked: z0.asked.filter((r) => ppMatch(r.store_code, r.orders)).sort((a, b) => (P.sort === 'store' ? a.store_code.localeCompare(b.store_code) || a.id - b.id : P.sort === 'value' ? reqVal(b) - reqVal(a) : new Date(a.asked_at) - new Date(b.asked_at))),
       done: z0.done.filter((r) => ppMatch(r.store_code, r.orders)) };
     const of = (n, all) => (n === all ? `${inr(n)}` : `${inr(n)} of ${inr(all)}`);
+    const openS = (g) => P.openS.has(g.store) || z.stores.length === 1;
     const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${of(z.stores.length, z0.stores.length)} ${plural(z0.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Pending orders to ask about (Rs)</th><th class="right">Pending</th><th class="right" title="Approved this season without proof since the store was last asked. Counted towards the limit; they stay in Approved orders and are not asked about.">Approved, no proof<br><span class="thsub">counted only</span></th><th class="right">Total</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
-        <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div></td>
+        <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div>
+          <button class="btn link sm" data-act="ppStore" data-store="${esc(g.store)}">${openS(g) ? '&#9662; Hide orders' : `&#9656; Show ${g.orders.length === 1 ? 'the order' : `the ${g.orders.length} orders`}`}</button></td>
         <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}" title="${o.big ? 'Over the limit on its own' : ''}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
         <td class="right">${rupees(Math.round(g.pend))}</td><td class="right">${g.taken ? `${rupees(Math.round(g.taken))}<div class="small">${inr(g.takenOrders.size)} ${plural(g.takenOrders.size, 'order')}</div>` : '-'}</td><td class="right b">${rupees(Math.round(g.value))}</td>
-        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>${ppWaiveOn() ? `<button class="btn sm" data-act="ppWaive" data-store="${esc(g.store)}" title="Orders that need no proof (low value ...): no email, off this list">No proof needed ...</button>` : ''}` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : (z0.stores.length ? '<div class="note info">No store here matches the search.</div>' : '<div class="note good">No store is at or above the limit without proof asked.</div>')}</div>`;
-    const lineTable = (ls) => `<div class="tablewrap"><table class="tight"><thead><tr><th>Order</th><th>Article</th><th class="right">Pending pcs</th><th class="right">Value (Rs)</th><th>Status</th></tr></thead><tbody>${ls.map((l) => `<tr><td>${esc(l.order_no)}</td><td><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span></td><td class="right">${inr(l.balance)}</td><td class="right">${inr(Math.round(ppVal(l)))}</td><td>${pill(l.status)}</td></tr>`).join('')}</tbody></table></div>`;
+        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>${ppWaiveOn() ? `<button class="btn sm" data-act="ppWaive" data-store="${esc(g.store)}" title="Orders that need no proof (low value ...): no email, off this list">No proof needed ...</button>` : ''}` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>${openS(g) ? `<tr class="ppsub"><td colspan="6">${ppOrderBlocks(ppOrders(g.lines))}</td></tr>` : ''}`).join('')}</tbody></table></div>` : (z0.stores.length ? '<div class="note info">No store here matches the search.</div>' : '<div class="note good">No store is at or above the limit without proof asked.</div>')}</div>`;
     const undoB = (r, g) => (ed ? ` <button class="btn link sm" data-act="ppDo" data-a="undoOrder" data-id="${r.id}" data-o="${esc(g.o)}">Undo</button>` : '');
     const osCell = (r, g) => (g.os && g.os.s === 'ALLOWED' ? `<span class="badge alt">Allowed without proof</span>${undoB(r, g)}<div class="small">${when(g.os.at)}${g.os.by ? ' ' + esc(g.os.by) : ''}${g.os.note ? ' &middot; ' + esc(g.os.note) : ''}</div>`
       : g.os ? (g.os.s === 'RECEIVED'
       ? `<span class="badge good" title="${esc(g.os.note || '')}">Proof received</span>${ed ? ` <button class="btn link sm" data-act="ppDo" data-a="undoOrder" data-id="${r.id}" data-o="${esc(g.o)}">Undo</button>` : ''}<div class="small">${when(g.os.at)}${g.os.by ? ' ' + esc(g.os.by) : ''}${g.os.note ? ' &middot; ' + esc(g.os.note) : ''}</div>`
       : `<span class="badge bad">Rejected - no proof</span> <span class="small">${when(g.os.at)}</span>`)
       : g.pend ? '<span class="badge warn">Waiting</span>' : '<span class="small muted">nothing pending (approved or rejected since)</span>');
-    const ordTable = (r, gs) => `<div class="tablewrap"><table class="tight ppotable"><thead><tr><th>#</th><th>Order</th><th>Customer</th><th class="right">Value (Rs)</th><th>Proof</th></tr></thead><tbody>${gs.map((g) => `<tr><td>${g.n}</td><td><b>${esc(g.o)}</b></td><td class="small">${esc(g.cust || '-')}</td><td class="right">${inr(Math.round(g.value))}</td><td>${osCell(r, g)}</td></tr>`).join('')}</tbody></table></div>`;
     const card = (r) => {
       const ls = r.lines.map((x) => M.byId[x]).filter(Boolean), gs = ppReqOrders(r), days = Math.floor((Date.now() - new Date(r.asked_at)) / 864e5);
       const waitG = gs.filter((g) => !g.os), got = gs.filter((g) => g.os && g.os.s === 'RECEIVED').length, rej = gs.filter((g) => g.os && g.os.s === 'REJECTED').length, alw = gs.filter((g) => g.os && g.os.s === 'ALLOWED').length;
@@ -867,8 +877,7 @@ Household Category Team`;
       return `<div class="card stack ppcard" id="ppr-${r.id}">${head}
         <div class="small muted">Asked ${when(r.asked_at)}${r.asked_by ? ' by ' + esc(r.asked_by) : ''}${r.email_to ? ' &middot; to ' + esc(r.email_to) : ''}${r.reminders ? ` &middot; ${inr(r.reminders)} ${plural(r.reminders, 'reminder')}, last ${when(r.last_reminder_at)}` : ''}</div>
         ${gs.some((g) => g.value > 0) ? '' : '<div class="note info">Nothing is pending on it any more (approved or rejected since). Cancel the request to clear it.</div>'}
-        ${ordTable(r, gs)}
-        <details><summary class="small">The lines</summary>${lineTable(ls)}</details>
+        ${ppOrderBlocks(gs, (g) => osCell(r, g))}
         ${ed ? `<div class="row wrap ppbtns"><button class="btn sm primary" data-act="ppDo" data-a="received" data-id="${r.id}">Proof received ...</button>${ppAllowOn() ? `<button class="btn sm" data-act="ppDo" data-a="allow" data-id="${r.id}" title="The store may take up these orders without the proof (with the reason)">Allow without proof ...</button>` : ''}<button class="btn sm" data-act="ppRemind" data-id="${r.id}">Send reminder ...</button><button class="btn sm danger" data-act="ppDo" data-a="reject" data-id="${r.id}">No proof - reject ...</button>${settled && byOrd ? '' : `<button class="btn sm" data-act="ppDo" data-a="cancel" data-id="${r.id}">Cancel request</button>`}</div>` : ''}</div>`;
     };
     const wait = `<div class="stack"><h2 class="pph">Waiting for proof <span class="small">${of(z.asked.length, z0.asked.length)} ${plural(z0.asked.length, 'request')} &middot; click a store to open it</span></h2>${z.asked.length ? `<div class="stack pplistw">${z.asked.map(card).join('')}</div>` : `<div class="card"><div class="note info">${z0.asked.length ? 'No request here matches the search.' : 'No request is waiting for proof.'}</div></div>`}</div>`;
@@ -4150,8 +4159,9 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     ppAsk: (el) => ppAsk(el.dataset.store),
     ppWaive: (el) => ppWaive(el.dataset.store),
     ppCard: (el) => { const id = +el.dataset.id; if (S.pp.open.has(id)) S.pp.open.delete(id); else S.pp.open.add(id); setHtml('pplist', ppListHtml()); },
-    ppOpenAll: () => { PP().asked.filter((r) => ppMatch(r.store_code, r.orders)).forEach((r) => S.pp.open.add(r.id)); setHtml('pplist', ppListHtml()); },
-    ppCloseAll: () => { S.pp.open.clear(); setHtml('pplist', ppListHtml()); },
+    ppOpenAll: () => { const z = PP(); z.asked.filter((r) => ppMatch(r.store_code, r.orders)).forEach((r) => S.pp.open.add(r.id)); z.stores.filter((g) => ppMatch(g.store, g.orders.map((o) => o.order_no))).forEach((g) => S.pp.openS.add(g.store)); setHtml('pplist', ppListHtml()); },
+    ppCloseAll: () => { S.pp.open.clear(); S.pp.openS.clear(); setHtml('pplist', ppListHtml()); },
+    ppStore: (el) => { const k = el.dataset.store; if (S.pp.openS.has(k)) S.pp.openS.delete(k); else S.pp.openS.add(k); setHtml('pplist', ppListHtml()); },
     ppRemind: (el) => ppRemind(+el.dataset.id),
     ppDo: (el) => ppDo(+el.dataset.id, el.dataset.a, el.dataset.o),
     ppSettings: () => ppSettings(),

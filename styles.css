@@ -628,3 +628,14 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
 .pphead .chev { color: var(--muted); padding-top: 2px; }
 .ppcard.closed { padding: 10px 14px; }
 .ppcard.closed:hover { border-color: #CDBDF8; }
+
+/* v3.38 payment proof: each order with its items */
+.ppobs { display: flex; flex-direction: column; gap: 10px; }
+.ppob { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
+.ppobh { padding: 8px 12px; background: #F7F3FF; gap: 10px; }
+.ppobh .ppobst { white-space: normal; }
+.ppob .tablewrap { margin: 0; }
+table.ppitems td, table.ppitems th { white-space: normal; }
+table.ppitems th { background: #fff; }
+tr.ppsub > td { background: #FBF9FF; padding: 8px 10px 12px; }
+.ppobst .badge { white-space: nowrap; }
