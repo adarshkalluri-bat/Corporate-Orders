@@ -513,7 +513,7 @@
   const PP_SUBJECT = 'Advance payment proof required - {what}, Rs {value_lakh} - {store}';
   const PP_BODY = `Dear {store} team,
 
-We have {what} from your store pending approval, worth Rs {value} in total. As per process, corporate orders of Rs {limit} and above (one order, or a store's orders together) are approved only after proof of the advance payment received from the customer.
+We have {what} from your store this season, worth Rs {value} in total, for which we do not yet have proof of the customer's advance payment. As per process, corporate orders of Rs {limit} and above (one order, or a store's orders together) are approved only after this proof is received.
 
 {table}
 
@@ -536,7 +536,10 @@ Household Category Team`;
     try { o = JSON.parse(((S.M && S.M.meta) || {}).pp_settings || '{}') || {}; } catch (_) { o = {}; }
     return { limit: +o.limit > 0 ? +o.limit : 100000, to: o.to || '', cc: o.cc || '', subject: o.subject || PP_SUBJECT, body: o.body || PP_BODY };
   }
-  const ppVal = (l) => (NEEDS.includes(l.status) && l.balance > 0 ? l.balance * l.req_price : 0);
+  const ppVal = (l) => (NEEDS.includes(l.status) && l.balance > 0 ? l.balance * l.req_price : 0);          // still pending
+  const ppTaken = (l) => (l.status !== 'REJECTED' && l.approved > 0 ? Number(l.value) || 0 : 0);           // already approved
+  const ppAll = (l) => ppVal(l) + ppTaken(l);
+  /* version 3.34: the whole season counts - every order in the tracker (it holds this season's orders only; last year's are kept apart) */
   const PP_RANK = { ASKED: 3, RECEIVED: 2, REJECTED: 1 };
   /* where a line stands: its request's state, or (version 35) its own order's state within the request */
   const ppStOf = (r, l) => { if (!r) return ''; const os = (r.order_state || {})[l.order_no]; return os && os.s ? os.s : r.status; };
@@ -553,19 +556,25 @@ Household Category Team`;
       for (const id of r.lines || []) { const c = z.caseOf.get(+id); if (!c || PP_RANK[r.status] > PP_RANK[c.status] || (PP_RANK[r.status] === PP_RANK[c.status] && r.id > c.id)) z.caseOf.set(+id, r); }
     }
     const st0 = (l) => ppStOf(z.caseOf.get(l.id), l);
-    const open = M.lines.filter((l) => ppVal(l) > 0 && !['ASKED', 'RECEIVED', 'ALLOWED'].includes(st0(l)));
-    const byOrd = new Map(), bySt = new Map();
-    for (const l of open) { const v = ppVal(l); byOrd.set(l.order_no, (byOrd.get(l.order_no) || 0) + v); bySt.set(l.store_code, (bySt.get(l.store_code) || 0) + v); }
+    /* everything the store has this season without proof: pending, and already approved (orders split into small ones add up) */
+    const open = M.lines.filter((l) => ppAll(l) > 0 && !['ASKED', 'RECEIVED', 'ALLOWED'].includes(st0(l)));
+    const byOrd = new Map(), bySt = new Map(), pendSt = new Map(), takenSt = new Map();
+    for (const l of open) {
+      const v = ppAll(l); byOrd.set(l.order_no, (byOrd.get(l.order_no) || 0) + v); bySt.set(l.store_code, (bySt.get(l.store_code) || 0) + v);
+      pendSt.set(l.store_code, (pendSt.get(l.store_code) || 0) + ppVal(l)); takenSt.set(l.store_code, (takenSt.get(l.store_code) || 0) + ppTaken(l));
+    }
     const st = new Map();
     for (const l of open) {
       const ov = byOrd.get(l.order_no), sv = bySt.get(l.store_code);
       if (sv < lim && ov < lim) continue;
-      z.flag.set(l.id, { ov, sv, big: ov >= lim });
-      let g = st.get(l.store_code); if (!g) { g = { store: l.store_code, lines: [], value: sv, orders: new Map() }; st.set(l.store_code, g); }
+      if (!(pendSt.get(l.store_code) > 0)) continue;                    // nothing pending: nothing to hold back
+      if (ppVal(l) > 0) z.flag.set(l.id, { ov, sv, big: ov >= lim, taken: takenSt.get(l.store_code) || 0 });
+      let g = st.get(l.store_code); if (!g) { g = { store: l.store_code, lines: [], value: sv, pend: pendSt.get(l.store_code) || 0, taken: takenSt.get(l.store_code) || 0, orders: new Map() }; st.set(l.store_code, g); }
       g.lines.push(l);
-      if (!g.orders.has(l.order_no)) g.orders.set(l.order_no, { order_no: l.order_no, value: ov, big: ov >= lim, date: l.order_date || '' });
+      if (!g.orders.has(l.order_no)) g.orders.set(l.order_no, { order_no: l.order_no, value: ov, big: ov >= lim, date: l.order_date || '', pend: 0 });
+      g.orders.get(l.order_no).pend += ppVal(l);
     }
-    z.stores = Array.from(st.values()).map((g) => Object.assign(g, { orders: Array.from(g.orders.values()).sort((a, b) => b.value - a.value) })).sort((a, b) => b.value - a.value);
+    z.stores = Array.from(st.values()).map((g) => Object.assign(g, { orders: Array.from(g.orders.values()).sort((a, b) => (b.pend > 0) - (a.pend > 0) || b.value - a.value) })).sort((a, b) => b.value - a.value);
     z.waitLines = M.lines.filter((l) => NEEDS.includes(l.status) && st0(l) === 'ASKED').length;
     z.asked.sort((a, b) => new Date(a.asked_at) - new Date(b.asked_at));
     z.done.sort((a, b) => new Date(b.resolved_at || b.asked_at) - new Date(a.resolved_at || a.asked_at));
@@ -580,7 +589,7 @@ Household Category Team`;
     if (s === 'RECEIVED') { const at = os ? os.at : c.resolved_at, by = os ? os.by : c.resolved_by, nt = os ? os.note : c.note;
       return `<span class="badge good" title="${esc(`Payment proof received ${when(at)}${by ? ' (' + by + ')' : ''}${nt ? ': ' + nt : ''}`)}">Proof received</span>`; }
     if (s === 'ALLOWED' && os) return `<span class="badge alt" title="${esc(`Allowed to go ahead without payment proof ${when(os.at)}${os.by ? ' by ' + os.by : ''}${os.note ? ': ' + os.note : ''}`)}">Allowed without proof</span>`;
-    if (f) return `<span class="badge bad" title="${esc(`${f.big ? 'This order' : "The store's pending orders together"} come to ${rupees(f.big ? f.ov : f.sv)} - at or above ${rupees(ppSet().limit)}. Ask the store for proof of the advance payment before approving.`)}">Needs payment proof</span>`;
+    if (f) return `<span class="badge bad" title="${esc(`${f.big ? 'This order comes' : "The store's orders this season without payment proof come"} to ${rupees(f.big ? f.ov : f.sv)}${!f.big && f.taken ? ` (${rupees(f.taken)} of it already approved)` : ''} - at or above ${rupees(ppSet().limit)}. Ask the store for proof of the advance payment before approving.`)}">Needs payment proof</span>`;
     return '';
   }
   /* before an approval: lines that need proof, or are waiting for it, ask first */
@@ -602,27 +611,29 @@ Household Category Team`;
     const G = new Map();
     for (const l of ls) {
       let g = G.get(l.order_no);
-      if (!g) { g = { o: l.order_no, lines: [], value: 0, qty: 0, date: l.order_date || '', del: l.del_date || '', cust: '' }; G.set(l.order_no, g); }
-      g.lines.push(l); g.value += ppVal(l); g.qty += NEEDS.includes(l.status) ? l.balance : 0; if (!g.cust && l.customer) g.cust = l.customer;
+      if (!g) { g = { o: l.order_no, lines: [], value: 0, pendV: 0, takenV: 0, qty: 0, date: l.order_date || '', del: l.del_date || '', cust: '' }; G.set(l.order_no, g); }
+      g.lines.push(l); g.value += ppAll(l); g.pendV += ppVal(l); g.takenV += ppTaken(l); g.qty += ppLineQty(l); if (!g.cust && l.customer) g.cust = l.customer;
     }
     const arr = Array.from(G.values());
     if (numbering) arr.sort((a, b) => numbering.indexOf(a.o) - numbering.indexOf(b.o)); else arr.sort((a, b) => b.value - a.value);
     arr.forEach((g, i) => { g.n = numbering && numbering.indexOf(g.o) >= 0 ? numbering.indexOf(g.o) + 1 : i + 1; });
     return arr;
   }
+  const ppLineQty = (l) => (ppVal(l) > 0 ? l.balance : 0) + (ppTaken(l) > 0 ? l.approved : 0);
+  const ppOrdSt = (g) => (g.pendV > 0 && g.takenV > 0 ? 'Partly approved' : g.pendV > 0 ? 'Pending approval' : g.takenV > 0 ? 'Already approved' : '-');
   const lakh = (v) => (v >= 1e5 ? (Math.round(v / 1e4) / 10).toLocaleString('en-IN') + ' lakh' : inr(Math.round(v)));
   /* the email's tables: the orders (one row each, with a total), then each order's articles */
   function ppTable(ords, lim) {
     const F = 'font-family:Segoe UI,Arial,sans-serif;font-size:13px', td = `border:1px solid #ccc;padding:4px 8px;${F}`, th = `${td};background:#f3f0fb;text-align:left`, tr = `${td};text-align:right`;
-    const tot = ords.reduce((t, g) => t + g.value, 0), qty = ords.reduce((t, g) => t + g.qty, 0), star = ords.some((g) => g.value >= lim);
+    const tot = ords.reduce((t, g) => t + g.value, 0), qty = ords.reduce((t, g) => t + g.qty, 0), star = ords.some((g) => g.value >= lim), anyTaken = ords.some((g) => g.takenV > 0);
     const dd = (x) => esc(dmy(String(x || '').slice(0, 10), false));
-    const sum = `<table style="border-collapse:collapse"><tr><th style="${th}">#</th><th style="${th}">Order No</th><th style="${th}">Customer</th><th style="${th}">Booked</th><th style="${th}">Delivery</th><th style="${th}">Qty</th><th style="${th}">Order value (Rs)</th></tr>`
-      + ords.map((g) => `<tr><td style="${td}">${g.n}</td><td style="${td}"><b>${esc(g.o)}</b></td><td style="${td}">${esc(g.cust || '-')}</td><td style="${td}">${dd(g.date)}</td><td style="${td}">${dd(g.del)}</td><td style="${tr}">${inr(g.qty)}</td><td style="${tr}">${inr(Math.round(g.value))}${g.value >= lim ? ' &#9733;' : ''}</td></tr>`).join('')
-      + (ords.length > 1 ? `<tr><td style="${td};font-weight:bold" colspan="5">Total (${ords.length} orders)</td><td style="${tr};font-weight:bold">${inr(qty)}</td><td style="${tr};font-weight:bold">${inr(Math.round(tot))}</td></tr>` : '') + '</table>'
+    const sum = `<table style="border-collapse:collapse"><tr><th style="${th}">#</th><th style="${th}">Order No</th><th style="${th}">Customer</th><th style="${th}">Booked</th><th style="${th}">Delivery</th><th style="${th}">Qty</th><th style="${th}">Order value (Rs)</th>${anyTaken ? `<th style="${th}">Status</th>` : ''}</tr>`
+      + ords.map((g) => `<tr><td style="${td}">${g.n}</td><td style="${td}"><b>${esc(g.o)}</b></td><td style="${td}">${esc(g.cust || '-')}</td><td style="${td}">${dd(g.date)}</td><td style="${td}">${dd(g.del)}</td><td style="${tr}">${inr(g.qty)}</td><td style="${tr}">${inr(Math.round(g.value))}${g.value >= lim ? ' &#9733;' : ''}</td>${anyTaken ? `<td style="${td}">${ppOrdSt(g)}</td>` : ''}</tr>`).join('')
+      + (ords.length > 1 ? `<tr><td style="${td};font-weight:bold" colspan="5">Total (${ords.length} orders)</td><td style="${tr};font-weight:bold">${inr(qty)}</td><td style="${tr};font-weight:bold">${inr(Math.round(tot))}</td>${anyTaken ? `<td style="${td}"></td>` : ''}</tr>` : '') + '</table>'
       + (star && ords.length > 1 ? `<div style="${F};color:#666;margin-top:4px">&#9733; Rs ${inr(lim)} or more on its own</div>` : '');
     const det = ords.map((g) => `<div style="${F};font-weight:bold;margin:14px 0 4px">#${g.n} &nbsp;Order ${esc(g.o)}${g.cust ? ' - ' + esc(g.cust) : ''} - Rs ${inr(Math.round(g.value))}</div>
       <table style="border-collapse:collapse"><tr><th style="${th}">Article</th><th style="${th}">Description</th><th style="${th}">Qty</th><th style="${th}">Price (Rs)</th><th style="${th}">Value (Rs)</th></tr>`
-      + g.lines.filter((l) => ppVal(l) > 0).sort((a, b) => String(a.article_code).localeCompare(String(b.article_code))).map((l) => `<tr><td style="${td}">${esc(l.article_code)}</td><td style="${td}">${esc(l.description || '')}</td><td style="${tr}">${inr(l.balance)}</td><td style="${tr}">${inr2(l.req_price)}</td><td style="${tr}">${inr(Math.round(ppVal(l)))}</td></tr>`).join('') + '</table>').join('');
+      + g.lines.filter((l) => ppAll(l) > 0).sort((a, b) => String(a.article_code).localeCompare(String(b.article_code))).map((l) => `<tr><td style="${td}">${esc(l.article_code)}</td><td style="${td}">${esc(l.description || '')}${ppTaken(l) > 0 ? (ppVal(l) > 0 ? ' (partly approved)' : ' (already approved)') : ''}</td><td style="${tr}">${inr(ppLineQty(l))}</td><td style="${tr}">${inr2(ppLineQty(l) ? ppAll(l) / ppLineQty(l) : l.req_price)}</td><td style="${tr}">${inr(Math.round(ppAll(l)))}</td></tr>`).join('') + '</table>').join('');
     return `${sum}<div style="${F};font-weight:bold;margin-top:18px">Order details</div>${det}`;
   }
   function ppFill(t, o) { return String(t).replace(/\{(store|orders|value|value_lakh|limit|asked|what|count)\}/g, (m, k) => (o[k] != null ? String(o[k]) : m)); }
@@ -661,13 +672,15 @@ Household Category Team`;
   }
   async function ppAsk(store, ids) {
     const M = S.M, z = PP(), set = ppSet(), st = M.stores[store] || {};
-    let ls = ids ? ids.map((id) => M.byId[id]) : ((z.stores.find((x) => x.store === store) || {}).lines || []);
-    ls = ls.filter((l) => l && l.store_code === store && ppVal(l) > 0 && !ppWaiting(l));
+    const free = (l) => l && l.store_code === store && ppAll(l) > 0 && !['ASKED', 'RECEIVED', 'ALLOWED'].includes(ppCase(l));
+    const storeLines = (z.stores.find((x) => x.store === store) || {}).lines || [];
+    let ls = ids ? ids.map((id) => M.byId[id]).filter((l) => l && ppVal(l) > 0).concat(storeLines.filter((l) => ppVal(l) === 0)) : storeLines;
+    ls = Array.from(new Set(ls)).filter(free);
     if (!ls.length) return tell('Ask payment proof', 'None of these lines has a pending quantity that is not already waiting for proof.');
     const ords = ppOrders(ls);
     const v = await ask(`Ask ${store} ${st.store_name || ''} for payment proof`, `<div class="stack">
-      <p class="small">Tick the orders to ask about (only what is still pending is counted). The request is recorded, the lines move to the Payment proof screen, and the Outlook draft(s) are downloaded - open each and press Send.</p>
-      <div class="pporders">${ords.map((o, i) => `<label class="ppo"><input type="checkbox" name="o${i}" checked><span class="grow"><b>${o.n}. ${esc(o.o)}</b> <span class="small">${esc(o.cust || '')}${o.cust ? ' &middot; ' : ''}${inr(o.lines.length)} ${plural(o.lines.length, 'line')}${o.date ? ', booked ' + esc(dmy(o.date, true)) : ''}</span></span>${o.value >= set.limit ? '<span class="badge bad">&#9733; over the limit on its own</span>' : ''}<b>${rupees(Math.round(o.value))}</b></label>`).join('')}</div>
+      <p class="small">Tick the orders to ask about. Orders of this season already approved without proof are listed too (marked) - they count towards the limit, and the proof covers them. The request is recorded, the lines move to the Payment proof screen, and the Outlook draft(s) are downloaded - open each and press Send.</p>
+      <div class="pporders">${ords.map((o, i) => `<label class="ppo"><input type="checkbox" name="o${i}" checked><span class="grow"><b>${o.n}. ${esc(o.o)}</b> <span class="small">${esc(o.cust || '')}${o.cust ? ' &middot; ' : ''}${inr(o.lines.length)} ${plural(o.lines.length, 'line')}${o.date ? ', booked ' + esc(dmy(o.date, true)) : ''}</span>${o.takenV > 0 ? ` <span class="badge alt">${o.pendV > 0 ? 'partly approved' : 'already approved'}</span>` : ''}</span>${o.value >= set.limit ? '<span class="badge bad">&#9733; over the limit on its own</span>' : ''}<b>${rupees(Math.round(o.value))}</b></label>`).join('')}</div>
       ${ppByOrder() ? ppLayout(ords.length) : ''}
       ${ppDialogMail({ to: ppMails(st.email || '', set.to), cc: set.cc, subject: set.subject, body: set.body })}
       ${st.email ? '' : '<p class="note warn">No email address is on file for this store - type it in To.</p>'}</div>`, 'Record and make the email', { cls: 'big', noFocus: true });
@@ -675,7 +688,7 @@ Household Category Team`;
     const pick = ords.filter((o, i) => v['o' + i]);
     if (!pick.length) return tell('Ask payment proof', 'Tick at least one order.');
     pick.forEach((g, i) => { g.n = i + 1; });                         // numbered 1, 2, 3 ... as asked
-    const L = pick.flatMap((o) => o.lines), value = Math.round(L.reduce((t, l) => t + ppVal(l), 0));
+    const L = pick.flatMap((o) => o.lines), value = Math.round(L.reduce((t, l) => t + ppAll(l), 0));
     const lay = v.lay === 'per' ? 'per' : 'one', subject = ppFill(v.subject.trim() || set.subject, ppFillFor(store, pick));
     S.busy = true;
     try {
@@ -690,7 +703,7 @@ Household Category Team`;
   /* a request's orders, numbered as in the first email, with where each stands */
   function ppReqOrders(r) {
     const M = S.M, ls = (r.lines || []).map((x) => M.byId[x]).filter(Boolean);
-    return ppOrders(ls, r.orders).map((g) => Object.assign(g, { os: (r.order_state || {})[g.o] || null, pend: g.lines.some((l) => NEEDS.includes(l.status)) }));
+    return ppOrders(ls, r.orders).map((g) => Object.assign(g, { os: (r.order_state || {})[g.o] || null, pend: g.value > 0 }));
   }
   async function ppRemind(id) {
     const M = S.M, r = (M.proofs || []).find((x) => x.id === id); if (!r) return;
@@ -712,8 +725,8 @@ Household Category Team`;
   }
   /* proof received / rejected, order by order (or the whole request on a database before version 35) */
   async function ppPickOrders(r, a) {
-    const ords = ppReqOrders(r).filter((g) => !g.os), rec = a === 'received', alw = a === 'allow';
-    if (!ords.length) { await tell('Payment proof', 'Every order of this request is already settled.'); return null; }
+    const rec = a === 'received', alw = a === 'allow', ords = ppReqOrders(r).filter((g) => !g.os && (rec || alw || g.pendV > 0));
+    if (!ords.length) { await tell('Payment proof', a === 'reject' ? 'No order of this request is still waiting with something pending - orders already approved cannot be rejected here.' : 'Every order of this request is already settled.'); return null; }
     const v = await ask(rec ? 'Payment proof received' : alw ? 'Allow without payment proof' : 'No payment proof - reject', `<div class="stack">
       <p class="small">${rec ? `Tick the orders whose proof came from ${esc(r.store_code)}. Their lines go back to the Pending list marked <b>Proof received</b>, ready to approve; the others keep waiting.`
         : alw ? `Tick the orders ${esc(r.store_code)} may take up without the proof. Their lines go back to the Pending list marked <b>Allowed without proof</b> and can be approved as usual (no warning); the others keep waiting. The reason, your name and the time are kept with the order and in its lines' history.`
@@ -775,11 +788,11 @@ Household Category Team`;
   function vProof() {
     const M = S.M, z = PP(), set = ppSet(), ed = editor(), lim = set.limit, byOrd = ppByOrder();
     const sname = (c) => esc((M.stores[c] || {}).store_name || '');
-    const intro = `<div class="card ppintro"><div class="row wrap"><p class="small grow">Pending orders of <b>${rupees(lim)}</b> or more - one order, or all of a store's pending orders together - need proof of the customer's advance payment before approval. Only the quantity still pending counts. Lines already asked about do not count again, so a new order after that is counted on its own.</p>${ed ? '<button class="btn sm" data-act="ppSettings">Limit and email ...</button>' : ''}</div></div>`;
-    const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${inr(z.stores.length)} ${plural(z.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders pending (Rs)</th><th class="right">Lines</th><th class="right">Pending value</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
+    const intro = `<div class="card ppintro"><div class="row wrap"><p class="small grow">A store's orders of <b>${rupees(lim)}</b> or more - one order, or all its orders this season that have no proof yet, pending and already approved together - need proof of the customer's advance payment before more is approved. So small orders approved one by one still add up. Orders with proof received, or allowed without proof, do not count again.</p>${ed ? '<button class="btn sm" data-act="ppSettings">Limit and email ...</button>' : ''}</div></div>`;
+    const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${inr(z.stores.length)} ${plural(z.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders this season without proof (Rs)</th><th class="right">Pending</th><th class="right">Already approved</th><th class="right">Total</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
         <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div></td>
-        <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}" title="${o.big ? 'Over the limit on its own' : ''}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
-        <td class="right">${inr(g.lines.length)}</td><td class="right b">${rupees(Math.round(g.value))}</td>
+        <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}${o.pend > 0 ? '' : ' done'}" title="${o.big ? 'Over the limit on its own. ' : ''}${o.pend > 0 ? '' : 'Already approved, without proof'}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
+        <td class="right">${rupees(Math.round(g.pend))}</td><td class="right">${g.taken ? rupees(Math.round(g.taken)) : '-'}</td><td class="right b">${rupees(Math.round(g.value))}</td>
         <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="note good">No store is at or above the limit without proof asked.</div>'}</div>`;
     const lineTable = (ls) => `<div class="tablewrap"><table class="tight"><thead><tr><th>Order</th><th>Article</th><th class="right">Pending pcs</th><th class="right">Value (Rs)</th><th>Status</th></tr></thead><tbody>${ls.map((l) => `<tr><td>${esc(l.order_no)}</td><td><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span></td><td class="right">${inr(l.balance)}</td><td class="right">${inr(Math.round(ppVal(l)))}</td><td>${pill(l.status)}</td></tr>`).join('')}</tbody></table></div>`;
     const undoB = (r, g) => (ed ? ` <button class="btn link sm" data-act="ppDo" data-a="undoOrder" data-id="${r.id}" data-o="${esc(g.o)}">Undo</button>` : '');
@@ -787,16 +800,16 @@ Household Category Team`;
       : g.os ? (g.os.s === 'RECEIVED'
       ? `<span class="badge good" title="${esc(g.os.note || '')}">Proof received</span>${ed ? ` <button class="btn link sm" data-act="ppDo" data-a="undoOrder" data-id="${r.id}" data-o="${esc(g.o)}">Undo</button>` : ''}<div class="small">${when(g.os.at)}${g.os.by ? ' ' + esc(g.os.by) : ''}${g.os.note ? ' &middot; ' + esc(g.os.note) : ''}</div>`
       : `<span class="badge bad">Rejected - no proof</span> <span class="small">${when(g.os.at)}</span>`)
-      : g.pend ? '<span class="badge warn">Waiting</span>' : '<span class="small muted">nothing pending (approved or rejected since)</span>');
-    const ordTable = (r, gs) => `<div class="tablewrap"><table class="tight ppotable"><thead><tr><th>#</th><th>Order</th><th>Customer</th><th class="right">Pending value</th><th>Proof</th></tr></thead><tbody>${gs.map((g) => `<tr><td>${g.n}</td><td><b>${esc(g.o)}</b></td><td class="small">${esc(g.cust || '-')}</td><td class="right">${inr(Math.round(g.value))}</td><td>${osCell(r, g)}</td></tr>`).join('')}</tbody></table></div>`;
+      : g.pend ? `<span class="badge warn">Waiting</span>${g.takenV > 0 ? ` <span class="small">${g.pendV > 0 ? 'partly approved' : 'already approved'}</span>` : ''}` : '<span class="small muted">nothing left (rejected since)</span>');
+    const ordTable = (r, gs) => `<div class="tablewrap"><table class="tight ppotable"><thead><tr><th>#</th><th>Order</th><th>Customer</th><th class="right">Value (Rs)</th><th>Proof</th></tr></thead><tbody>${gs.map((g) => `<tr><td>${g.n}</td><td><b>${esc(g.o)}</b></td><td class="small">${esc(g.cust || '-')}</td><td class="right">${inr(Math.round(g.value))}</td><td>${osCell(r, g)}</td></tr>`).join('')}</tbody></table></div>`;
     const card = (r) => {
       const ls = r.lines.map((x) => M.byId[x]).filter(Boolean), gs = ppReqOrders(r), days = Math.floor((Date.now() - new Date(r.asked_at)) / 864e5);
       const waitG = gs.filter((g) => !g.os), got = gs.filter((g) => g.os && g.os.s === 'RECEIVED').length, rej = gs.filter((g) => g.os && g.os.s === 'REJECTED').length, alw = gs.filter((g) => g.os && g.os.s === 'ALLOWED').length;
       const val = Math.round(waitG.reduce((t, g) => t + g.value, 0)), settled = got + rej + alw;
       return `<div class="card stack ppcard"><div class="row wrap"><div class="grow pptitle"><b>${esc(r.store_code)}</b> ${sname(r.store_code)}</div><span class="badge ${days >= 2 ? 'bad' : 'warn'}">${days < 1 ? 'asked today' : `waiting ${days} ${plural(days, 'day')}`}</span></div>
-        <div class="small"><b>${inr(waitG.length)} of ${inr(gs.length)} ${plural(gs.length, 'order')}</b> waiting for proof &middot; ${rupees(val)} pending${got ? ` &middot; <span class="good">${got} received</span>` : ''}${alw ? ` &middot; ${alw} allowed without proof` : ''}${rej ? ` &middot; <span class="bad">${rej} rejected</span>` : ''}</div>
+        <div class="small"><b>${inr(waitG.length)} of ${inr(gs.length)} ${plural(gs.length, 'order')}</b> waiting for proof &middot; ${rupees(val)}${got ? ` &middot; <span class="good">${got} received</span>` : ''}${alw ? ` &middot; ${alw} allowed without proof` : ''}${rej ? ` &middot; <span class="bad">${rej} rejected</span>` : ''}</div>
         <div class="small muted">Asked ${when(r.asked_at)}${r.asked_by ? ' by ' + esc(r.asked_by) : ''}${r.email_to ? ' &middot; to ' + esc(r.email_to) : ''}${r.reminders ? ` &middot; ${inr(r.reminders)} ${plural(r.reminders, 'reminder')}, last ${when(r.last_reminder_at)}` : ''}</div>
-        ${ls.some((l) => NEEDS.includes(l.status)) ? '' : '<div class="note info">Nothing is pending on it any more (approved or rejected since). Cancel the request to clear it.</div>'}
+        ${gs.some((g) => g.value > 0) ? '' : '<div class="note info">Nothing is left on it (rejected since). Cancel the request to clear it.</div>'}
         ${ordTable(r, gs)}
         <details><summary class="small">The lines</summary>${lineTable(ls)}</details>
         ${ed ? `<div class="row wrap ppbtns"><button class="btn sm primary" data-act="ppDo" data-a="received" data-id="${r.id}">Proof received ...</button>${ppAllowOn() ? `<button class="btn sm" data-act="ppDo" data-a="allow" data-id="${r.id}" title="The store may take up these orders without the proof (with the reason)">Allow without proof ...</button>` : ''}<button class="btn sm" data-act="ppRemind" data-id="${r.id}">Send reminder ...</button><button class="btn sm danger" data-act="ppDo" data-a="reject" data-id="${r.id}">No proof - reject ...</button>${settled && byOrd ? '' : `<button class="btn sm" data-act="ppDo" data-a="cancel" data-id="${r.id}">Cancel request</button>`}</div>` : ''}</div>`;
@@ -891,7 +904,7 @@ Household Category Team`;
     if (sapDiff) items.push(['bad', `${inr(sapDiff)} ${plural(sapDiff, 'line')}: the SAP approval file says something different from this tracker - nothing was changed on ${sapDiff === 1 ? 'it' : 'them'}, please check`, go('Open', { flag: 'SAPDIFF' })]);
     if (ppOn()) {
       const z = PP(), lim = ppSet().limit, ppGo = '<button class="btn sm" data-act="ppGo">Open</button>';
-      if (z.stores.length) items.push(['bad', `${inr(z.stores.length)} ${plural(z.stores.length, 'store')} with pending orders of ${rupees(lim)} or more and no payment proof asked yet (${rupees(z.stores.reduce((t, x) => t + x.value, 0))} pending)`, ppGo]);
+      if (z.stores.length) items.push(['bad', `${inr(z.stores.length)} ${plural(z.stores.length, 'store')} with orders of ${rupees(lim)} or more this season without payment proof, and more pending (${rupees(z.stores.reduce((t, x) => t + x.pend, 0))} pending)`, ppGo]);
       const old = z.asked.filter((r) => Date.now() - new Date(r.asked_at) >= 2 * 864e5);
       if (old.length) items.push(['warn', `${inr(old.length)} payment proof ${plural(old.length, 'request')} waiting 2 days or more (${old.slice(0, 6).map((r) => esc(r.store_code)).join(', ')}${old.length > 6 ? ' ...' : ''})`, ppGo]);
     }
@@ -4712,6 +4725,6 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
   wideMQ.addEventListener('change', (e) => { S.wide = e.matches; if (S.M) render(); });
   window.addEventListener('error', (e) => { if (S.M && e.message) toast('Something went wrong: ' + e.message); });
 
-  window.AllocDesk = { S, reload, boot, importFile };  // handy for support and for the automated checks
+  window.AllocDesk = { S, reload, boot, importFile, pp: () => PP() };  // handy for support and for the automated checks
   boot();
 })();

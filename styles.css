@@ -618,3 +618,4 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
 .pplay { display: flex; flex-direction: column; gap: 4px; }
 .ppotable td { vertical-align: middle; white-space: normal; }
 .ppotable .badge { display: inline-block; white-space: nowrap; width: auto; }
+.ppord.done { background: #EEF6FF; color: #1F6DB5; }
