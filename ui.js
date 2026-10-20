@@ -28,7 +28,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 36;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 37;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -508,6 +508,7 @@
   const ppOn = () => !!S.M && S.M.schema >= 33;
   const ppByOrder = () => !!S.M && S.M.schema >= 35;              // version 35: proof received / rejected order by order
   const ppAllowOn = () => !!S.M && S.M.schema >= 36;               // version 36: an order allowed to go ahead without the proof
+  const ppWaiveOn = () => !!S.M && S.M.schema >= 37;               // version 37: "no proof needed" for orders not asked about (low value ...)
   /* {what} = "20 corporate orders" (one email for all) or "corporate order TW26000193" (one email per order);
      {value} the exact rupees, {value_lakh} "18.4 lakh"; {table} the order summary, then each order's articles */
   const PP_SUBJECT = 'Advance payment proof required - {what}, Rs {value_lakh} - {store}';
@@ -559,7 +560,7 @@ Household Category Team`;
     }
     const st0 = (l) => ppStOf(z.caseOf.get(l.id), l);
     const lastAsk = new Map();                                       // per store: the newest line in any of its requests
-    for (const r of M.proofs || []) for (const id of r.lines || []) if (+id > (lastAsk.get(r.store_code) || 0)) lastAsk.set(r.store_code, +id);
+    for (const r of M.proofs || []) if (r.kind !== 'waived') for (const id of r.lines || []) if (+id > (lastAsk.get(r.store_code) || 0)) lastAsk.set(r.store_code, +id);   // "no proof needed" does not start the count afresh
     const counts = (l) => ppVal(l) > 0 || (ppTaken(l) > 0 && l.id > (lastAsk.get(l.store_code) || 0));
     /* everything the store has this season without proof: pending, and approved since its last request (small orders add up) */
     const open = M.lines.filter((l) => counts(l) && !['ASKED', 'RECEIVED', 'ALLOWED'].includes(st0(l)));
@@ -595,7 +596,8 @@ Household Category Team`;
     if (s === 'ASKED' && NEEDS.includes(l.status)) return `<span class="badge warn" title="${esc(`Payment proof asked from the store on ${when(c.asked_at)} (request ${c.id})`)}">Payment proof asked</span>`;
     if (s === 'RECEIVED') { const at = os ? os.at : c.resolved_at, by = os ? os.by : c.resolved_by, nt = os ? os.note : c.note;
       return `<span class="badge good" title="${esc(`Payment proof received ${when(at)}${by ? ' (' + by + ')' : ''}${nt ? ': ' + nt : ''}`)}">Proof received</span>`; }
-    if (s === 'ALLOWED' && os) return `<span class="badge alt" title="${esc(`Allowed to go ahead without payment proof ${when(os.at)}${os.by ? ' by ' + os.by : ''}${os.note ? ': ' + os.note : ''}`)}">Allowed without proof</span>`;
+    if (s === 'ALLOWED' && os) return c.kind === 'waived' ? `<span class="badge alt" title="${esc(`No payment proof needed - ${os.note || ''} (${when(os.at)}${os.by ? ', ' + os.by : ''})`)}">No proof needed</span>`
+      : `<span class="badge alt" title="${esc(`Allowed to go ahead without payment proof ${when(os.at)}${os.by ? ' by ' + os.by : ''}${os.note ? ': ' + os.note : ''}`)}">Allowed without proof</span>`;
     if (f) return `<span class="badge bad" title="${esc(`${f.big ? 'This order comes' : "The store's orders this season without payment proof come"} to ${rupees(f.big ? f.ov : f.sv)}${!f.big && f.taken ? ` (${rupees(f.taken)} of it already approved)` : ''} - at or above ${rupees(ppSet().limit)}. Ask the store for proof of the advance payment before approving.`)}">Needs payment proof</span>`;
     return '';
   }
@@ -705,6 +707,24 @@ Household Category Team`;
       toast(`Recorded - ${n === 1 ? 'the email draft is' : `${n} email drafts are`} downloaded: open ${n === 1 ? 'it' : 'each'} and press Send`);
     } catch (e) { await tell('Not done', e.message); } finally { S.busy = false; }
   }
+  /* orders the editor decides need no proof (low value ...): settled at once, no email; the store stays listed if the rest still need proof */
+  async function ppWaive(store) {
+    const M = S.M, z = PP(), st = M.stores[store] || {};
+    const ls = ((z.stores.find((x) => x.store === store) || {}).lines || []).filter((l) => ppVal(l) > 0 && !['ASKED', 'RECEIVED', 'ALLOWED'].includes(ppCase(l)));
+    if (!ls.length) return tell('No proof needed', 'Nothing of this store is waiting for a decision.');
+    const ords = ppOrders(ls);
+    const v = await ask(`No proof needed - ${store} ${st.store_name || ''}`, `<div class="stack">
+      <p class="small">Tick the orders that need no payment proof. No email is sent; they go off this list and are approved as usual, without the warning. The reason, your name and the time are kept, and Undo (under Done) brings them back.</p>
+      <div class="pporders">${ords.map((o, i) => `<label class="ppo"><input type="checkbox" name="o${i}" ${ords.length === 1 ? 'checked' : ''}><span class="grow"><b>${esc(o.o)}</b> <span class="small">${esc(o.cust || '')}${o.cust ? ' &middot; ' : ''}${inr(o.lines.length)} ${plural(o.lines.length, 'line')}${o.date ? ', booked ' + esc(dmy(o.date, true)) : ''}</span></span><b>${rupees(Math.round(o.value))}</b></label>`).join('')}</div>
+      <label class="f">Why no proof is needed (needed)<input type="text" name="note" maxlength="300" placeholder="e.g. order value is low"></label></div>`, 'No proof needed', { noFocus: true });
+    if (!v) return;
+    const pick = ords.filter((o, i) => v['o' + i]);
+    if (!pick.length) return tell('No proof needed', 'Tick at least one order.');
+    if (!v.note.trim()) return tell('No proof needed', 'Write why no proof is needed - it is kept with the orders.');
+    const L = pick.flatMap((o) => o.lines);
+    run(() => A.rpc('proof_ask', { p: { store, lines: L.map((l) => l.id), orders: pick.map((g) => g.o), value: Math.round(L.reduce((t, l) => t + ppVal(l), 0)), waive: true, note: v.note.trim() } }),
+      `${pick.length} ${plural(pick.length, 'order')} marked "no proof needed"`);
+  }
   /* a request's orders, numbered as in the first email, with where each stands */
   function ppReqOrders(r) {
     const M = S.M, ls = (r.lines || []).map((x) => M.byId[x]).filter(Boolean);
@@ -776,6 +796,10 @@ Household Category Team`;
       return run(() => A.rpc('proof_update', { p_id: id, p_action: 'cancel', p_note: '' }), 'Request cancelled');
     }
     if (a === 'reopen') return run(() => A.rpc('proof_update', { p_id: id, p_action: 'reopen', p_note: '' }), 'Back to waiting for proof');
+    if (a === 'unwaive') {
+      if (!(await confirmBox('Undo "no proof needed"', `${r.store_code}, orders ${r.orders.join(', ')}: they count again and may need proof.`, 'Undo'))) return;
+      return run(() => A.rpc('proof_update', { p_id: id, p_action: 'cancel', p_note: '' }), 'Undone - the orders count again');
+    }
   }
   async function ppSettings() {
     const set = ppSet();
@@ -798,7 +822,7 @@ Household Category Team`;
         <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div></td>
         <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}" title="${o.big ? 'Over the limit on its own' : ''}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
         <td class="right">${rupees(Math.round(g.pend))}</td><td class="right">${g.taken ? `${rupees(Math.round(g.taken))}<div class="small">${inr(g.takenOrders.size)} ${plural(g.takenOrders.size, 'order')}</div>` : '-'}</td><td class="right b">${rupees(Math.round(g.value))}</td>
-        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="note good">No store is at or above the limit without proof asked.</div>'}</div>`;
+        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>${ppWaiveOn() ? `<button class="btn sm" data-act="ppWaive" data-store="${esc(g.store)}" title="Orders that need no proof (low value ...): no email, off this list">No proof needed ...</button>` : ''}` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="note good">No store is at or above the limit without proof asked.</div>'}</div>`;
     const lineTable = (ls) => `<div class="tablewrap"><table class="tight"><thead><tr><th>Order</th><th>Article</th><th class="right">Pending pcs</th><th class="right">Value (Rs)</th><th>Status</th></tr></thead><tbody>${ls.map((l) => `<tr><td>${esc(l.order_no)}</td><td><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span></td><td class="right">${inr(l.balance)}</td><td class="right">${inr(Math.round(ppVal(l)))}</td><td>${pill(l.status)}</td></tr>`).join('')}</tbody></table></div>`;
     const undoB = (r, g) => (ed ? ` <button class="btn link sm" data-act="ppDo" data-a="undoOrder" data-id="${r.id}" data-o="${esc(g.o)}">Undo</button>` : '');
     const osCell = (r, g) => (g.os && g.os.s === 'ALLOWED' ? `<span class="badge alt">Allowed without proof</span>${undoB(r, g)}<div class="small">${when(g.os.at)}${g.os.by ? ' ' + esc(g.os.by) : ''}${g.os.note ? ' &middot; ' + esc(g.os.note) : ''}</div>`
@@ -822,15 +846,16 @@ Household Category Team`;
     const wait = `<div class="stack"><h2 class="pph">Waiting for proof <span class="small">${inr(z.asked.length)} ${plural(z.asked.length, 'request')}, oldest first</span></h2>${z.asked.length ? `<div class="ppgrid">${z.asked.map(card).join('')}</div>` : '<div class="card"><div class="note info">No request is waiting for proof.</div></div>'}</div>`;
     const result = (r) => {
       const os = Object.values(r.order_state || {}), got = os.filter((x) => x.s === 'RECEIVED').length, rej = os.filter((x) => x.s === 'REJECTED').length, alw = os.filter((x) => x.s === 'ALLOWED').length;
+      if (r.kind === 'waived') return '<span class="badge alt">No proof needed</span>';
       if (!os.length) return r.status === 'RECEIVED' ? '<span class="badge good">Proof received</span>' : '<span class="badge bad">Rejected - no proof</span>';
       return `${got ? `<span class="badge good">${got} received</span>` : ''} ${alw ? `<span class="badge alt">${alw} allowed without proof</span>` : ''} ${rej ? `<span class="badge bad">${rej} rejected</span>` : ''}`;
     };
-    const notes = (r) => [r.note || ''].concat(Object.entries(r.order_state || {}).filter(([, x]) => x.note).map(([o, x]) => `${o}: ${x.note}`)).filter(Boolean).join(' | ');
+    const notes = (r) => (r.kind === 'waived' ? r.note || '' : [r.note || ''].concat(Object.entries(r.order_state || {}).filter(([, x]) => x.note).map(([o, x]) => `${o}: ${x.note}`)).filter(Boolean).join(' | '));
     const done = z.done.length ? `<div class="card stack"><h2>Done <span class="small">latest first</span></h2><div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders</th><th class="right">Value asked</th><th>Result</th><th>Note</th><th></th></tr></thead><tbody>${z.done.slice(0, 60).map((r) => `<tr>
         <td><b>${esc(r.store_code)}</b> ${sname(r.store_code)}</td><td>${r.orders.map(esc).join(', ')}</td><td class="right">${rupees(Math.round(+r.value))}</td>
         <td>${result(r)}<div class="small">${when(r.resolved_at)}${r.resolved_by ? ' ' + esc(r.resolved_by) : ''}</div></td>
         <td class="small">${esc(notes(r))}</td>
-        <td class="right"><div class="ppbtns">${r.status === 'RECEIVED' ? `<button class="btn sm" data-act="ppList" data-store="${esc(r.store_code)}" data-flag="${Object.values(r.order_state || {}).some((x) => x.s === 'RECEIVED') || !Object.keys(r.order_state || {}).length ? 'PROOFOK' : 'PROOFALLOW'}">Lines</button>${ed ? `<button class="btn sm" data-act="ppDo" data-a="reopen" data-id="${r.id}" title="Back to waiting for proof (orders rejected for no proof stay rejected)">Undo</button>` : ''}` : ''}</div></td></tr>`).join('')}</tbody></table></div></div>` : '';
+        <td class="right"><div class="ppbtns">${r.status === 'RECEIVED' ? `<button class="btn sm" data-act="ppList" data-store="${esc(r.store_code)}" data-flag="${Object.values(r.order_state || {}).some((x) => x.s === 'RECEIVED') || !Object.keys(r.order_state || {}).length ? 'PROOFOK' : 'PROOFALLOW'}">Lines</button>${ed ? (r.kind === 'waived' ? `<button class="btn sm" data-act="ppDo" data-a="unwaive" data-id="${r.id}" title="The orders need proof again">Undo</button>` : `<button class="btn sm" data-act="ppDo" data-a="reopen" data-id="${r.id}" title="Back to waiting for proof (orders rejected for no proof stay rejected)">Undo</button>`) : ''}` : ''}</div></td></tr>`).join('')}</tbody></table></div></div>` : '';
     return `<div class="stack ppscreen">${intro}${need}${wait}${done}</div>`;
   }
 
@@ -868,7 +893,7 @@ Household Category Team`;
     SAPDONE: ['Approved or rejected in SAP', (l) => !!l.sap_appr],
     PROOF: ['Needs payment proof (not asked yet)', (l) => ppOn() && PP().flag.has(l.id)],
     PROOFOK: ['Payment proof received', (l) => ppOn() && ppCase(l) === 'RECEIVED'],
-    PROOFALLOW: ['Allowed without payment proof', (l) => ppOn() && ppCase(l) === 'ALLOWED']
+    PROOFALLOW: ['Allowed without payment proof / no proof needed', (l) => ppOn() && ppCase(l) === 'ALLOWED']
   };
   const dupText = (l) => `entered ${l.dup_count} times in the SAP export (qty ${l.dup_qty || '?'})`;
   const dupBadge = (l) => (l.dup_count > 0 ? `<span class="badge bad" title="${esc('The same article is ' + dupText(l) + '. It is taken once.')}">Duplicate article</span>` : '');
@@ -4095,6 +4120,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     oseg: (el) => { S.o.seg = el.dataset.seg; S.o.checked.clear(); S.o.sel = null; S.o.limit = 300; render(); },
     ppGo: () => { S.view = 'orders'; S.o.seg = 'proof'; S.o.sel = null; render(); },
     ppAsk: (el) => ppAsk(el.dataset.store),
+    ppWaive: (el) => ppWaive(el.dataset.store),
     ppRemind: (el) => ppRemind(+el.dataset.id),
     ppDo: (el) => ppDo(+el.dataset.id, el.dataset.a, el.dataset.o),
     ppSettings: () => ppSettings(),
