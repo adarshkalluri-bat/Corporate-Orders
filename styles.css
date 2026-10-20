@@ -613,3 +613,8 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
 .qerow .qex input { width: auto; }
 @media (max-width: 600px) { .qerow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .qerow > label.f:first-child { grid-column: 1 / -1; } .qerow .qex { padding-top: 0; } }
 .qact { white-space: nowrap; }
+
+/* v3.32 payment proof order by order */
+.pplay { display: flex; flex-direction: column; gap: 4px; }
+.ppotable td { vertical-align: middle; white-space: normal; }
+.ppotable .badge { display: inline-block; white-space: nowrap; width: auto; }
