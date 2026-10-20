@@ -619,3 +619,12 @@ table.oftable tr.ofdel td { color: var(--muted); background: #FAF8FC; }
 .ppotable td { vertical-align: middle; white-space: normal; }
 .ppotable .badge { display: inline-block; white-space: nowrap; width: auto; }
 .ppord.done { background: #EEF6FF; color: #1F6DB5; }
+
+/* v3.37 payment proof: search, sort, closed cards */
+.toolbar.ppbar { display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); align-items: center; }
+@media (min-width: 900px) { .toolbar.ppbar { grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1fr) auto; } }
+.toolbar.ppbar input, .toolbar.ppbar select { min-width: 0; width: 100%; }
+.pphead { cursor: pointer; align-items: flex-start; gap: 10px; }
+.pphead .chev { color: var(--muted); padding-top: 2px; }
+.ppcard.closed { padding: 10px 14px; }
+.ppcard.closed:hover { border-color: #CDBDF8; }

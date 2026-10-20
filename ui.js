@@ -21,6 +21,7 @@
       by: (() => { try { return localStorage.getItem('allocdesk.dashby') || 'buyer'; } catch (_) { return 'buyer'; } })(), all: false, sf: '', sall: false },
     ly: { dash: (() => { try { return localStorage.getItem('allocdesk.lydash') || 'ordered'; } catch (_) { return 'ordered'; } })(), basis: 'ordered', period: 'same', unit: 'value', q: '', sq: '', sonly: false, open: new Set(), all: false, sum: null, stores: null, batch: null, loading: false, err: '', lq: '', lines: null, lbusy: false },
     st: { q: '', group: 'none', sort: 'pct', status: '', store: '', state: '', mc: '', buyer: '', limit: 300, collapsed: false, toggled: new Set() },
+    pp: { q: '', store: '', sort: 'old', open: new Set() },
     tk: { seg: 'mine', q: '', person: '', manage: false, focus: null, draft: {}, init: false, opened: new Set(), closed: new Set() },
     sk: { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '', group: 'rows', sort: 'stock', limit: 300, res: null, err: '', key: '', seq: 0, loading: false, mcs: null },
     qp: { mc: '', mcText: '', mrp: '', q: '', res: null, mcs: null, mcsLoading: false, seq: 0, err: '', ssc: {}, state: '', sstock: false },
@@ -814,15 +815,38 @@ Household Category Team`;
     const p = { limit: Math.round(+v.limit || 0), to: v.to.trim(), cc: v.cc.trim(), subject: v.subject.trim() === PP_SUBJECT ? '' : v.subject.trim(), body: v.body.trim() === PP_BODY.trim() ? '' : v.body.trim() };
     run(() => A.rpc('pp_settings', { p }), 'Payment proof settings saved');
   }
+  /* search, store and sort on the Payment proof screen (version 3.37) */
+  function ppMatch(storeCode, orders) {
+    const P = S.pp; if (P.store && storeCode !== P.store) return false;
+    const w = P.q.trim().toLowerCase().split(/\s+/).filter(Boolean); if (!w.length) return true;
+    const st = S.M.stores[storeCode] || {}, hay = [storeCode, st.store_name, st.city, st.state].concat(orders || []).join(' ').toLowerCase();
+    return w.every((x) => hay.includes(x));
+  }
   function vProof() {
-    const M = S.M, z = PP(), set = ppSet(), ed = editor(), lim = set.limit, byOrd = ppByOrder();
-    const sname = (c) => esc((M.stores[c] || {}).store_name || '');
+    const M = S.M, z = PP(), set = ppSet(), ed = editor(), lim = set.limit, P = S.pp;
+    const stores = Array.from(new Set(z.stores.map((g) => g.store).concat(z.asked.map((r) => r.store_code), z.done.map((r) => r.store_code)))).sort();
+    const opt = (v, t, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(t)}</option>`;
+    const bar = `<div class="toolbar ppbar"><input type="search" id="ppq" class="search" placeholder="Search store code, store name, city, order no ..." value="${esc(P.q)}" aria-label="Search payment proof">
+      <select id="ppstore" aria-label="Store">${opt('', 'All stores', P.store)}${stores.map((c) => opt(c, `${c}  ${(M.stores[c] || {}).store_name || ''}`, P.store)).join('')}</select>
+      <select id="ppsort" aria-label="Sort">${[['old', 'Sort: oldest asked first'], ['value', 'Sort: biggest value first'], ['store', 'Sort: store code A-Z']].map(([k, t]) => opt(k, t, P.sort)).join('')}</select>
+      <div class="row ppbtns"><button class="btn sm" data-act="ppOpenAll">Open all</button><button class="btn sm" data-act="ppCloseAll">Close all</button></div></div>`;
     const intro = `<div class="card ppintro"><div class="row wrap"><p class="small grow">A store's orders of <b>${rupees(lim)}</b> or more - one order, or all its orders this season that have no proof yet - need proof of the customer's advance payment before more is approved. Orders already approved without proof are <b>counted</b> (so small orders approved one by one still add up) but never asked about: they stay in Approved orders. Asking a store starts its count afresh; orders with proof received, or allowed, do not count again.</p>${ed ? '<button class="btn sm" data-act="ppSettings">Limit and email ...</button>' : ''}</div></div>`;
-    const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${inr(z.stores.length)} ${plural(z.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Pending orders to ask about (Rs)</th><th class="right">Pending</th><th class="right" title="Approved this season without proof since the store was last asked. Counted towards the limit; they stay in Approved orders and are not asked about.">Approved, no proof<br><span class="thsub">counted only</span></th><th class="right">Total</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
+    return `<div class="stack ppscreen">${intro}${bar}<div id="pplist" class="stack">${ppListHtml()}</div></div>`;
+  }
+  function ppListHtml() {
+    const M = S.M, z0 = PP(), ed = editor(), byOrd = ppByOrder(), P = S.pp;
+    const sname = (c) => esc((M.stores[c] || {}).store_name || '');
+    const reqVal = (r) => ppReqOrders(r).filter((g) => !g.os).reduce((t, g) => t + g.value, 0);
+    const z = {
+      stores: z0.stores.filter((g) => ppMatch(g.store, g.orders.map((o) => o.order_no))).sort((a, b) => (P.sort === 'store' ? a.store.localeCompare(b.store) : b.value - a.value)),
+      asked: z0.asked.filter((r) => ppMatch(r.store_code, r.orders)).sort((a, b) => (P.sort === 'store' ? a.store_code.localeCompare(b.store_code) || a.id - b.id : P.sort === 'value' ? reqVal(b) - reqVal(a) : new Date(a.asked_at) - new Date(b.asked_at))),
+      done: z0.done.filter((r) => ppMatch(r.store_code, r.orders)) };
+    const of = (n, all) => (n === all ? `${inr(n)}` : `${inr(n)} of ${inr(all)}`);
+    const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${of(z.stores.length, z0.stores.length)} ${plural(z0.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Pending orders to ask about (Rs)</th><th class="right">Pending</th><th class="right" title="Approved this season without proof since the store was last asked. Counted towards the limit; they stay in Approved orders and are not asked about.">Approved, no proof<br><span class="thsub">counted only</span></th><th class="right">Total</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
         <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div></td>
         <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}" title="${o.big ? 'Over the limit on its own' : ''}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
         <td class="right">${rupees(Math.round(g.pend))}</td><td class="right">${g.taken ? `${rupees(Math.round(g.taken))}<div class="small">${inr(g.takenOrders.size)} ${plural(g.takenOrders.size, 'order')}</div>` : '-'}</td><td class="right b">${rupees(Math.round(g.value))}</td>
-        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>${ppWaiveOn() ? `<button class="btn sm" data-act="ppWaive" data-store="${esc(g.store)}" title="Orders that need no proof (low value ...): no email, off this list">No proof needed ...</button>` : ''}` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : '<div class="note good">No store is at or above the limit without proof asked.</div>'}</div>`;
+        <td class="right"><div class="ppbtns">${ed ? `<button class="btn sm primary" data-act="ppAsk" data-store="${esc(g.store)}">Ask for proof ...</button>${ppWaiveOn() ? `<button class="btn sm" data-act="ppWaive" data-store="${esc(g.store)}" title="Orders that need no proof (low value ...): no email, off this list">No proof needed ...</button>` : ''}` : ''}<button class="btn sm" data-act="ppList" data-store="${esc(g.store)}" data-flag="PROOF">Lines</button></div></td></tr>`).join('')}</tbody></table></div>` : (z0.stores.length ? '<div class="note info">No store here matches the search.</div>' : '<div class="note good">No store is at or above the limit without proof asked.</div>')}</div>`;
     const lineTable = (ls) => `<div class="tablewrap"><table class="tight"><thead><tr><th>Order</th><th>Article</th><th class="right">Pending pcs</th><th class="right">Value (Rs)</th><th>Status</th></tr></thead><tbody>${ls.map((l) => `<tr><td>${esc(l.order_no)}</td><td><b>${esc(l.article_code)}</b> <span class="small">${esc(l.description || '')}</span></td><td class="right">${inr(l.balance)}</td><td class="right">${inr(Math.round(ppVal(l)))}</td><td>${pill(l.status)}</td></tr>`).join('')}</tbody></table></div>`;
     const undoB = (r, g) => (ed ? ` <button class="btn link sm" data-act="ppDo" data-a="undoOrder" data-id="${r.id}" data-o="${esc(g.o)}">Undo</button>` : '');
     const osCell = (r, g) => (g.os && g.os.s === 'ALLOWED' ? `<span class="badge alt">Allowed without proof</span>${undoB(r, g)}<div class="small">${when(g.os.at)}${g.os.by ? ' ' + esc(g.os.by) : ''}${g.os.note ? ' &middot; ' + esc(g.os.note) : ''}</div>`
@@ -835,15 +859,19 @@ Household Category Team`;
       const ls = r.lines.map((x) => M.byId[x]).filter(Boolean), gs = ppReqOrders(r), days = Math.floor((Date.now() - new Date(r.asked_at)) / 864e5);
       const waitG = gs.filter((g) => !g.os), got = gs.filter((g) => g.os && g.os.s === 'RECEIVED').length, rej = gs.filter((g) => g.os && g.os.s === 'REJECTED').length, alw = gs.filter((g) => g.os && g.os.s === 'ALLOWED').length;
       const val = Math.round(waitG.reduce((t, g) => t + g.value, 0)), settled = got + rej + alw;
-      return `<div class="card stack ppcard"><div class="row wrap"><div class="grow pptitle"><b>${esc(r.store_code)}</b> ${sname(r.store_code)}</div><span class="badge ${days >= 2 ? 'bad' : 'warn'}">${days < 1 ? 'asked today' : `waiting ${days} ${plural(days, 'day')}`}</span></div>
-        <div class="small"><b>${inr(waitG.length)} of ${inr(gs.length)} ${plural(gs.length, 'order')}</b> waiting for proof &middot; ${rupees(val)}${got ? ` &middot; <span class="good">${got} received</span>` : ''}${alw ? ` &middot; ${alw} allowed without proof` : ''}${rej ? ` &middot; <span class="bad">${rej} rejected</span>` : ''}</div>
+      const open = P.open.has(r.id) || z.asked.length === 1;
+      const head = `<div class="row wrap pphead pick" data-act="ppCard" data-id="${r.id}" title="${open ? 'Close' : 'Open'} this request"><span class="chev">${open ? '&#9662;' : '&#9656;'}</span><div class="grow pptitle"><b>${esc(r.store_code)}</b> ${sname(r.store_code)}
+          <div class="small"><b>${inr(waitG.length)} of ${inr(gs.length)} ${plural(gs.length, 'order')}</b> waiting for proof &middot; ${rupees(val)}${got ? ` &middot; <span class="good">${got} received</span>` : ''}${alw ? ` &middot; ${alw} allowed without proof` : ''}${rej ? ` &middot; <span class="bad">${rej} rejected</span>` : ''}${open ? '' : ` &middot; asked ${when(r.asked_at)}${r.reminders ? `, ${inr(r.reminders)} ${plural(r.reminders, 'reminder')}` : ''}`}</div></div>
+          <span class="badge ${days >= 2 ? 'bad' : 'warn'}">${days < 1 ? 'asked today' : `waiting ${days} ${plural(days, 'day')}`}</span></div>`;
+      if (!open) return `<div class="card ppcard closed" id="ppr-${r.id}">${head}</div>`;
+      return `<div class="card stack ppcard" id="ppr-${r.id}">${head}
         <div class="small muted">Asked ${when(r.asked_at)}${r.asked_by ? ' by ' + esc(r.asked_by) : ''}${r.email_to ? ' &middot; to ' + esc(r.email_to) : ''}${r.reminders ? ` &middot; ${inr(r.reminders)} ${plural(r.reminders, 'reminder')}, last ${when(r.last_reminder_at)}` : ''}</div>
         ${gs.some((g) => g.value > 0) ? '' : '<div class="note info">Nothing is pending on it any more (approved or rejected since). Cancel the request to clear it.</div>'}
         ${ordTable(r, gs)}
         <details><summary class="small">The lines</summary>${lineTable(ls)}</details>
         ${ed ? `<div class="row wrap ppbtns"><button class="btn sm primary" data-act="ppDo" data-a="received" data-id="${r.id}">Proof received ...</button>${ppAllowOn() ? `<button class="btn sm" data-act="ppDo" data-a="allow" data-id="${r.id}" title="The store may take up these orders without the proof (with the reason)">Allow without proof ...</button>` : ''}<button class="btn sm" data-act="ppRemind" data-id="${r.id}">Send reminder ...</button><button class="btn sm danger" data-act="ppDo" data-a="reject" data-id="${r.id}">No proof - reject ...</button>${settled && byOrd ? '' : `<button class="btn sm" data-act="ppDo" data-a="cancel" data-id="${r.id}">Cancel request</button>`}</div>` : ''}</div>`;
     };
-    const wait = `<div class="stack"><h2 class="pph">Waiting for proof <span class="small">${inr(z.asked.length)} ${plural(z.asked.length, 'request')}, oldest first</span></h2>${z.asked.length ? `<div class="ppgrid">${z.asked.map(card).join('')}</div>` : '<div class="card"><div class="note info">No request is waiting for proof.</div></div>'}</div>`;
+    const wait = `<div class="stack"><h2 class="pph">Waiting for proof <span class="small">${of(z.asked.length, z0.asked.length)} ${plural(z0.asked.length, 'request')} &middot; click a store to open it</span></h2>${z.asked.length ? `<div class="stack pplistw">${z.asked.map(card).join('')}</div>` : `<div class="card"><div class="note info">${z0.asked.length ? 'No request here matches the search.' : 'No request is waiting for proof.'}</div></div>`}</div>`;
     const result = (r) => {
       const os = Object.values(r.order_state || {}), got = os.filter((x) => x.s === 'RECEIVED').length, rej = os.filter((x) => x.s === 'REJECTED').length, alw = os.filter((x) => x.s === 'ALLOWED').length;
       if (r.kind === 'waived') return '<span class="badge alt">No proof needed</span>';
@@ -851,12 +879,12 @@ Household Category Team`;
       return `${got ? `<span class="badge good">${got} received</span>` : ''} ${alw ? `<span class="badge alt">${alw} allowed without proof</span>` : ''} ${rej ? `<span class="badge bad">${rej} rejected</span>` : ''}`;
     };
     const notes = (r) => (r.kind === 'waived' ? r.note || '' : [r.note || ''].concat(Object.entries(r.order_state || {}).filter(([, x]) => x.note).map(([o, x]) => `${o}: ${x.note}`)).filter(Boolean).join(' | '));
-    const done = z.done.length ? `<div class="card stack"><h2>Done <span class="small">latest first</span></h2><div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders</th><th class="right">Value asked</th><th>Result</th><th>Note</th><th></th></tr></thead><tbody>${z.done.slice(0, 60).map((r) => `<tr>
+    const done = z0.done.length ? `<div class="card stack"><h2>Done <span class="small">${of(z.done.length, z0.done.length)}, latest first</span></h2><div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Orders</th><th class="right">Value asked</th><th>Result</th><th>Note</th><th></th></tr></thead><tbody>${z.done.slice(0, 60).map((r) => `<tr>
         <td><b>${esc(r.store_code)}</b> ${sname(r.store_code)}</td><td>${r.orders.map(esc).join(', ')}</td><td class="right">${rupees(Math.round(+r.value))}</td>
         <td>${result(r)}<div class="small">${when(r.resolved_at)}${r.resolved_by ? ' ' + esc(r.resolved_by) : ''}</div></td>
         <td class="small">${esc(notes(r))}</td>
         <td class="right"><div class="ppbtns">${r.status === 'RECEIVED' ? `<button class="btn sm" data-act="ppList" data-store="${esc(r.store_code)}" data-flag="${Object.values(r.order_state || {}).some((x) => x.s === 'RECEIVED') || !Object.keys(r.order_state || {}).length ? 'PROOFOK' : 'PROOFALLOW'}">Lines</button>${ed ? (r.kind === 'waived' ? `<button class="btn sm" data-act="ppDo" data-a="unwaive" data-id="${r.id}" title="The orders need proof again">Undo</button>` : `<button class="btn sm" data-act="ppDo" data-a="reopen" data-id="${r.id}" title="Back to waiting for proof (orders rejected for no proof stay rejected)">Undo</button>`) : ''}` : ''}</div></td></tr>`).join('')}</tbody></table></div></div>` : '';
-    return `<div class="stack ppscreen">${intro}${need}${wait}${done}</div>`;
+    return `${need}${wait}${done}`;
   }
 
   /* ================= Dashboard ================= */
@@ -4121,6 +4149,9 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     ppGo: () => { S.view = 'orders'; S.o.seg = 'proof'; S.o.sel = null; render(); },
     ppAsk: (el) => ppAsk(el.dataset.store),
     ppWaive: (el) => ppWaive(el.dataset.store),
+    ppCard: (el) => { const id = +el.dataset.id; if (S.pp.open.has(id)) S.pp.open.delete(id); else S.pp.open.add(id); setHtml('pplist', ppListHtml()); },
+    ppOpenAll: () => { PP().asked.filter((r) => ppMatch(r.store_code, r.orders)).forEach((r) => S.pp.open.add(r.id)); setHtml('pplist', ppListHtml()); },
+    ppCloseAll: () => { S.pp.open.clear(); setHtml('pplist', ppListHtml()); },
     ppRemind: (el) => ppRemind(+el.dataset.id),
     ppDo: (el) => ppDo(+el.dataset.id, el.dataset.a, el.dataset.o),
     ppSettings: () => ppSettings(),
@@ -4633,6 +4664,7 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
   document.addEventListener('input', (e) => {
     const t = e.target;
     if (t.id === 'oq') { sec().q = t.value; relist(); }
+    else if (t.id === 'ppq') { S.pp.q = t.value; setHtml('pplist', ppListHtml()); }
     else if (t.id === 'cq') { S.c.q = t.value; setHtml('cgrid', cGridHtml()); setHtml('cmrpbox', cMrpHtml()); hydrate(); searchAll(); }
     else if (t.id === 'sq') { S.s.q = t.value; const a = document.activeElement, pos = t.selectionStart; render(); const n = $('#sq'); if (a === t && n) { n.focus(); try { n.setSelectionRange(pos, pos); } catch (_) { /* type=search */ } } }
     else if (t.classList.contains('sq')) { const v = Math.max(0, Math.round(+t.value || 0)); if (v) S.s.qty[t.dataset.id] = v; else delete S.s.qty[t.dataset.id]; tally(); }
@@ -4662,6 +4694,8 @@ dispatch: async () => { const l0 = S.M.byId[S.o.sel]; if (l0 && nsDisp(l0) && !(
   document.addEventListener('change', async (e) => {
     const t = e.target;
     if (t.id === 'ostatus') { S.o.status = t.value; relist(); }
+    else if (t.id === 'ppstore') { S.pp.store = t.value; setHtml('pplist', ppListHtml()); }
+    else if (t.id === 'ppsort') { S.pp.sort = t.value; setHtml('pplist', ppListHtml()); }
     else if (t.id === 'oflag') { sec().flag = t.value; relist(); }
     else if (t.id === 'ostore') { sec().store = t.value; relist(); }
     else if (t.id === 'omc') { sec().mc = t.value; relist(); }
