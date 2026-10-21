@@ -29,7 +29,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 37;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 38;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -657,6 +657,8 @@ Household Category Team`;
     const t = ppTable(ords, ppSet().limit);
     return `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222">${parts.join(t)}${parts.length === 1 ? '<br><br>' + t : ''}</div>`;
   }
+  /* the store's ZFM and AM (version 38): copied on every email to the store; a blank one is left out */
+  const mgrMails = (code) => { const st = (S.M && S.M.stores[code]) || {}; return [st.zfm_email, st.am_email].map((x) => String(x || '').trim()).filter(Boolean).join('; '); };
   const ppMails = (...a) => Array.from(new Set(a.join(',').split(/[;,\s]+/).map((x) => x.trim()).filter(Boolean))).join('; ');
   const PP_HINT = '{store}, {what} ("20 corporate orders" or "corporate order TW..."), {value}, {value_lakh} and {limit} are filled in, and {table} becomes the order table (one row per order, with a total) followed by each order\'s articles.';
   function ppDialogMail(o) {
@@ -690,7 +692,7 @@ Household Category Team`;
       <p class="small">Tick the orders to ask about (only what is still pending is asked; orders already approved stay in Approved orders and are not in the email). The request is recorded, the lines move to the Payment proof screen, and the Outlook draft(s) are downloaded - open each and press Send.</p>
       <div class="pporders">${ords.map((o, i) => `<label class="ppo"><input type="checkbox" name="o${i}" checked><span class="grow"><b>${o.n}. ${esc(o.o)}</b> <span class="small">${esc(o.cust || '')}${o.cust ? ' &middot; ' : ''}${inr(o.lines.length)} ${plural(o.lines.length, 'line')}${o.date ? ', booked ' + esc(dmy(o.date, true)) : ''}</span></span>${o.value >= set.limit ? '<span class="badge bad">&#9733; over the limit on its own</span>' : ''}<b>${rupees(Math.round(o.value))}</b></label>`).join('')}</div>
       ${ppByOrder() ? ppLayout(ords.length) : ''}
-      ${ppDialogMail({ to: ppMails(st.email || '', set.to), cc: set.cc, subject: set.subject, body: set.body })}
+      ${ppDialogMail({ to: ppMails(st.email || '', set.to), cc: ppMails(mgrMails(store), set.cc), subject: set.subject, body: set.body })}
       ${st.email ? '' : '<p class="note warn">No email address is on file for this store - type it in To.</p>'}</div>`, 'Record and make the email', { cls: 'big', noFocus: true });
     if (!v) return;
     const pick = ords.filter((o, i) => v['o' + i]);
@@ -739,7 +741,7 @@ Household Category Team`;
     const v = await ask(`Reminder to ${r.store_code} ${st.store_name || ''}`, `<div class="stack">
       <p class="small">Only the ${ords.length === 1 ? 'order' : `${ords.length} orders`} still waiting for proof: ${ords.map((g) => `#${g.n} ${esc(g.o)}`).join(', ')}.</p>
       ${ppByOrder() ? ppLayout(ords.length) : ''}
-      ${ppDialogMail({ to: r.email_to || st.email || '', cc: r.email_cc || set.cc, subject: 'Reminder: ' + set.subject, body: PP_REMIND })}</div>`, 'Record and make the email', { cls: 'big', noFocus: true });
+      ${ppDialogMail({ to: r.email_to || st.email || '', cc: ppMails(mgrMails(r.store_code), r.email_cc || set.cc), subject: 'Reminder: ' + set.subject, body: PP_REMIND })}</div>`, 'Record and make the email', { cls: 'big', noFocus: true });
     if (!v) return;
     S.busy = true;
     try {
@@ -854,7 +856,7 @@ Household Category Team`;
     const of = (n, all) => (n === all ? `${inr(n)}` : `${inr(n)} of ${inr(all)}`);
     const openS = (g) => P.openS.has(g.store) || z.stores.length === 1;
     const need = `<div class="card stack"><h2>Needs proof - not asked yet <span class="small">${of(z.stores.length, z0.stores.length)} ${plural(z0.stores.length, 'store')}</span></h2>${z.stores.length ? `<div class="tablewrap"><table class="tight pptable"><thead><tr><th>Store</th><th>Pending orders to ask about (Rs)</th><th class="right">Pending</th><th class="right" title="Approved this season without proof since the store was last asked. Counted towards the limit; they stay in Approved orders and are not asked about.">Approved, no proof<br><span class="thsub">counted only</span></th><th class="right">Total</th><th></th></tr></thead><tbody>${z.stores.map((g) => `<tr>
-        <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}</div>
+        <td><b>${esc(g.store)}</b> ${sname(g.store)}<div class="small">${esc((M.stores[g.store] || {}).email || 'no email on file')}${mgrMails(g.store) ? `<br>Cc ZFM / AM: ${esc(mgrMails(g.store))}` : ''}</div>
           <button class="btn link sm" data-act="ppStore" data-store="${esc(g.store)}">${openS(g) ? '&#9662; Hide orders' : `&#9656; Show ${g.orders.length === 1 ? 'the order' : `the ${g.orders.length} orders`}`}</button></td>
         <td class="ppords">${g.orders.map((o) => `<span class="ppord${o.big ? ' big' : ''}" title="${o.big ? 'Over the limit on its own' : ''}">${esc(o.order_no)} <b>${inr(Math.round(o.value))}</b></span>`).join(' ')}</td>
         <td class="right">${rupees(Math.round(g.pend))}</td><td class="right">${g.taken ? `${rupees(Math.round(g.taken))}<div class="small">${inr(g.takenOrders.size)} ${plural(g.takenOrders.size, 'order')}</div>` : '-'}</td><td class="right b">${rupees(Math.round(g.value))}</td>
@@ -4099,7 +4101,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       const replyBy = o.replyBy || new Date(Date.now() + 4 * 3600e3);
       subject = C.offerSubject(l, replyBy); text = C.offerText(l, offers, replyBy, o.note); file = 'Offer';
     }
-    const to = o.to != null ? o.to : l.email, cc = o.cc != null ? o.cc : (localStorage.getItem('allocdesk-cc') || '');
+    const to = o.to != null ? o.to : l.email, cc = o.cc != null ? o.cc : ppMails(mgrMails(l.store_code), localStorage.getItem('allocdesk-cc') || '');
     const mailto = 'mailto:' + encodeURIComponent(to || '') + '?' + (cc ? 'cc=' + encodeURIComponent(cc) + '&' : '') + 'subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(text);
     let ph = (l.phone || '').replace(/\D/g, '');
     ph = ph.length === 10 ? '91' + ph : (ph.length === 12 && ph.startsWith('91') ? ph : '');
@@ -4440,11 +4442,12 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
         <p class="small">These quantities are held for the store until it replies:</p>
         <pre>${esc(picks.map(pickLine).join('\n'))}</pre>
         <label class="f">To<input type="text" name="to" value="${esc(l.email)}"></label>
-        <label class="f">Cc<input type="text" name="cc" value="${esc(localStorage.getItem('allocdesk-cc') || '')}"></label>
+        <label class="f">Cc<input type="text" name="cc" value="${esc(ppMails(mgrMails(l.store_code), localStorage.getItem('allocdesk-cc') || ''))}"></label>
         <label class="f">Reply needed by<input type="datetime-local" name="by" value="${localInput(new Date(Date.now() + 4 * 3600e3))}" required></label>
         <label class="f">Extra line for the store (optional)<textarea name="note" rows="2"></textarea></label></div>`, 'Hold stock');
       if (!v) return;
-      localStorage.setItem('allocdesk-cc', v.cc.trim());
+      { const mg = mgrMails(l.store_code).toLowerCase().split(/[;,\s]+/).filter(Boolean);       // keep only your own Cc for next time, not this store's ZFM / AM
+        localStorage.setItem('allocdesk-cc', v.cc.split(/[;,\s]+/).map((x) => x.trim()).filter((x) => x && !mg.includes(x.toLowerCase())).join('; ')); }
       S.busy = true;
       try {
         const res = await allocMany(picks.map((p) => ({ line: l.id, article: p.article, qty: p.qty })), 'OFFERED');

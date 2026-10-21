@@ -273,6 +273,8 @@
     city: ['city', 'town'],
     state: ['state'],
     email: ['storeemails', 'store emails', 'store email', 'email', 'e-mail', 'email id', 'mail id'],
+    zfm_email: ['zfm email id', 'zfm email', 'zfm mail id', 'zfm mail', 'zfm email ids'],
+    am_email: ['am email id', 'am email', 'am mail id', 'am mail', 'am email ids'],
     lead_time: ['lead time (allocation to store delivery)', 'lead time', 'transit time', 'intransit time', 'in transit time'],
     dc: ['dc/rdc', 'rdc', 'dc'],
     // DC stock
@@ -325,7 +327,7 @@
   const SPECS = {
     master: { required: ['article_code'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'mrp', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'group_same', 'group_diff', 'status'] },
     data: { required: ['article_code', 'mrp'], optional: ['description', 'mc_code', 'mc_name', 'category', 'buyer', 'vrp', 'cost', 'gst', 'pack_size', 'vendor_code', 'vendor_name', 'status', 'bogo_count', 'ppo_cm', 'ppo_nm', 'store_stock', 'intransit'] },
-    stores: { required: ['store_code'], optional: ['store_name', 'city', 'state', 'email', 'lead_time', 'dc'], need: ['store_name', 'email', 'lead_time'] },
+    stores: { required: ['store_code'], optional: ['store_name', 'city', 'state', 'email', 'lead_time', 'dc', 'zfm_email', 'am_email'], need: ['store_name', 'email', 'lead_time'] },
     stock: { required: ['article_code', 'total'], optional: ['site_code', 'v0102', 'v01', 'v02', 'nso', 'hh', 'spl', 'best', 'sea'] },
     orders: { required: ['order_no', 'store_code', 'article_code', 'req_qty'], optional: ['line_no', 'order_date', 'del_date', 'customer', 'phone', 'poc_name', 'description', 'mc_name', 'mrp', 'req_price', 'pack_size', 'store_name', 'art_remarks'] },
     /* Inwards: either one row per receipt (article, quantity, and if the file has them: GRN number, date, time, storage location, DC),
@@ -467,7 +469,7 @@
     }).filter((r) => /^\d{6,}$/.test(r.article_code) || (r.article_code && kind === 'master')),
     stores: (rows) => rows.map((r) => ({
       store_code: code(r.store_code).toUpperCase(), store_name: txt(r.store_name), city: txt(r.city), state: txt(r.state),
-      email: txt(r.email), lead_time: int(r.lead_time), dc: txt(r.dc) })).filter((r) => r.store_code && r.store_code.length <= 12),
+      email: txt(r.email), lead_time: int(r.lead_time), dc: txt(r.dc), zfm_email: txt(r.zfm_email), am_email: txt(r.am_email) })).filter((r) => r.store_code && r.store_code.length <= 12),
     /* Orders. A line is order ID + line item, or order ID + article when the report has no
        line item. The same article entered again in the same order is a mistake at the store:
        the line is taken once and marked (dups = times entered, dup_qty = the quantities). */
@@ -614,7 +616,7 @@
       ['Vendor Code', '', 'Vendor code', 'V2230'], ['Vendor Name', '', 'Vendor name', 'Coolsip Steel'], ['Store Stock', '', 'Pieces in all stores', 240], ['Intransit Stock', '', 'Pieces in transit', 48],
       ['CM PPO Qty', '', 'Pending PO this month', 120], ['NM PPO Qty', '', 'Pending PO next month', 0]] },
     stores: { file: 'Template_4_Stores', sheet: 'Stores', cols: [
-      ['Store Code', 'Yes', 'Site code', 'VM101'], ['Store Name', '', 'Store name', 'Gurugram Sector 14'], ['StoreEmails', '', 'Email address of the store', 'vm101.sm@example.com'],
+      ['Store Code', 'Yes', 'Site code', 'VM101'], ['Store Name', '', 'Store name', 'Gurugram Sector 14'], ['StoreEmails', '', 'Email address of the store', 'vm101.sm@example.com'], ['ZFM Email ID', '', 'ZFM email (copied on emails to the store)', 'zfm.north@example.com'], ['AM Email ID', '', 'AM email (copied on emails to the store)', 'am.gurugram@example.com'],
       ['State', '', 'State', 'Haryana'], ['City', '', 'City', 'Gurugram'], ['Lead Time', '', 'Days from allocation to delivery at the store', 3], ['DC/RDC', '', 'DC or RDC that serves the store', 'RDC-NORTH']] },
     stock: { file: 'Template_5_DC_Stock', sheet: 'DC STOCK-GM', cols: [
       ['DC', '', 'DC code', 'DH19'], ['ARTICLE', 'Yes', 'Article code', '1005107'], ['TOTAL MSA -QTY', 'Yes', 'Total MSA quantity (the DC stock)', 1000],
