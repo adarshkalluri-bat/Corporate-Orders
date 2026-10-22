@@ -360,6 +360,20 @@
     return isNaN(n) ? (dflt === undefined ? 0 : dflt) : (neg ? -Math.abs(n) : n);
   }
   const numOrNull = (v) => { const n = num(v, null); return n == null ? null : n; };
+  /* Some SAP web exports write thousands with a dot: "3.144" = 3,144 pieces. Others write quantities with three decimals:
+     "24.000" = 24. Which one a file uses is told by its other quantities: when the quantity columns are mostly plain
+     whole numbers ("24", "167"), a dotted one is a thousands mark. fields: the quantity fields of the rows. */
+  const DOTK = /^-?\d{1,3}(\.\d{3})+-?$/;
+  function dotThousands(rows, fields) {
+    let plain = 0, dec = 0;
+    for (const r of rows) for (const f of fields) {
+      const v = r[f]; if (typeof v !== 'string') continue;
+      const t = v.trim();
+      if (/^-?\d+-?$/.test(t)) plain++; else if (/^-?\d+[.,]\d+-?$/.test(t)) dec++;
+    }
+    return plain > dec;
+  }
+  const qtyNum = (v, dotK) => num(dotK && typeof v === 'string' && DOTK.test(v.trim()) ? v.trim().replace(/\./g, '') : v);
   function dateStr(v) {                              // anything SAP / Excel gives -> 'YYYY-MM-DD'
     if (v == null || v === '') return '';
     if (typeof v === 'number' && v > 20000 && v < 120000) {         // Excel serial day number
@@ -547,13 +561,13 @@
     /* Stock at the stores: one row per store and article, {s, a, c: closing, i: in transit, l: CLA, m: sale this month,
        and when the report has them sn: store name, d: description, mcc: MC code, mc: MC name, p: MRP}. */
     storestock: (rows) => {
-      const agg = new Map();
+      const agg = new Map(), dk = dotThousands(rows, ['ss_cl', 'ss_it', 'ss_cla', 'ss_mtd']), Q = (v) => Math.round(qtyNum(v, dk));
       for (const r of rows) {
         const a = code(r.article_code), st = code(r.store_code).toUpperCase();
         if (!/^\d{6,}$/.test(a) || !st || st.length > 12) continue;
-        const k = st + '|' + a, q = { s: st, a, c: Math.round(num(r.ss_cl)), i: Math.round(num(r.ss_it)), l: Math.round(num(r.ss_cla)), m: Math.round(num(r.ss_mtd)) };
+        const k = st + '|' + a, q = { s: st, a, c: Q(r.ss_cl), i: Q(r.ss_it), l: Q(r.ss_cla), m: Q(r.ss_mtd) };
         /* store name, article description, MC and MRP as the report has them (used when the article or store is not in our own files) */
-        const sn = txt(r.ss_sname), d = txt(r.ss_desc), mcc = code(r.ss_mcc), mc = txt(r.ss_mc), p = numOrNull(r.mrp);
+        const sn = txt(r.ss_sname), d = txt(r.ss_desc), mcc = code(r.ss_mcc), mc = txt(r.ss_mc), p = r.mrp == null || r.mrp === '' ? null : qtyNum(r.mrp, dk);
         const cur = agg.get(k);
         if (cur) {
           cur.c += q.c; cur.i += q.i; cur.l += q.l; cur.m += q.m;
