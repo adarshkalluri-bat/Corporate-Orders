@@ -267,7 +267,7 @@
     if ((snap.schema || 1) < 32 || snap.store_stock) return;
     const L = snap.lines || [], st = new Set(), ar = new Set();
     for (const l of L) { st.add(l.store_code); ar.add(l.article_code); }
-    const key = [(snap.meta || {}).sstock_batch || 0, st.size, ar.size, (snap.articles || []).length].join('|');
+    const mt = snap.meta || {}, key = [mt.sstock_batch || 0, mt.sstock_loaded || '', mt.sstock_file || '', st.size, ar.size, (snap.articles || []).length].join('|');
     if (key !== SSC.key) {
       if (!(snap.meta || {}).sstock_batch) { SSC.data = {}; SSC.key = key; }
       else { SSC.data = await A.rpc('store_stock_map'); SSC.key = key; }
@@ -1533,7 +1533,7 @@ Household Category Team`;
   }
   function vSellThrough() {
     const M = S.M, T = S.st;
-    const head = `<div class="head"><h1>Sell-through</h1><span class="sub">Approved order qty at each store against the store's stock and its sale this month (MTD)</span></div>`;
+    const head = `<div class="head"><h1>Sell-through</h1><span class="sub">Approved order qty at each store against the store's stock and its sale this month (MTD)</span></div>${M.hasStoreStock ? `<div class="row wrap ssinfo"><span class="small">Store stock in use: <b>${esc(M.meta.sstock_file || '(file name not kept)')}</b>${M.meta.sstock_loaded ? `, loaded ${esc(when(M.meta.sstock_loaded))}` : ''}</span><button class="btn sm" data-act="ssReload" title="Fetch the store stock again from the database">Reload store stock</button></div>` : ''}`;
     if (!M.hasStoreStock) return head + `<div class="card stack"><h2>The store stock report is not loaded</h2><p>This screen uses the closing stock, in transit and MTD sale from the store stock report. ${editor() ? 'Upload it under Data, step 7.' : 'Ask the editor to upload it (Data, step 7).'}</p>${editor() ? '<div><button class="btn primary" data-act="nav" data-view="data">Open Data</button></div>' : ''}</div>`;
     const all = stRows();
     if (!all.length) return head + '<div class="card"><div class="empty">Nothing is approved yet. Approved lines show here with the store\'s stock and sale.</div></div>';
@@ -3745,6 +3745,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
           await A.rpc('sstock_chunk', { p_batch: batch, p_rows: parts[i] });
         }
         const r = await A.rpc('sstock_commit', { p_batch: batch, p_file: file.name });
+        SSC.key = null;                                                  // fetch the new store stock on the reload below, whatever else changed
         const ordering = new Set(S.M.lines.map((l) => l.store_code)), inFile = new Set(shaped.map((x) => x.s));
         const missing = Array.from(ordering).filter((x) => !inFile.has(x));
         const has = (f) => rows.fields.includes(f);
@@ -4265,6 +4266,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     stClearAll: () => { Object.assign(S.st, { q: '', status: '', store: '', state: '', mc: '', buyer: '', limit: 300 }); render(); },
     stTile: (el) => { S.st.status = S.st.status === el.dataset.k ? '' : el.dataset.k; S.st.limit = 300; render(); },
     stExport: () => exportSellThrough(),
+    ssReload: async () => { SSC.key = null; try { await reload(); toast('Store stock reloaded'); } catch (e) { tell('Not reloaded', e.message); } },
     lyDash: (el) => { S.ly.dash = el.dataset.v; try { localStorage.setItem('allocdesk.lydash', S.ly.dash); } catch (_) { /* only a convenience */ } render(); },
     taskNew: (el) => taskAssign(null, el.dataset.store, +el.dataset.line),
     bulkTask: () => { const ids = Array.from(sec().checked).filter((id) => S.M.byId[id]); if (!ids.length) return tell('Assign task', 'Tick one or more order lines first.'); taskAssign(ids); },

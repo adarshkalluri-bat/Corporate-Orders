@@ -639,3 +639,4 @@ table.ppitems td, table.ppitems th { white-space: normal; }
 table.ppitems th { background: #fff; }
 tr.ppsub > td { background: #FBF9FF; padding: 8px 10px 12px; }
 .ppobst .badge { white-space: nowrap; }
+.ssinfo { gap: 10px; margin: -4px 0 12px; }
