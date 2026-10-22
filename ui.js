@@ -1086,10 +1086,10 @@ Household Category Team`;
       const name = by === 'mcmrp' ? `${l1.mc_name || '(MC not set)'}` : by === 'store' ? l1.store_code : by === 'article' ? l1.article_code : g.k;
       const sub = by === 'mcmrp' ? `MRP ${inr(mrp)}` : by === 'store' ? (l1.store_name || '') : by === 'article' ? (l1.description || '') : '';
       rows.push({ k: g.k, name, sub, sortName: by === 'mcmrp' ? name.toLowerCase() + ' ' + String(Math.round(mrp * 100)).padStart(12, '0') : (name + ' ' + sub).toLowerCase(),
-        lines: ls.length, need: need.length, old, ord: a.val, appr: v.val, short: sh, mwo: a.marginMrp, disc: a.disc, mar: a.margin,
+        lines: ls.length, need: need.length, old, ord: a.val, qa: live.reduce((t, l) => t + (l.approved || 0), 0), appr: v.val, short: sh, mwo: a.marginMrp, disc: a.disc, mar: a.margin,
         pendVal: money(need, (l) => l.balance).val, today: ls.filter((l) => l.approved > 0 && l.approved_at && C.localDay(l.approved_at) === today).length, vm: v.margin, vd: v.disc, vval: v.val });
     }
-    const cur = sortOf('bd', 'need', -1);
+    const cur0 = sortOf('bd', 'need', -1), cur = cur0.k === 'ord' ? { k: 'qa', d: cur0.d } : cur0;     // "Value ordered" became "Qty approved" (v3.42)
     rows = sortRows(rows, cur, (r, k) => (k === 'n' ? r.sortName : r[k]));
     /* the buyer view: four highlights */
     let hi = '';
@@ -1107,17 +1107,17 @@ Household Category Team`;
         <td class="bdname"><b>${esc(r.name)}</b>${r.sub ? `<div class="small">${esc(r.sub)}</div>` : ''}</td>
         <td class="right" data-l="Lines">${inr(r.lines)}</td><td class="right b" data-l="Need action">${r.need ? inr(r.need) : '<span class="muted">-</span>'}</td>
         <td class="right ${r.old != null && r.old >= 7 ? 'bad b' : ''}" data-l="Oldest pending">${r.old == null ? '<span class="muted">-</span>' : `${r.old} ${plural(r.old, 'day')}`}</td>
-        <td class="right" data-l="Value ordered">${crore(r.ord)}</td><td class="right" data-l="Value approved">${crore(r.appr)}</td>
+        <td class="right" data-l="Qty approved">${num(r.qa)}</td><td class="right" data-l="Value approved">${crore(r.appr)}</td>
         <td class="right ${r.short ? 'bad b' : ''}" data-l="Pcs short">${num(r.short)}</td>
         <td class="right" data-l="Margin without discount">${pct(r.mwo)}</td><td class="right ${r.disc > 0.0005 ? 'warn b' : ''}" data-l="Discount">${r.disc == null ? '-' : pct(r.disc)}</td>
         <td class="right b" data-l="Margin after discount">${pct(r.mar)}</td></tr>`).join('');
     return `<div class="card stack" style="margin-top:12px"><div class="row wrap"><h2 class="grow">Breakdown by ${BD[by][1]}</h2>
         <div class="segs bdsegs" role="group" aria-label="Breakdown by">${Object.keys(BD).map((k) => `<button class="${k === by ? 'on' : ''}" data-act="dashBy" data-v="${k}">${BD[k][0]}</button>`).join('')}</div></div>
       ${hi}
-      ${rows.length ? phSort('bd', cur, [['need', 'Need action'], ['n', BD[by][0], true], ['lines', 'Lines'], ['old', 'Oldest pending'], ['ord', 'Value ordered'], ['appr', 'Value approved'], ['short', 'Pcs short'], ['mwo', 'Margin without discount'], ['disc', 'Discount'], ['mar', 'Margin after discount']]) : ''}
+      ${rows.length ? phSort('bd', cur, [['need', 'Need action'], ['n', BD[by][0], true], ['lines', 'Lines'], ['old', 'Oldest pending'], ['qa', 'Qty approved'], ['appr', 'Value approved'], ['short', 'Pcs short'], ['mwo', 'Margin without discount'], ['disc', 'Discount'], ['mar', 'Margin after discount']]) : ''}
       ${rows.length ? `<div class="tablewrap fitwrap"><table class="fitcols resp bdtable"><colgroup><col class="c-bdn"><col><col><col><col class="c-val"><col class="c-val"><col><col><col><col></colgroup>
         <thead><tr>${th('n', BD[by][0], { asc: true })}${th('lines', 'Lines', { cls: 'right' })}${th('need', 'Need action', { cls: 'right', title: 'Lines pending, partly approved or waiting for the store' })}
-          ${th('old', 'Oldest pending', { cls: 'right', title: 'Days since the oldest line still needing action was booked' })}${th('ord', 'Value ordered', { cls: 'right' })}${th('appr', 'Value approved', { cls: 'right' })}
+          ${th('old', 'Oldest pending', { cls: 'right', title: 'Days since the oldest line still needing action was booked' })}${th('qa', 'Qty approved', { cls: 'right', title: 'Pieces approved (full packs), dispatched included, rejected left out' })}${th('appr', 'Value approved', { cls: 'right' })}
           ${th('short', 'Pcs short', { cls: 'right', title: by === 'store' ? 'Pending pcs of this store on articles the DC is short of' : 'Pcs the DC is short of, on these articles' })}
           ${th('mwo', 'Margin without discount', { cls: 'right', title: 'The same pieces sold at MRP' })}${th('disc', 'Discount', { cls: 'right', title: 'Discount asked, on the value ordered' })}${th('mar', 'Margin after discount', { cls: 'right', title: 'At the price asked' })}</tr></thead>
         <tbody>${body}</tbody></table></div>
