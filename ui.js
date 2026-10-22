@@ -12,8 +12,8 @@
   const S = {
     me: null, M: null, view: 'dashboard', wide: wideMQ.matches, lastSync: null, online: true, stale: false, busy: false,
     /* o = the Pending orders screen, a = the Approved orders screen. The line open in the side panel (o.sel) is shared. */
-    o: { seg: 'list', q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
-    a: { q: '', flag: '', store: '', mc: '', buyer: '', group: 'none', sort: 'latest', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
+    o: { ordCollapsed: false, ordToggled: new Set(), seg: 'list', q: '', status: '', flag: '', store: '', mc: '', buyer: '', group: 'store_order', sort: '', sel: null, checked: new Set(), limit: 300, detail: null, collapsed: false, toggled: new Set() },
+    a: { ordCollapsed: false, ordToggled: new Set(), q: '', flag: '', store: '', mc: '', buyer: '', group: 'none', sort: 'latest', seg: 'todo', checked: new Set(), limit: 300, collapsed: false, toggled: new Set() },
     s: { only: true, q: '', art: null, qty: {}, cover: '' },
     c: { q: '', scope: 'master', cat: '', mrp: '', results: null, loading: false, asked: '' },
     /* Last year: count what was ordered or what was approved; the same days so far or the whole season; chart in value or qty */
@@ -914,6 +914,23 @@ Household Category Team`;
     }
     return { mrpV, val, disc: mrpV ? 1 - val / mrpV : null, margin: net ? (net - cost) / net : null, marginMrp: netMrp ? (netMrp - cost) / netMrp : null, marginRs: net - cost, noCost };
   }
+  /* version 3.43: orders that first came in with the latest orders upload. An upload is the run of lines loaded within
+     minutes of each other; the latest run is "new". Nothing is new when the tracker holds only that one upload. */
+  function newOrders() {
+    const M = S.M; if (M._newo) return M._newo;
+    const z = new Map(); M._newo = z;
+    const first = new Map();
+    for (const l of M.lines) { const t = l.imported_at ? Date.parse(l.imported_at) : NaN; if (isNaN(t)) continue; const f = first.get(l.order_no); if (f == null || t < f) first.set(l.order_no, t); }
+    const ts = Array.from(new Set(first.values())).sort((a, b) => b - a);
+    if (!ts.length) return z;
+    let from = ts[0];
+    for (let i = 1; i < ts.length && from - ts[i] <= 15 * 60e3; i++) from = ts[i];
+    const fresh = Array.from(first.entries()).filter(([, t]) => t >= from);
+    if (fresh.length === first.size) return z;
+    for (const [o, t] of fresh) z.set(o, new Date(t).toISOString());
+    return z;
+  }
+  const isNewOrder = (o) => (S.M ? newOrders().get(o) || '' : '');
   const FLAGS = {
     LATE: ['Delivery date at risk', (l) => l.late],
     SOON: ['Allocate today or tomorrow', (l) => l.tight],
@@ -930,6 +947,7 @@ Household Category Team`;
     STOREHAS: ['Store has stock of it or an alternate', (l) => !!l.ss && l.ss.family > 0],
     SAPDIFF: ['Differs from the SAP approval file', (l) => !!(l.sap_appr && l.sap_appr.conflict)],
     SAPDONE: ['Approved or rejected in SAP', (l) => !!l.sap_appr],
+    NEWORD: ['New order (latest orders upload)', (l) => !!isNewOrder(l.order_no)],
     PROOF: ['Needs payment proof (not asked yet)', (l) => ppOn() && PP().flag.has(l.id)],
     PROOFOK: ['Payment proof received', (l) => ppOn() && ppCase(l) === 'RECEIVED'],
     PROOFALLOW: ['Allowed without payment proof / no proof needed', (l) => ppOn() && ppCase(l) === 'ALLOWED']
@@ -2937,21 +2955,27 @@ Household Category Team`;
       ${view === 'approved' ? '' : ssHtml(l)}${locsOn() && C.locText(l.locs) ? `<div class="small">Taken from ${esc(C.locText(l.locs))}</div>` : ''}${note ? `<div class="small">${note}</div>` : ''}</div></div>`;
   }
   /* The heading of one order inside a store. */
-  function orderHead(L, view, ed, idx, n) {
+  function orderHead(L, view, ed, idx, n, chev) {
     const f = L[0], dels = uniqOf(L, (l) => l.del_date).sort(), late = L.some((l) => l.late), tight = L.some((l) => l.tight);
     const tel = (f.phone || '').replace(/\D/g, '');
     const who = f.poc_name || tel ? `<span>Booked by <b>${esc(f.poc_name || '')}</b>${tel ? ` <a href="tel:${esc(tel)}">${esc(f.phone)}</a>` : ''}</span>` : '';
     const value = L.reduce((t, l) => t + (l.status === 'REJECTED' ? 0 : l.ask_value), 0);
-    return `<div class="ohead">${ticks(view) ? `<input type="checkbox" data-act="chkOrder" ${L.every((l) => sec(view).checked.has(l.id)) ? 'checked' : ''} title="Tick every line of this order here" aria-label="Tick every line of order ${esc(f.order_no)}">` : ''}
-        ${n > 1 ? `<span class="onum">Order ${idx + 1} of ${n}</span>` : ''}<span class="ono ${L.some((l) => l.dup_count > 0) ? 'bad' : ''}">Order ${esc(f.order_no)}</span><span>Booked ${when(f.order_date)}</span>
+    const nw = isNewOrder(f.order_no);
+    return `<div class="ohead">${chev || ''}${ticks(view) ? `<input type="checkbox" data-act="chkOrder" data-ids="${L.map((l) => l.id).join(',')}" ${L.every((l) => sec(view).checked.has(l.id)) ? 'checked' : ''} title="Tick every line of this order here" aria-label="Tick every line of order ${esc(f.order_no)}">` : ''}
+        ${n > 1 ? `<span class="onum">Order ${idx + 1} of ${n}</span>` : ''}<span class="ono ${L.some((l) => l.dup_count > 0) ? 'bad' : ''}">Order ${esc(f.order_no)}</span>${nw ? `<span class="badge newo" title="${esc(`New: first came in with the latest orders upload (${when(nw)})`)}">New</span>` : ''}<span>Booked ${when(f.order_date)}</span>
         ${dels.length ? `<span class="${late ? 'bad b' : tight ? 'warn b' : ''}">Delivery wanted ${when(dels[0])}${dels.length > 1 ? ' onwards' : ''}${f.allocate_by && dels.length === 1 ? ` <span class="small">(allocate by ${when(f.allocate_by)})</span>` : ''}</span>` : ''}
         ${who}<span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'article')} &middot; ${rupees(value)}</span></div>
       <div class="ometa"><span><i>MC</i> ${uniqOf(L, (l) => l.mc_name).map(esc).join(', ') || '-'}</span><span><i>MRP</i> ${uniqOf(L, (l) => l.mrp).sort((a, b) => a - b).map(inr).join(', ')}</span></div>`;
   }
+  /* version 3.43: an order (or an MRP under an MC) closes and opens like a store does */
+  const blockKey = (B) => (B.gk || '') + '|' + B.key;
+  const blockClosed = (B, g, view) => !!g.k2 && sec(view).ordCollapsed !== sec(view).ordToggled.has(blockKey(B));
+  const blockChev = (B, g, view) => (g.k2 ? `<button type="button" class="ochev" data-act="toggleOrder" data-key="${esc(blockKey(B))}" title="${blockClosed(B, g, view) ? 'Show' : 'Hide'} the lines of this ${g === GROUPS.store_order ? 'order' : 'MRP'}" aria-expanded="${!blockClosed(B, g, view)}">${blockClosed(B, g, view) ? '&#9656;' : '&#9662;'}</button>` : '');
   function blockHtml(B, g, view, c, ed, first, idx, n) {
-    const L = B.lines, band = g === GROUPS.store_order ? ` oc${idx % 3}` : '';
-    const head = g === GROUPS.store_order ? orderHead(L, view, ed, idx, n)
-      : g.h2 ? `<div class="ohead">${ticks(view) ? '<input type="checkbox" data-act="chkOrder" title="Tick every line under this heading" aria-label="Tick every line under this heading">' : ''}<span class="ono">${esc(g.h2(L))}</span><span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'line')}</span></div>` : '';
+    const L = B.lines, band = g === GROUPS.store_order ? ` oc${idx % 3}` : '', shut = blockClosed(B, g, view);
+    const head = g === GROUPS.store_order ? orderHead(L, view, ed, idx, n, blockChev(B, g, view))
+      : g.h2 ? `<div class="ohead">${blockChev(B, g, view)}${ticks(view) ? `<input type="checkbox" data-act="chkOrder" data-ids="${L.map((l) => l.id).join(',')}" title="Tick every line under this heading" aria-label="Tick every line under this heading">` : ''}<span class="ono">${esc(g.h2(L))}</span><span class="grow"></span><span class="osum">${L.length} ${plural(L.length, 'line')}</span></div>` : '';
+    if (shut) return `<div class="oblock${band} oclosed">${head}</div>`;
     if (!S.wide) return `<div class="oblock${band}">${head}${L.map((l) => lineCard(l, view)).join('')}</div>`;
     return `<div class="oblock${band}">${head}<table class="otable ${first ? '' : 'nohead'}">${tableHead(view, c, ed)}${L.map((l) => lineRow(l, view, c, ed)).join('')}</table></div>`;
   }
@@ -2988,7 +3012,8 @@ Household Category Team`;
           <span class="scode">${esc(big)}</span>${name ? `<span class="sname">${esc(name)}</span>` : ''}${small ? `<span class="sloc">${esc(small)}</span>` : ''}<span class="grow"></span>
           <span class="ssum">${counts}</span><span class="chev">${closed ? '&#9656;' : '&#9662;'}</span></div>`;
       }
-      html += `<section class="sgroup ${closed ? 'closed' : ''}">${head}${closed ? '' : G.blocks.map((B, i) => blockHtml(B, g, view, c, ed, i === 0, i, G.blocks.length)).join('')}</section>`;
+      let firstOpen = true;
+      html += `<section class="sgroup ${closed ? 'closed' : ''}">${head}${closed ? '' : G.blocks.map((B, i) => { B.gk = G.key; const sh = !blockClosed(B, g, view) && firstOpen; if (sh) firstOpen = false; return blockHtml(B, g, view, c, ed, sh, i, G.blocks.length); }).join('')}</section>`;
     }
     return html + (hiddenGroups ? `<button class="btn more" data-act="more">Show more (${inr(hiddenLines)} more ${plural(hiddenLines, 'line')})</button>` : '');
   }
@@ -3020,7 +3045,7 @@ Household Category Team`;
         <select id="obuyer" aria-label="Buyer">${opt('', 'All buyers', o.buyer)}${keep(buyers, o.buyer).map((b) => opt(b, b === '-' ? '(buyer not set)' : b, o.buyer)).join('')}</select>
       </div>
       <div class="row wrap chipsbar" id="ochips">${chipsHtml(view)}</div>
-      <div class="row wrap bulkbar">${g.h1 ? `<button class="btn sm" data-act="collapseAll">${o.collapsed ? 'Open all groups' : 'Close all groups (summary only)'}</button>` : ''}
+      <div class="row wrap bulkbar">${g.h1 ? `<button class="btn sm" data-act="collapseAll">${o.collapsed ? 'Open all groups' : 'Close all groups (summary only)'}</button>` : ''}${g.k2 ? `<button class="btn sm" data-act="collapseOrders">${o.ordCollapsed ? `Open all ${g === GROUPS.store_order ? 'orders' : 'MRPs'}` : `Close all ${g === GROUPS.store_order ? 'orders' : 'MRPs'}`}</button>` : ''}
         <button class="btn sm" id="oexport" data-act="exportView" title="Excel file of exactly the lines listed below"></button><button class="btn sm" data-act="exportAll" title="One Excel file with every order line - pending, approved, dispatched, rejected and deleted - with all the details">Download all orders</button><span class="grow"></span>${bulk}</div>
       <div id="olist">${oListHtml(view)}</div>${detail}`;
   }
@@ -4344,8 +4369,13 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     unsel: () => { S.o.sel = null; render(); },
     chk: (el) => { const id = +el.dataset.id, st = sec(); if (el.checked) st.checked.add(id); else st.checked.delete(id); },
     chkAll: (el) => { const st = sec(); $$('#olist input[data-act=chk]').forEach((i) => { i.checked = el.checked; const id = +i.dataset.id; if (el.checked) st.checked.add(id); else st.checked.delete(id); }); $$('#olist input[data-act=chkOrder], #olist input[data-act=chkGroup]').forEach((i) => { i.checked = el.checked; }); },
-    chkOrder: (el) => { const st = sec(); $$('input[data-act=chk]', el.closest('.oblock')).forEach((i) => { i.checked = el.checked; const id = +i.dataset.id; if (el.checked) st.checked.add(id); else st.checked.delete(id); }); },
-    chkGroup: (el) => { const st = sec(); $$('input[data-act=chk], input[data-act=chkOrder]', el.closest('.sgroup')).forEach((i) => { i.checked = el.checked; if (i.dataset.act !== 'chk') return; const id = +i.dataset.id; if (el.checked) st.checked.add(id); else st.checked.delete(id); }); },
+    chkOrder: (el) => { const st = sec(), on = el.checked; (el.dataset.ids || '').split(',').filter(Boolean).forEach((x) => { if (on) st.checked.add(+x); else st.checked.delete(+x); });
+      $$('input[data-act=chk]', el.closest('.oblock')).forEach((i) => { i.checked = on; const id = +i.dataset.id; if (on) st.checked.add(id); else st.checked.delete(id); }); },
+    chkGroup: (el) => { const st = sec(), on = el.checked; $$('input[data-act=chk], input[data-act=chkOrder]', el.closest('.sgroup')).forEach((i) => { i.checked = on;
+      if (i.dataset.act !== 'chk') { (i.dataset.ids || '').split(',').filter(Boolean).forEach((x) => { if (on) st.checked.add(+x); else st.checked.delete(+x); }); return; }
+      const id = +i.dataset.id; if (on) st.checked.add(id); else st.checked.delete(id); }); },
+    toggleOrder: (el, e) => { if (e) e.stopPropagation(); const st = sec(), k = el.dataset.key; if (st.ordToggled.has(k)) st.ordToggled.delete(k); else st.ordToggled.add(k); setHtml('olist', oListHtml()); hydrate(); },
+    collapseOrders: () => { const st = sec(); st.ordCollapsed = !st.ordCollapsed; st.ordToggled.clear(); render(); },
     toggleGroup: (el) => { const st = sec(), k = el.dataset.key; if (st.toggled.has(k)) st.toggled.delete(k); else st.toggled.add(k); setHtml('olist', oListHtml()); hydrate(); },
     collapseAll: () => { const st = sec(); st.collapsed = !st.collapsed; st.toggled.clear(); st.limit = 300; render(); },
     seg: (el) => { S.a.seg = el.dataset.seg; S.a.checked.clear(); S.a.limit = 300; S.o.sel = null; render(); },

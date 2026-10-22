@@ -640,3 +640,8 @@ table.ppitems th { background: #fff; }
 tr.ppsub > td { background: #FBF9FF; padding: 8px 10px 12px; }
 .ppobst .badge { white-space: nowrap; }
 .ssinfo { gap: 10px; margin: -4px 0 12px; }
+
+/* v3.43 closable orders, new orders */
+.ochev { border: none; background: none; cursor: pointer; color: var(--accent-deep); font-size: 13px; padding: 0 4px; min-width: 22px; align-self: center; }
+.oblock.oclosed .ometa { padding-bottom: 10px; }
+.badge.newo { background: #DFF3FF; color: #0E6BA8; font-weight: 800; letter-spacing: .02em; }
