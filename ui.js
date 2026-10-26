@@ -29,7 +29,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 38;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 39;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -896,6 +896,38 @@ Household Category Team`;
         <td class="small">${esc(notes(r))}</td>
         <td class="right"><div class="ppbtns">${r.status === 'RECEIVED' ? `<button class="btn sm" data-act="ppList" data-store="${esc(r.store_code)}" data-flag="${Object.values(r.order_state || {}).some((x) => x.s === 'RECEIVED') || !Object.keys(r.order_state || {}).length ? 'PROOFOK' : 'PROOFALLOW'}">Lines</button>${ed ? (r.kind === 'waived' ? `<button class="btn sm" data-act="ppDo" data-a="unwaive" data-id="${r.id}" title="The orders need proof again">Undo</button>` : `<button class="btn sm" data-act="ppDo" data-a="reopen" data-id="${r.id}" title="Back to waiting for proof (orders rejected for no proof stay rejected)">Undo</button>`) : ''}` : ''}</div></td></tr>`).join('')}</tbody></table></div></div>` : '';
     return `${need}${wait}${done}`;
+  }
+
+  /* ================= undo an orders upload (version 39) ================= */
+  const undoOn = () => !!S.M && S.M.schema >= 39 && editor();
+  async function ordUndo() {
+    let ups;
+    try { ups = await A.rpc('orders_uploads', { p_limit: 10 }); } catch (e) { return tell('Undo an upload', e.message); }
+    if (!ups.length) return tell('Undo an upload', 'No orders upload is in the history yet.');
+    const row = (u) => `<tr><td><b>${esc(u.file || '')}</b><div class="small">${when(u.ts)}${u.by ? ' &middot; ' + esc(u.by) : ''}</div><div class="small muted">${esc(u.detail || '')}</div></td>
+      <td class="right">${inr(u.lines)}<div class="small">${inr(u.orders)} ${plural(u.orders, 'order')}</div></td><td class="right">${u.worked ? `<b class="warn">${inr(u.worked)}</b>` : '-'}</td><td class="right">${u.flags ? inr(u.flags) : '-'}</td>
+      <td class="right">${u.undone ? `<span class="badge">undone ${when(u.undone)}</span>` : u.lines || u.flags ? `<button class="btn sm danger" data-undo="${u.id}">Undo ...</button>` : '<span class="small muted">nothing left to undo</span>'}</td></tr>`;
+    const d = pop(`<div class="row"><h2 class="grow">Undo an orders upload</h2><button class="btn sm" data-act="closePop">Close</button></div>
+      <p class="small">An orders upload only adds order lines and flags "SAP quantity changed" for review - it never changes the lines already here. Undo takes out the lines that upload added (so the right file adds them again) and clears the flags it set. Lines worked on since (approved, offered, rejected, in a task) are kept unless you say so.</p>
+      <div class="tablewrap"><table class="tight"><thead><tr><th>Upload (latest first)</th><th class="right">Lines it added<br><span class="thsub">still here</span></th><th class="right">Worked on<br><span class="thsub">since</span></th><th class="right">SAP qty<br><span class="thsub">flags</span></th><th></th></tr></thead>
+      <tbody>${ups.map(row).join('')}</tbody></table></div>`, 'big');
+    d.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-undo]'); if (!btn) return;
+      const u = ups.find((x) => String(x.id) === btn.dataset.undo); if (!u) return;
+      const v = await ask(`Undo '${u.file}'`, `<div class="stack"><p>Loaded ${esc(when(u.ts))}${u.by ? ' by ' + esc(u.by) : ''}.</p>
+        <ul class="small"><li><b>${inr(u.lines - u.worked)}</b> order ${plural(u.lines - u.worked, 'line')} it added are taken out of the tracker.</li>
+        ${u.flags ? `<li><b>${inr(u.flags)}</b> "SAP quantity changed" ${plural(u.flags, 'flag')} it set ${u.flags === 1 ? 'is' : 'are'} cleared (the quantities stay as they were).</li>` : ''}
+        ${u.worked ? `<li><b>${inr(u.worked)}</b> ${plural(u.worked, 'line')} it added ${u.worked === 1 ? 'was' : 'were'} worked on since (approved, offered or rejected) and ${u.worked === 1 ? 'is' : 'are'} kept.</li>` : ''}</ul>
+        ${u.worked ? `<label class="row"><input type="checkbox" name="worked"> Take those ${inr(u.worked)} out as well (their approvals and offers are released; dispatched lines always stay)</label>` : ''}
+        <p class="small">Then load the right file as usual.</p></div>`, 'Undo the upload', { danger: true, noFocus: true });
+      if (!v) return;
+      S.busy = true;
+      try {
+        const r = await A.rpc('orders_upload_undo', { p_event: u.id, p_worked: !!v.worked });
+        d.close(); await reload();
+        await tell('Upload undone', `'${r.file}'\nOrder lines taken out: ${inr(r.removed)} (${inr(r.orders)} ${plural(r.orders, 'order')})` + (r.kept ? `\nKept (worked on since): ${inr(r.kept)}` : '') + (r.flags ? `\nSAP quantity flags cleared: ${inr(r.flags)}` : '') + '\n\nNow load the right orders file (Data, step 8).');
+      } catch (err) { await tell('Not undone', err.message); } finally { S.busy = false; }
+    });
   }
 
   /* ================= Dashboard ================= */
@@ -3624,7 +3656,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
         left.push(step('7 &nbsp;Stock at the stores', 'The store-wise stock report (closing stock, in transit, CLA and sales by store and article - the SAP download as it comes, even the large web-page .xls). Shown on every order line: closing stock, in transit (in transit + CLA), the total, and the sale this month - for the ordered article and for its alternates, so you can see when a store already holds stock. Each upload replaces the previous one.',
           b('Upload store stock ...', 'pick', 'data-kind="storestock"') + b('Template', 'template', 'data-kind="storestock"', 'ghost'), ssSt));
       }
-      left.push(step('8 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary') + b('Template', 'template', 'data-kind="orders"', 'ghost'), last('Orders')));
+      left.push(step('8 &nbsp;Orders', 'Upload the SAP order export as often as you like, exactly as it comes out. Only order lines that are not already here are added; existing lines and their approvals are never overwritten. A missing or zero price is taken as MRP.', b('Upload orders ...', 'pick', 'data-kind="orders"', 'primary') + b('Template', 'template', 'data-kind="orders"', 'ghost') + (undoOn() ? b('Undo an upload ...', 'ordUndo', 'title="Take back an orders file loaded by mistake"', 'ghost') : ''), last('Orders')));
       if (sapOn()) left.push(step('9 &nbsp;Approvals done in SAP', 'The SAP approval export (OrderNo, ArtCode, ApprStatus ...). For each order + article: <b>approved by category or by planning</b> - the quantity allocated in SAP (QtyAlloc) is approved here, at the price given, by the person (IssueRecBy) and on the date (CatApprDate) SAP shows. These are <b>not</b> taken off the DC stock (the stock report already accounts for them); <b>rejected</b> - the line is rejected with the SAP status and remark. Lines not in the tracker yet are added. Nothing is applied twice, and where the tracker and SAP disagree nothing is changed: those lines are listed for you to check. ',
         b('Upload SAP approvals ...', 'pick', 'data-kind="sapappr"', 'primary') + b('Template', 'template', 'data-kind="sapappr"', 'ghost'), last('SAP approvals')));
     }
@@ -4182,6 +4214,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     refresh: () => run(async () => {}),
     nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
     orderFind: () => orderFind(''),
+    ordUndo: () => ordUndo(),
     oseg: (el) => { S.o.seg = el.dataset.seg; S.o.checked.clear(); S.o.sel = null; S.o.limit = 300; render(); },
     ppGo: () => { S.view = 'orders'; S.o.seg = 'proof'; S.o.sel = null; render(); },
     ppAsk: (el) => ppAsk(el.dataset.store),
