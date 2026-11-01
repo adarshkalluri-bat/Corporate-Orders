@@ -29,7 +29,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 39;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 40;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -298,8 +298,10 @@
   function startPolling() {
     if (poller) return;
     const every = (A.cfg.pollSeconds || 20) * 1000;
+    let checking = false;                              // one check at a time: a slow load is not started again on top of itself
     const check = async () => {
-      if (document.hidden || S.busy || !S.M) return;
+      if (document.hidden || S.busy || !S.M || checking) return;
+      checking = true;
       try {
         const two = S.M.schema >= 32, r = two ? await A.rpc('rev2') : { rev: await A.rpc('rev'), trev: 0 };
         S.online = true;
@@ -314,7 +316,7 @@
         } else if (two && +r.trev !== +S.M.trev) {
           if (typing || $('#modal').children.length) syncLabel(); else await tasksRefresh();
         } else syncLabel();
-      } catch (e) { S.online = false; syncLabel(); }
+      } catch (e) { S.online = false; syncLabel(); } finally { checking = false; }
     };
     poller = setInterval(check, every);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });

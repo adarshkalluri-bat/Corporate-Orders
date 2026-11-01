@@ -78,7 +78,19 @@
   }
 
   /* Turn the server's snapshot into what the screens use. */
+  /* version 40: the database does not send empty fields of an order line; they are put back here, so every line has them all */
+  const LINE_KEYS = ['id', 'order_no', 'line_no', 'order_date', 'store_code', 'customer', 'article_code', 'mc_name', 'mrp', 'req_price', 'req_qty', 'rejected',
+    'reject_reason', 'balance_closed', 'sap_new_qty', 'imported_at', 'source_file', 'del_date', 'phone', 'poc_name', 'pack_size', 'price_missing', 'dup_count',
+    'dup_qty', 'deleted_at', 'deleted_by', 'orig_article', 'art_remarks', 'appr_manual', 'appr_manual_by', 'disp_manual', 'appr_note', 'parent_id', 'moved_qty',
+    'sap_appr', 'approved_open', 'dispatched', 'offered', 'supplied', 'locs', 'sap_open', 'sap_ded', 'approved_value', 'approved_at', 'appr_by'];
+  function fillLines(lines) {
+    const keys = new Set(LINE_KEYS);
+    for (const l of lines) for (const k in l) keys.add(k);
+    const all = Array.from(keys);
+    for (const l of lines) for (const k of all) if (l[k] === undefined) l[k] = null;
+  }
   function build(snap) {
+    fillLines(snap.lines || []);
     const articles = {}, stores = {}, same = {}, diff = {}, pos = {}, now = today();
     for (const a of snap.articles) {
       articles[a.article_code] = a;
