@@ -29,7 +29,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 41;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 43;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -1486,8 +1486,8 @@ Household Category Team`;
     else if (short) say.push('No alternate has balance at the DC.');
     if (ly) say.push(`Last year: ${inr(ly.lines)} order ${plural(ly.lines, 'line')} from ${inr(ly.stores)} ${plural(ly.stores, 'store')}, ${inr(ly.wq)} pcs wanted, ${inr(ly.fq)} approved.`);
     if (qs.length) say.push(`${inr(qs.length)} ${plural(qs.length, 'query', 'queries')} logged for this article (${inr(qs.reduce((t, q) => t + q.qty, 0))} pcs).`);
-    const ssCell = (l) => (l.ss ? `<td class="right">${inr(l.ss.own.closing)}</td><td class="right">${inr(l.ss.own.transit)}</td><td class="right">${inr(l.ss.own.mtd)}</td>` : '<td></td><td></td><td></td>');
-    const wait = waiting.length ? `<h3>Stores waiting</h3><div class="tablewrap"><table class="tight"><thead><tr><th>Store</th><th>Order</th><th class="right">Qty<br>wanted</th><th class="right">Pending<br>qty</th><th>Deliver by</th>${M.hasStoreStock ? '<th class="right">Store<br>closing</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th>' : ''}</tr></thead><tbody>
+    const ssCell = (l) => (l.ss ? `<td class="right">${inr(l.ss.own.closing)}</td><td class="right">${inr(l.ss.own.transit)}</td><td class="right">${inr(l.ss.own.mtd)}</td>${M.hasLm ? `<td class="right">${inr(l.ss.own.lm)}</td>` : ''}` : '<td></td><td></td><td></td>' + (M.hasLm ? '<td></td>' : ''));
+    const wait = waiting.length ? `<h3>Stores waiting</h3><div class="tablewrap"><table class="tight"><thead><tr><th>Store</th><th>Order</th><th class="right">Qty<br>wanted</th><th class="right">Pending<br>qty</th><th>Deliver by</th>${M.hasStoreStock ? '<th class="right">Store<br>closing</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th>' + (M.hasLm ? '<th class="right">LM<br>sale</th>' : '') : ''}</tr></thead><tbody>
       ${waiting.slice(0, 30).map((l) => `<tr><td><b>${esc(l.store_code)}</b> <span class="small">${esc(l.store_name)}</span></td><td class="small">${esc(ref(l))}</td><td class="right">${inr(l.req_qty)}</td><td class="right b">${inr(l.balance)}</td><td class="small">${delCell(l)}</td>${M.hasStoreStock ? ssCell(l) : ''}</tr>`).join('')}</tbody></table></div>${waiting.length > 30 ? `<p class="small">... and ${waiting.length - 30} more.</p>` : ''}` : '';
     const alts = sameF.length || diffF.length ? `<h3>Alternates with balance</h3><div class="small">${sameF.concat(diffF).slice(0, 6).map(([x, f]) => `<span class="nowrap"><b>${esc(x.article_code)}</b> ${esc(x.description || '')}: <b class="good">${inr(f)}</b></span>`).join(' &nbsp;|&nbsp; ')}</div>` : '';
     const qList = qs.length ? `<h3>Queries logged</h3><div class="small">${qs.slice(0, 5).map((q) => `${when(q.created_at)} &middot; <b>${esc(q.store_code)}</b> ${esc(q.store_name || '')} &middot; ${inr(q.qty)} pcs at Rs ${inr2(Number(q.price))} &middot; ${esc(q.by_name || '')}`).join('<br>')}</div>` : '';
@@ -1510,7 +1510,10 @@ Household Category Team`;
   /* ================= Sell-through: approved qty against the store's stock and MTD sale =================
      One row per store + article that has an approved (or dispatched) quantity. Closing stock, in transit (in transit + CLA)
      and MTD sale come from the store stock report (Data > 7). An approved alternate counts under its own article. */
-  const stPct = (r) => (r.appr > 0 ? r.mtd / r.appr : null);
+  /* version 3.48: with last month's sale in the report, the sale counted against the approved qty is this month's + last month's
+     (the Diwali orders are approved in October and sell into November). Without it: MTD sale, as before. */
+  const stSale = (r) => r.mtd + (S.M && S.M.hasLm ? r.lm || 0 : 0);
+  const stPct = (r) => (r.appr > 0 ? stSale(r) / r.appr : null);
   function stRows() {
     const M = S.M, map = new Map();
     for (const l of M.lines) {
@@ -1518,16 +1521,16 @@ Household Category Team`;
       const k = l.store_code + '|' + l.article_code;
       let r = map.get(k);
       if (!r) {
-        const a = M.articles[l.article_code] || {}, st = M.stores[l.store_code] || {}, own = l.ss ? l.ss.own : { closing: 0, transit: 0, mtd: 0 };
+        const a = M.articles[l.article_code] || {}, st = M.stores[l.store_code] || {}, own = l.ss ? l.ss.own : { closing: 0, transit: 0, mtd: 0, lm: 0 };
         r = { store: l.store_code, sname: l.store_name || st.store_name || '', state: st.state || '', mc: l.mc_name || a.mc_name || '', art: l.article_code, desc: l.description || a.description || '',
-          mrp: Number(l.mrp) || Number(a.mrp) || 0, appr: 0, value: 0, orders: new Set(), closing: own.closing, transit: own.transit, mtd: own.mtd, buyer: a.buyer || '' };
+          mrp: Number(l.mrp) || Number(a.mrp) || 0, appr: 0, value: 0, orders: new Set(), closing: own.closing, transit: own.transit, mtd: own.mtd, lm: own.lm || 0, buyer: a.buyer || '' };
         map.set(k, r);
       }
       r.appr += l.approved; r.value += Number(l.value) || 0; r.orders.add(l.order_no);
     }
     return Array.from(map.values());
   }
-  const ST_SORTS = { pct: 'Sold % (lowest first)', pct_high: 'Sold % (highest first)', appr: 'Approved qty (most first)', mtd: 'MTD sale (most first)', closing: 'Closing stock (most first)',
+  const ST_SORTS = { pct: 'Sold % (lowest first)', pct_high: 'Sold % (highest first)', appr: 'Approved qty (most first)', mtd: 'MTD sale (most first)', lm: 'LM sale (most first)', sale: 'Sale MTD + LM (most first)', closing: 'Closing stock (most first)',
     store: 'Store code', mc: 'MC name', article: 'Article code', mrp: 'MRP (high to low)' };
   /* Group by: [label, key of a row, the heading: [big, name, small]] */
   const ST_GROUPS = {
@@ -1539,12 +1542,12 @@ Household Category Team`;
     article: ['Article', (r) => r.art, (r) => [r.art, r.desc, r.mc]],
     buyer: ['Buyer', (r) => r.buyer || '(buyer not set)', (r) => [r.buyer || '(buyer not set)', '', '']]
   };
-  const ST_STATUS = { nosale: ['No sale yet', (r) => r.mtd <= 0], slow: ['Slow (sold under 50%)', (r) => r.mtd > 0 && stPct(r) < 0.5],
+  const ST_STATUS = { nosale: ['No sale yet', (r) => stSale(r) <= 0], slow: ['Slow (sold under 50%)', (r) => stSale(r) > 0 && stPct(r) < 0.5],
     selling: ['Selling (50% to 99%)', (r) => stPct(r) >= 0.5 && stPct(r) < 1], sold: ['Sold all (100% or more)', (r) => stPct(r) >= 1] };
-  const stSum = (rows) => rows.reduce((t, r) => { t.appr += r.appr; t.value += r.value; t.closing += r.closing; t.transit += r.transit; t.mtd += r.mtd; return t; },
-    { appr: 0, value: 0, closing: 0, transit: 0, mtd: 0, store: '', mc: '', art: '', mrp: 0 });
+  const stSum = (rows) => rows.reduce((t, r) => { t.appr += r.appr; t.value += r.value; t.closing += r.closing; t.transit += r.transit; t.mtd += r.mtd; t.lm += r.lm || 0; return t; },
+    { appr: 0, value: 0, closing: 0, transit: 0, mtd: 0, lm: 0, store: '', mc: '', art: '', mrp: 0 });
   const ST_CMP = { pct: (a, b) => (stPct(a) ?? 9) - (stPct(b) ?? 9) || b.appr - a.appr, pct_high: (a, b) => (stPct(b) ?? -1) - (stPct(a) ?? -1) || b.appr - a.appr,
-    appr: (a, b) => b.appr - a.appr, mtd: (a, b) => b.mtd - a.mtd, closing: (a, b) => b.closing - a.closing, store: (a, b) => a.store.localeCompare(b.store) || a.art.localeCompare(b.art),
+    appr: (a, b) => b.appr - a.appr, mtd: (a, b) => b.mtd - a.mtd, lm: (a, b) => (b.lm || 0) - (a.lm || 0), sale: (a, b) => stSale(b) - stSale(a), closing: (a, b) => b.closing - a.closing, store: (a, b) => a.store.localeCompare(b.store) || a.art.localeCompare(b.art),
     mc: (a, b) => a.mc.localeCompare(b.mc) || a.mrp - b.mrp || a.art.localeCompare(b.art), article: (a, b) => a.art.localeCompare(b.art) || a.store.localeCompare(b.store), mrp: (a, b) => b.mrp - a.mrp || a.art.localeCompare(b.art) };
   /* the rows that pass the search and the filters (store + article level), sorted */
   function stFiltered() {
@@ -1567,7 +1570,7 @@ Household Category Team`;
     return f.length ? `<span class="small">Filters on:</span>${f.map(([k, t]) => `<button class="fchip" data-act="stClear" data-key="${k}" title="Remove this filter">${esc(t)} <b>&#10005;</b></button>`).join('')}
       <button class="btn link" data-act="stClearAll">Clear all filters</button>` : ''; };
   const stBadge = (r) => { const p = stPct(r);
-    return r.mtd <= 0 ? '<span class="pill REJECTED">No sale yet</span>' : p >= 1 ? '<span class="pill APPROVED">Sold all</span>' : p >= 0.5 ? '<span class="pill PARTIAL">Selling</span>' : '<span class="pill AWAITING">Slow</span>'; };
+    return stSale(r) <= 0 ? '<span class="pill REJECTED">No sale yet</span>' : p >= 1 ? '<span class="pill APPROVED">Sold all</span>' : p >= 0.5 ? '<span class="pill PARTIAL">Selling</span>' : '<span class="pill AWAITING">Slow</span>'; };
   const stPctCell = (r, badge) => { const p = stPct(r); return `<td class="right nowrap sold" data-l="Sold"><div class="stbar"><i style="width:${Math.min(100, Math.round((p || 0) * 100))}%"></i></div><b>${p == null ? '-' : Math.round(p * 100) + '%'}</b>${badge ? `<div>${stBadge(r)}</div>` : ''}</td>`; };
   /* the store and the article cells, used by Sell-through and Store stock: MC sits under the article to keep every column in view */
   const storeCellHtml = (code, name, state) => `<b>${esc(code)}</b> <span class="small">${esc(name || '')}</span>${state ? `<div class="small muted">${esc(state)}</div>` : ''}`;
@@ -1575,7 +1578,7 @@ Household Category Team`;
   function stTableHtml() {
     const T = S.st, rows = stFiltered(), G = ST_GROUPS[T.group] || ST_GROUPS.none;
     if (!rows.length) return `<div class="empty card">${stRows().length ? 'Nothing matches these filters. <button class="btn sm" data-act="stClearAll">Clear all filters</button>' : 'Nothing is approved yet.'}</div>`;
-    const tot = stSum(rows), nums = (x, badge) => `<td class="right b big" data-l="Approved qty">${inr(x.appr)}</td><td class="right" data-l="Closing">${inr(x.closing)}</td><td class="right" data-l="In transit">${inr(x.transit)}</td><td class="right b big" data-l="MTD sale">${inr(x.mtd)}</td>${stPctCell(x, badge)}`;
+    const tot = stSum(rows), nums = (x, badge) => `<td class="right b big" data-l="Approved qty">${inr(x.appr)}</td><td class="right" data-l="Closing">${inr(x.closing)}</td><td class="right" data-l="In transit">${inr(x.transit)}</td><td class="right b big" data-l="MTD sale">${inr(x.mtd)}</td>${S.M.hasLm ? `<td class="right" data-l="LM sale">${inr(x.lm)}</td>` : ''}${stPctCell(x, badge)}`;
     const row = (r) => `<tr><td class="stcell">${storeCellHtml(r.store, r.sname, r.state)}</td><td class="artcell">${artCellHtml(r.art, r.desc, r.mc)}</td><td class="right" data-l="MRP">${inr2(r.mrp)}</td>${nums(r, true)}</tr>`;
     let body = '', shown = 0, hidden = 0;
     if (!G[1]) {
@@ -1584,7 +1587,7 @@ Household Category Team`;
       const m = new Map();
       for (const r of rows) { const k = G[1](r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
       const groups = Array.from(m, ([key, rs]) => Object.assign(stSum(rs), { key, rs, head: G[2](rs[0]), store: rs[0].store, mc: rs[0].mc, art: rs[0].art, mrp: rs[0].mrp }));
-      const byTotal = ['pct', 'pct_high', 'appr', 'mtd', 'closing', 'mrp'].includes(T.sort);
+      const byTotal = ['pct', 'pct_high', 'appr', 'mtd', 'lm', 'sale', 'closing', 'mrp'].includes(T.sort);
       groups.sort((a, b) => (byTotal ? (ST_CMP[T.sort])(a, b) : 0) || a.key.localeCompare(b.key));
       for (const g of groups) {
         if (shown >= T.limit) { hidden += g.rs.length; continue; }
@@ -1595,32 +1598,34 @@ Household Category Team`;
         if (!closed) { body += g.rs.map(row).join(''); shown += g.rs.length; }
       }
     }
-    return `<div class="tablewrap fitwrap"><table class="tight sttable fitcols resp"><colgroup><col class="c-store"><col class="c-art"><col class="c-mrp"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-sold"></colgroup>
-      <thead><tr><th>Store</th><th>Article <span class="thsub">&middot; MC</span></th><th class="right">MRP</th><th class="right">Approved<br>order qty</th><th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th><th class="right">Sold<br><span class="thsub">MTD &divide; approved</span></th></tr></thead><tbody>
+    return `<div class="tablewrap fitwrap"><table class="tight sttable fitcols resp"><colgroup><col class="c-store"><col class="c-art"><col class="c-mrp"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n">${S.M.hasLm ? '<col class="c-n">' : ''}<col class="c-sold"></colgroup>
+      <thead><tr><th>Store</th><th>Article <span class="thsub">&middot; MC</span></th><th class="right">MRP</th><th class="right">Approved<br>order qty</th><th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">MTD<br>sale</th>${S.M.hasLm ? '<th class="right" title="Last month\'s sale at the store">LM<br>sale</th>' : ''}<th class="right">Sold<br><span class="thsub">${S.M.hasLm ? 'MTD + LM' : 'MTD'} &divide; approved</span></th></tr></thead><tbody>
       <tr class="tot"><td colspan="3" class="glabel"><b>Total</b> <span class="small">${inr(rows.length)} store-article ${plural(rows.length, 'line')}, ${inr(new Set(rows.map((r) => r.store)).size)} stores</span></td>${nums(tot)}</tr>${body}</tbody></table></div>
       ${hidden ? `<div class="row" style="margin-top:8px"><span class="small grow">${inr(hidden)} more ${plural(hidden, 'line')} not shown.</span><button class="btn sm" data-act="stMore">Show more</button></div>` : ''}`;
   }
   function vSellThrough() {
     const M = S.M, T = S.st;
-    const head = `<div class="head"><h1>Sell-through</h1><span class="sub">Approved order qty at each store against the store's stock and its sale this month (MTD)</span></div>${M.hasStoreStock ? `<div class="row wrap ssinfo"><span class="small">Store stock in use: <b>${esc(M.meta.sstock_file || '(file name not kept)')}</b>${M.meta.sstock_loaded ? `, loaded ${esc(when(M.meta.sstock_loaded))}` : ''}</span><button class="btn sm" data-act="ssReload" title="Fetch the store stock again from the database">Reload store stock</button></div>` : ''}`;
+    const head = `<div class="head"><h1>Sell-through</h1><span class="sub">Approved order qty at each store against the store's stock and its sale${M.hasLm ? ' this month and last month (MTD + LM)' : ' this month (MTD)'}</span></div>${M.hasStoreStock ? `<div class="row wrap ssinfo"><span class="small">Store stock in use: <b>${esc(M.meta.sstock_file || '(file name not kept)')}</b>${M.meta.sstock_loaded ? `, loaded ${esc(when(M.meta.sstock_loaded))}` : ''}</span><button class="btn sm" data-act="ssReload" title="Fetch the store stock again from the database">Reload store stock</button></div>` : ''}`;
     if (!M.hasStoreStock) return head + `<div class="card stack"><h2>The store stock report is not loaded</h2><p>This screen uses the closing stock, in transit and MTD sale from the store stock report. ${editor() ? 'Upload it under Data, step 7.' : 'Ask the editor to upload it (Data, step 7).'}</p>${editor() ? '<div><button class="btn primary" data-act="nav" data-view="data">Open Data</button></div>' : ''}</div>`;
     const all = stRows();
     if (!all.length) return head + '<div class="card"><div class="empty">Nothing is approved yet. Approved lines show here with the store\'s stock and sale.</div></div>';
-    const ta = all.reduce((t, r) => t + r.appr, 0), tm = all.reduce((t, r) => t + r.mtd, 0), cnt = (k) => all.filter(ST_STATUS[k][1]).length;
+    const ta = all.reduce((t, r) => t + r.appr, 0), tm = all.reduce((t, r) => t + stSale(r), 0), cnt = (k) => all.filter(ST_STATUS[k][1]).length;
+    const tmM = all.reduce((t, r) => t + r.mtd, 0), tmL = all.reduce((t, r) => t + (r.lm || 0), 0);
     const tile = (cls, t, v, s, k) => `<div class="tile ${cls}${k ? ' pick' : ''}" ${k ? `data-act="stTile" data-k="${k}" title="Show only these"` : ''}><h3>${t}</h3><b>${v}</b><span>${s}</span></div>`;
     const tiles = `<div class="tiles st4">${tile('lilac', 'Approved qty', inr(ta) + ' pcs', `${inr(all.length)} store-article lines, ${inr(new Set(all.map((r) => r.store)).size)} stores`)}
-      ${tile('mint', 'MTD sale', inr(tm) + ' pcs', `${ta ? Math.round(tm / ta * 100) : 0}% of the approved qty; ${inr(cnt('sold'))} lines sold all`, 'sold')}
+      ${M.hasLm ? tile('mint', 'Sale (MTD + LM)', inr(tm) + ' pcs', `${ta ? Math.round(tm / ta * 100) : 0}% of the approved qty (this month ${inr(tmM)} + last month ${inr(tmL)}); ${inr(cnt('sold'))} lines sold all`, 'sold')
+        : tile('mint', 'MTD sale', inr(tm) + ' pcs', `${ta ? Math.round(tm / ta * 100) : 0}% of the approved qty; ${inr(cnt('sold'))} lines sold all`, 'sold')}
       ${tile('butter', 'Slow (under 50%)', inr(cnt('slow')), 'store-article lines - tap to see them', 'slow')}${tile('pink', 'No sale yet', inr(cnt('nosale')), 'store-article lines - tap to see them', 'nosale')}</div>`;
     const opt = (v, t, cur) => `<option value="${esc(v)}" ${cur === v ? 'selected' : ''}>${esc(t)}</option>`;
     const uniq = (f) => Array.from(new Set(all.map(f))).sort(), keep = (arr, v) => (v && !arr.includes(v) ? arr.concat([v]) : arr);
     const stores = uniq((r) => r.store), mcs = uniq((r) => r.mc).filter(Boolean), states = uniq((r) => r.state || '-'), buyers = uniq((r) => r.buyer || '-');
     const grouped = !!(ST_GROUPS[T.group] || [])[1];
-    return head + `<p class="small" style="margin:-4px 0 10px">Store stock report loaded ${when(M.meta.sstock_loaded)} (${esc(M.meta.sstock_file || '')}). MTD sale is the store's whole sale of the article this month (corporate and regular), so a line approved last month, or an article the store also sells off the shelf, can read differently.</p>
+    return head + `<p class="small" style="margin:-4px 0 10px">Store stock report loaded ${when(M.meta.sstock_loaded)} (${esc(M.meta.sstock_file || '')}). ${M.hasLm ? "Sold % counts this month's and last month's sale (MTD + LM) against the approved qty, so lines approved in October that sold in October are counted. Both are the store's whole sale of the article (corporate and regular), so an article the store also sells off the shelf can read higher." : "MTD sale is the store's whole sale of the article this month (corporate and regular), so a line approved last month, or an article the store also sells off the shelf, can read differently."}</p>
       ${tiles}
       <div class="toolbar eight" style="margin-top:12px">
         <input type="search" id="stq" class="wide search" placeholder="Search store, state, MC, article ..." value="${esc(T.q)}" aria-label="Search">
         <select id="stgroup" class="gsel" aria-label="Group by" title="How the lines are grouped">${Object.keys(ST_GROUPS).map((k) => opt(k, 'Group by: ' + ST_GROUPS[k][0], T.group)).join('')}</select>
-        <select id="stsort" class="gsel" aria-label="Sort by" title="The order of the lines (and of the groups)">${Object.keys(ST_SORTS).map((k) => opt(k, 'Sort by: ' + ST_SORTS[k], T.sort)).join('')}</select>
+        <select id="stsort" class="gsel" aria-label="Sort by" title="The order of the lines (and of the groups)">${Object.keys(ST_SORTS).filter((k) => M.hasLm || (k !== 'lm' && k !== 'sale')).map((k) => opt(k, 'Sort by: ' + ST_SORTS[k], T.sort)).join('')}</select>
         <select id="ststatus" aria-label="Sale status">${opt('', 'Any sale status', T.status)}${Object.keys(ST_STATUS).map((k) => opt(k, ST_STATUS[k][0], T.status)).join('')}</select>
         <select id="ststore" aria-label="Store">${opt('', 'All stores', T.store)}${keep(stores, T.store).map((s) => opt(s, s + '  ' + ((M.stores[s] || {}).store_name || ''), T.store)).join('')}</select>
         <select id="ststate" aria-label="State">${opt('', 'All states', T.state)}${keep(states, T.state).map((s) => opt(s, s === '-' ? '(state not on file)' : s, T.state)).join('')}</select>
@@ -1635,14 +1640,14 @@ Household Category Team`;
   function exportSellThrough() {
     const rows = stFiltered(), G = ST_GROUPS[S.st.group] || ST_GROUPS.none;
     if (!rows.length) return tell('Export', 'There is nothing to export here.');
-    const pc = (r) => (stPct(r) == null ? '' : Math.round(stPct(r) * 1000) / 10), status = (r) => (r.mtd <= 0 ? 'No sale yet' : stPct(r) >= 1 ? 'Sold all' : stPct(r) >= 0.5 ? 'Selling' : 'Slow');
+    const pc = (r) => (stPct(r) == null ? '' : Math.round(stPct(r) * 1000) / 10), status = (r) => (stSale(r) <= 0 ? 'No sale yet' : stPct(r) >= 1 ? 'Sold all' : stPct(r) >= 0.5 ? 'Selling' : 'Slow');
     return excelFile('Sell_Through', false, (sheet) => {
-      sheet('Sell-through', ['Store Code', 'Store Name', 'State', 'MC Name', 'Article Code', 'Description', 'MRP', 'Buyer', 'Approved Order Qty', 'Approved Value', 'Closing Stock', 'In Transit', 'MTD Sale', 'Sold % (MTD sale / approved)', 'Status', 'Orders'],
-        rows.map((r) => [r.store, r.sname, r.state, r.mc, r.art, r.desc, r.mrp, r.buyer, r.appr, Math.round(r.value), r.closing, r.transit, r.mtd, pc(r), status(r), Array.from(r.orders).join(', ')]));
+      sheet('Sell-through', ['Store Code', 'Store Name', 'State', 'MC Name', 'Article Code', 'Description', 'MRP', 'Buyer', 'Approved Order Qty', 'Approved Value', 'Closing Stock', 'In Transit', 'MTD Sale', S.M.hasLm ? 'Sold % ((MTD + LM sale) / approved)' : 'Sold % (MTD sale / approved)', 'Status', 'Orders'].concat(S.M.hasLm ? ['LM Sale'] : []),
+        rows.map((r) => [r.store, r.sname, r.state, r.mc, r.art, r.desc, r.mrp, r.buyer, r.appr, Math.round(r.value), r.closing, r.transit, r.mtd, pc(r), status(r), Array.from(r.orders).join(', ')].concat(S.M.hasLm ? [r.lm] : [])));
       if (G[1]) {
         const m = new Map(); for (const r of rows) { const k = G[1](r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
-        sheet(('By ' + G[0]).slice(0, 31), [G[0], 'Name', 'Stores', 'Articles', 'Approved Order Qty', 'Closing Stock', 'In Transit', 'MTD Sale', 'Sold %'],
-          Array.from(m.values()).map((rs) => { const t = stSum(rs), h = G[2](rs[0]); return [h[0], h[1], new Set(rs.map((r) => r.store)).size, new Set(rs.map((r) => r.art)).size, t.appr, t.closing, t.transit, t.mtd, pc(t)]; }));
+        sheet(('By ' + G[0]).slice(0, 31), [G[0], 'Name', 'Stores', 'Articles', 'Approved Order Qty', 'Closing Stock', 'In Transit', 'MTD Sale', 'Sold %'].concat(S.M.hasLm ? ['LM Sale'] : []),
+          Array.from(m.values()).map((rs) => { const t = stSum(rs), h = G[2](rs[0]); return [h[0], h[1], new Set(rs.map((r) => r.store)).size, new Set(rs.map((r) => r.art)).size, t.appr, t.closing, t.transit, t.mtd, pc(t)].concat(S.M.hasLm ? [t.lm] : []); }));
       }
       return `Exported ${inr(rows.length)} ${plural(rows.length, 'line')}` + (stActive().length ? ' (the filters you have on were applied)' : '');
     });
@@ -1652,7 +1657,7 @@ Household Category Team`;
      Every store + article in the latest store stock report, and every store + article with an order: closing stock, in transit,
      MTD sale, qty ordered (raised by the store) and qty approved. Searched and summed on the server, as the report is large. */
   const SK_GROUPS = { rows: 'None (store + article)', store: 'Store', state: 'State', mc: 'MC', mc_mrp: 'MC, then MRP', article: 'Article' };
-  const SK_SORTS = { stock: 'Stock (most first)', sale: 'MTD sale (most first)', ordered: 'Ordered (most first)', approved: 'Approved (most first)',
+  const SK_SORTS = { stock: 'Stock (most first)', sale: 'MTD sale (most first)', lm: 'LM sale (most first)', ordered: 'Ordered (most first)', approved: 'Approved (most first)',
     mrp: 'MRP (high to low)', store: 'Store code', article: 'Article code', mc: 'MC name' };
   const SK_ONLY = { orders: 'Ordered by the store', orders_nostock: 'Ordered, no stock at the store', stock: 'Has stock at the store', sale: 'Has MTD sale' };
   const SK_BLANK = { q: '', store: '', state: '', mc: '', mrp_min: '', mrp_max: '', only: '' };
@@ -1697,7 +1702,7 @@ Household Category Team`;
     if (!r) return '';
     const t = r.total, tile = (cls, h, v, s, k) => `<div class="tile ${cls}${k ? ' pick' : ''}" ${k ? `data-act="skTile" data-k="${k}" title="Show only these"` : ''}><h3>${h}</h3><b>${v}</b><span>${s}</span></div>`;
     return `<div class="tiles sk5">${tile('lilac', 'Stock at stores', inr(t.closing + t.transit) + ' pcs', `closing ${inr(t.closing)} + in transit ${inr(t.transit)}`, 'stock')}
-      ${tile('mint', 'MTD sale', inr(t.mtd) + ' pcs', 'sale this month', 'sale')}
+      ${tile('mint', 'MTD sale', inr(t.mtd) + ' pcs', S.M.hasLm && t.lm != null ? `sale this month; last month ${inr(t.lm)} pcs` : 'sale this month', 'sale')}
       ${tile('butter', 'Qty ordered', inr(t.ordered) + ' pcs', 'raised by the stores (not rejected)', 'orders')}
       ${tile('sky', 'Qty approved', inr(t.approved) + ' pcs', t.ordered ? Math.round(t.approved / t.ordered * 100) + '% of the qty ordered' : 'approved and dispatched')}
       ${tile('pink', 'Stores / articles', inr(t.stores) + ' / ' + inr(t.articles), inr(t.n) + ' store-article ' + plural(t.n, 'line'))}</div>`;
@@ -1707,10 +1712,11 @@ Household Category Team`;
     if (T.err) return `<div class="card note bad">${esc(T.err)}</div>`;
     if (!r) return '<div class="card empty">Searching ...</div>';
     if (!r.rows.length) return `<div class="empty card">${skActive().length ? 'Nothing matches these filters. <button class="btn sm" data-act="skClearAll">Clear all filters</button>' : 'The store stock report has no rows.'}</div>`;
-    const nums = (x) => `<td class="right" data-l="Closing">${inr(x.closing)}</td><td class="right" data-l="In transit">${inr(x.transit)}</td><td class="right b big" data-l="At store">${inr(x.closing + x.transit)}</td><td class="right b big" data-l="MTD sale">${inr(x.mtd)}</td>
+    const lmOn = S.M.hasLm;                                          // version 42: last month's sale, when the report has it
+    const nums = (x) => `<td class="right" data-l="Closing">${inr(x.closing)}</td><td class="right" data-l="In transit">${inr(x.transit)}</td><td class="right b big" data-l="At store">${inr(x.closing + x.transit)}</td><td class="right b big" data-l="MTD sale">${inr(x.mtd)}</td>${lmOn ? `<td class="right" data-l="LM sale">${x.lm == null ? '<span class="muted">-</span>' : inr(x.lm)}</td>` : ''}
       <td class="right" data-l="Ordered">${x.ordered ? `<b>${inr(x.ordered)}</b>${T.group === 'rows' && x.lines > 1 ? `<div class="small muted">${x.lines} lines</div>` : ''}` : '<span class="muted">-</span>'}</td><td class="right" data-l="Approved">${x.approved ? `<b class="good">${inr(x.approved)}</b>` : '<span class="muted">-</span>'}</td>`;
-    const numHead = '<th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">Total at<br>store</th><th class="right">MTD<br>sale</th><th class="right">Qty<br>ordered</th><th class="right">Qty<br>approved</th>';
-    const numCols = '<col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n">';
+    const numHead = '<th class="right">Closing<br>stock</th><th class="right">In<br>transit</th><th class="right">Total at<br>store</th><th class="right">MTD<br>sale</th>' + (lmOn ? '<th class="right" title="Last month\'s sale at the store">LM<br>sale</th>' : '') + '<th class="right">Qty<br>ordered</th><th class="right">Qty<br>approved</th>';
+    const numCols = '<col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n"><col class="c-n">' + (lmOn ? '<col class="c-n">' : '');
     const mrp = (x) => (x.mrp == null ? '-' : inr2(x.mrp)), cnt = (n, w) => `${inr(n)} ${plural(n, w)}`;
     let head, body, cols, lead;
     if (T.group === 'rows') {
@@ -1747,8 +1753,8 @@ Household Category Team`;
       <div class="toolbar eight" style="margin-top:12px">
         <input type="search" id="skq" class="wide search" placeholder="Search article code, description, MC, store ..." value="${esc(T.q)}" aria-label="Search">
         <select id="skgroup" class="gsel" aria-label="Group by" title="Add up by store, state, MC, MRP or article">${Object.keys(SK_GROUPS).map((k) => opt(k, 'Group by: ' + SK_GROUPS[k], T.group)).join('')}</select>
-        <select id="sksort" class="gsel" aria-label="Sort by">${Object.keys(SK_SORTS).map((k) => opt(k, 'Sort by: ' + SK_SORTS[k], T.sort)).join('')}</select>
-        <select id="skonly" aria-label="Show">${opt('', 'Show: everything', T.only)}${Object.keys(SK_ONLY).map((k) => opt(k, 'Show: ' + SK_ONLY[k], T.only)).join('')}</select>
+        <select id="sksort" class="gsel" aria-label="Sort by">${Object.keys(SK_SORTS).filter((k) => M.hasLm || k !== 'lm').map((k) => opt(k, 'Sort by: ' + SK_SORTS[k], T.sort)).join('')}</select>
+        <select id="skonly" aria-label="Show">${opt('', 'Show: everything', T.only)}${Object.keys(SK_ONLY).map((k) => opt(k, 'Show: ' + (k === 'sale' && M.hasLm ? 'Has sale (this month or last month)' : SK_ONLY[k]), T.only)).join('')}</select>
         <input type="search" id="skstore" list="skstores" placeholder="Store code" value="${esc(T.store)}" aria-label="Store code" title="Type a store code, then press Enter">
         <select id="skstate" aria-label="State">${opt('', 'All states', T.state)}${(T.state && !states.includes(T.state) ? states.concat([T.state]) : states).map((s) => opt(s, s, T.state)).join('')}</select>
         <input type="search" id="skmc" list="skmcs" placeholder="MC name" value="${esc(T.mc)}" aria-label="MC name" title="Pick or type an MC name">
@@ -1767,8 +1773,9 @@ Household Category Team`;
     prog.close();
     if (!r.rows.length) return tell('Export', 'There is nothing to export here.');
     return excelFile('Store_Stock', false, (sheet) => {
-      const nums = (x) => [x.closing, x.transit, x.closing + x.transit, x.mtd, x.ordered, x.approved];
-      const numHead = ['Closing Stock', 'In Transit (incl. CLA)', 'Total at Store', 'MTD Sale', 'Qty Ordered', 'Qty Approved'];
+      const lmOn = S.M.hasLm;
+      const nums = (x) => [x.closing, x.transit, x.closing + x.transit, x.mtd].concat(lmOn ? [x.lm == null ? '' : x.lm] : [], [x.ordered, x.approved]);
+      const numHead = ['Closing Stock', 'In Transit (incl. CLA)', 'Total at Store', 'MTD Sale'].concat(lmOn ? ['LM Sale'] : [], ['Qty Ordered', 'Qty Approved']);
       if (T.group === 'rows') sheet('Store stock', ['Store Code', 'Store Name', 'State', 'MC Name', 'Article Code', 'Description', 'MRP'].concat(numHead, ['Order Lines']),
         r.rows.map((x) => [x.s, x.sname, x.state, x.mc, x.a, x.descr, x.mrp].concat(nums(x), [x.lines])));
       else {
@@ -2274,7 +2281,7 @@ Household Category Team`;
     const st = qpStore(), x = st && qpSS(code);
     if (!st || !S.M.hasStoreStock || S.M.schema < 27) return '';
     if (!x || x.loading) return wide ? ['<span class="muted">-</span>', '<span class="muted">-</span>'] : '';
-    const own = x.ss ? `<b>${inr(x.ss.c)}</b>${x.ss.t ? ` + ${inr(x.ss.t)} in transit` : ''} &middot; sold ${inr(x.ss.m)} this month` : '<span class="muted">not in the store stock report</span>';
+    const own = x.ss ? `<b>${inr(x.ss.c)}</b>${x.ss.t ? ` + ${inr(x.ss.t)} in transit` : ''} &middot; sold ${inr(x.ss.m)} this month${x.ss.lm != null ? `, ${inr(x.ss.lm)} last month` : ''}` : '<span class="muted">not in the store stock report</span>';
     const near = x.state ? (x.st && (x.st.c || x.st.t) ? `<b>${inr(x.st.c + x.st.t)}</b> in ${inr(x.st.n)} ${plural(x.st.n, 'store')}` : 'none') : '<span class="muted">state not on file</span>';
     return wide ? [own, near] : `<div class="small qpss">At ${esc(st)}: ${own} &middot; other ${esc(x.state || '')} stores: ${near}</div>`;
   }
@@ -2934,6 +2941,7 @@ Household Category Team`;
     if (!l.ss) return '';
     const o = l.ss.own, alt = l.ss.altTotal;
     const bits = [`At store <b class="${o.total > 0 ? '' : 'muted'}">${inr(o.total)}</b>${o.transit ? ` <span class="muted">(${inr(o.closing)} + ${inr(o.transit)} in transit)</span>` : ''}`, `MTD sale <b>${inr(o.mtd)}</b>`];
+    if (S.M.hasLm) bits.push(`LM sale <b>${inr(o.lm)}</b>`);
     if (alt > 0) bits.push(`alternates <b>${inr(alt)}</b>`);
     return `<div class="small sstk ${l.req_qty > 0 && l.ss.family >= l.req_qty ? 'full' : ''}" title="${esc(ssTitle(l))}">${bits.join(compact ? ' &middot; ' : ' &middot; ')}</div>`;
   }
@@ -2942,11 +2950,11 @@ Household Category Team`;
     const o = l.ss.own, full = l.req_qty > 0 && l.ss.family >= l.req_qty, alt = l.ss.altTotal;
     return `<td class="big right ${full ? 'warnc' : ''}" title="${esc(ssTitle(l))}"><b class="${o.total > 0 ? '' : 'zero'}">${inr(o.total)}</b>
         ${o.transit ? `<div class="small">${inr(o.transit)} in transit</div>` : ''}${alt > 0 ? `<div class="small ${full ? 'warn b' : ''}">+ ${inr(alt)} in alternates</div>` : ''}</td>
-      <td class="big right"><b class="${(o.mtd || l.ss.familyMtd) ? '' : 'zero'}">${inr(o.mtd)}</b>${l.ss.familyMtd > o.mtd ? `<div class="small">+ ${inr(l.ss.familyMtd - o.mtd)} alternates</div>` : ''}</td>`;
+      <td class="big right"><b class="${(o.mtd || l.ss.familyMtd) ? '' : 'zero'}">${inr(o.mtd)}</b>${l.ss.familyMtd > o.mtd ? `<div class="small">+ ${inr(l.ss.familyMtd - o.mtd)} alternates</div>` : ''}${S.M.hasLm ? `<div class="small muted" title="Last month's sale at the store">LM ${inr(o.lm)}</div>` : ''}</td>`;
   }
   function ssTitle(l) {
-    const o = l.ss.own, L = [`Stock at ${l.store_code}: closing ${o.closing}, in transit (incl. CLA) ${o.transit}, sale this month ${o.mtd}`];
-    l.ss.alts.forEach((x) => L.push(`${x.code} ${(S.M.articles[x.code] || {}).description || ''}: ${x.total} (closing ${x.closing}, in transit ${x.transit}), MTD sale ${x.mtd}`));
+    const o = l.ss.own, L = [`Stock at ${l.store_code}: closing ${o.closing}, in transit (incl. CLA) ${o.transit}, sale this month ${o.mtd}${S.M.hasLm ? `, last month ${o.lm}` : ''}`];
+    l.ss.alts.forEach((x) => L.push(`${x.code} ${(S.M.articles[x.code] || {}).description || ''}: ${x.total} (closing ${x.closing}, in transit ${x.transit}), MTD sale ${x.mtd}${S.M.hasLm ? `, LM sale ${x.lm}` : ''}`));
     return L.join('\n');
   }
   /* the store's remark on the article (from "Article Remarks" in the orders file): a one-liner on the line when there is one */
@@ -3188,13 +3196,13 @@ Household Category Team`;
     }
     if (l.orig_article) out.push(`<div class="card"><div class="note info"><b>${esc(l.article_code)} is here in place of ${esc(l.orig_article)}</b> ${esc(l.orig_desc)}, which is what the store ordered. Cancelling the approval of the alternate brings the ordered article back.</div></div>`);
     if (l.ss) {
-      const row = (code, kind, v, strong) => `<tr><td class="w"><b>${esc(code)}</b> <span class="small muted">${kind}</span><div class="small">${esc((artOf(code) || {}).description || '')}</div></td><td class="right">${inr(v.closing)}</td><td class="right">${inr(v.transit)}</td><td class="right b">${inr(v.total)}</td><td class="right">${inr(v.mtd)}</td></tr>`;
+      const row = (code, kind, v, strong) => `<tr><td class="w"><b>${esc(code)}</b> <span class="small muted">${kind}</span><div class="small">${esc((artOf(code) || {}).description || '')}</div></td><td class="right">${inr(v.closing)}</td><td class="right">${inr(v.transit)}</td><td class="right b">${inr(v.total)}</td><td class="right">${inr(v.mtd)}</td>${S.M.hasLm ? `<td class="right">${inr(v.lm)}</td>` : ''}</tr>`;
       const KIND = { same: 'same design', diff: 'same price', ordered: 'ordered by store' };
       const f = l.ss.family, full = l.req_qty > 0 && f >= l.req_qty;
       out.push(`<div class="card stack"><div class="row"><h3 class="grow">Stock already at ${esc(l.store_code)} ${esc(l.store_name)}</h3><span class="small">${esc(S.M.meta.sstock_file || '')}${S.M.meta.sstock_loaded ? ', loaded ' + when(S.M.meta.sstock_loaded) : ''}</span></div>
-        <div class="tablewrap"><table class="tight"><thead><tr><th>Article</th><th class="right">Closing</th><th class="right" title="In transit + CLA">In transit</th><th class="right">Total</th><th class="right">MTD sale</th></tr></thead><tbody>
+        <div class="tablewrap"><table class="tight"><thead><tr><th>Article</th><th class="right">Closing</th><th class="right" title="In transit + CLA">In transit</th><th class="right">Total</th><th class="right">MTD sale</th>${S.M.hasLm ? '<th class="right">LM sale</th>' : ''}</tr></thead><tbody>
           ${row(l.article_code, 'this line', l.ss.own, true)}${l.ss.alts.map((x) => row(x.code, KIND[x.kind] || '', x, false)).join('')}
-          ${l.ss.alts.length ? `<tr class="b"><td colspan="3">All alike articles at this store</td><td class="right">${inr(f)}</td><td class="right">${inr(l.ss.familyMtd)}</td></tr>` : ''}</tbody></table></div>
+          ${l.ss.alts.length ? `<tr class="b"><td colspan="3">All alike articles at this store</td><td class="right">${inr(f)}</td><td class="right">${inr(l.ss.familyMtd)}</td>${S.M.hasLm ? `<td class="right">${inr(l.ss.familyLm)}</td>` : ''}</tr>` : ''}</tbody></table></div>
         <div class="note ${full ? 'warn' : f > 0 ? 'info' : 'good'}">${full ? `The store already holds <b>${inr(f)} pcs</b> of this article and its alternates - at least the ${inr(l.req_qty)} it is asking for. Worth checking with the store before approving.`
           : f > 0 ? `The store holds ${inr(f)} pcs of this article and its alternates, against ${inr(l.req_qty)} wanted.` : 'The store has no stock of this article or its alternates.'}</div></div>`);
     }
@@ -3434,7 +3442,7 @@ else if (ed && x.state === 'APPROVED') b = `${locsOn() && x.source !== 'SAP' ? `
         <th class="right">Approved</th><th class="right">Pending qty</th>${S.M.hasStoreStock ? '<th class="right" title="Closing stock + in transit at the store, in this article and its alternates">At store<br>(incl. alternates)</th><th class="right">MTD sale</th>' : ''}${ed ? '<th class="right">Approve qty</th>' : ''}</tr></thead><tbody>
         ${waiting.map((l) => `<tr><td>${esc(ref(l))}</td><td>${when(l.order_date)}</td><td>${delCell(l)}</td><td class="w"><b>${esc(l.store_code)}</b> ${esc(l.store_name)}</td>${hasCust ? `<td>${esc(l.customer)}</td>` : ''}
           <td class="right">${inr(l.req_price)}</td><td class="right">${discCell(l)}</td><td class="right">${inr(l.req_qty)}</td><td class="right">${l.approved ? inr(l.approved) : '-'}</td><td class="right b">${inr(l.balance)}</td>
-          ${l.ss ? `<td class="right ${l.ss.family >= l.req_qty ? 'warn b' : ''}" title="${esc(ssTitle(l))}">${inr(l.ss.family)}</td><td class="right">${inr(l.ss.familyMtd)}</td>` : S.M.hasStoreStock ? '<td></td><td></td>' : ''}
+          ${l.ss ? `<td class="right ${l.ss.family >= l.req_qty ? 'warn b' : ''}" title="${esc(ssTitle(l))}">${inr(l.ss.family)}</td><td class="right">${inr(l.ss.familyMtd)}${S.M.hasLm ? `<div class="small muted" title="Last month's sale">LM ${inr(l.ss.familyLm)}</div>` : ''}</td>` : S.M.hasStoreStock ? '<td></td><td></td>' : ''}
           ${ed ? `<td class="right">${input(l)}</td>` : ''}</tr>`).join('')}</tbody></table></div>`;
     } else {
       body = waiting.map((l) => `<div class="ocard" style="cursor:default"><div class="grow"><div class="row"><b class="grow">${esc(l.store_code)} ${esc(l.store_name)}</b><span>Pending qty <b>${inr(l.balance)}</b></span></div>
@@ -3833,7 +3841,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
         const ordering = new Set(S.M.lines.map((l) => l.store_code)), inFile = new Set(shaped.map((x) => x.s));
         const missing = Array.from(ordering).filter((x) => !inFile.has(x));
         const has = (f) => rows.fields.includes(f);
-        msg = `${where}Rows read: ${inr(rows.length)}\nStores: ${inr(r.stores)}\nArticles: ${inr(r.articles)}\nStore-article rows saved: ${inr(r.rows)}\n\nUsed: closing stock (CL_STK_Q)${has('ss_it') ? ', in transit (INTRANSIT_Q)' : ''}${has('ss_cla') ? ' + CLA (CLA_STK_Q)' : ''}${has('ss_mtd') ? ', sale this month (MTD_SALE_Q)' : ''}. Other sale columns are not used.${has('ss_desc') || has('ss_mc') || has('mrp') ? '\nAlso kept from the report: ' + [has('ss_sname') ? 'store name' : '', has('ss_desc') ? 'article description' : '', has('ss_mc') ? 'MC' : '', has('mrp') ? 'MRP' : ''].filter(Boolean).join(', ') + ' (used on the Store stock screen for articles and stores that are not in your own files).' : ''}` +
+        msg = `${where}Rows read: ${inr(rows.length)}\nStores: ${inr(r.stores)}\nArticles: ${inr(r.articles)}\nStore-article rows saved: ${inr(r.rows)}\n\nUsed: closing stock (CL_STK_Q)${has('ss_it') ? ', in transit (INTRANSIT_Q)' : ''}${has('ss_cla') ? ' + CLA (CLA_STK_Q)' : ''}${has('ss_mtd') ? ', sale this month (MTD_SALE_Q)' : ''}${has('ss_lm') ? ', last month\'s sale (LM_SALE_Q)' : ''}. Other sale columns are not used.${has('ss_desc') || has('ss_mc') || has('mrp') ? '\nAlso kept from the report: ' + [has('ss_sname') ? 'store name' : '', has('ss_desc') ? 'article description' : '', has('ss_mc') ? 'MC' : '', has('mrp') ? 'MRP' : ''].filter(Boolean).join(', ') + ' (used on the Store stock screen for articles and stores that are not in your own files).' : ''}` +
           (!has('ss_mtd') ? '\n(No MTD sale column was found in this file.)' : '') +
           (missing.length ? `\n\nStores with orders that are not in this file (shown as no stock): ${missing.slice(0, 20).join(', ')}${missing.length > 20 ? ' ...' : ''}` : '') + '\n\nThis replaces the store stock loaded before.';
       } else if (kind === 'inward') {
@@ -4075,8 +4083,10 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
       p.dc || 0, p.inward || 0, p.free || 0].concat(C.LOCATIONS.map(([k]) => p.locFree[k] || 0), [(Number(a.ppo_cm) || 0) + (Number(a.ppo_nm) || 0),
       l.ss ? l.ss.own.closing : '', l.ss ? l.ss.own.transit : '', l.ss ? l.ss.own.total : '', l.ss ? l.ss.own.mtd : '', l.ss ? l.ss.altTotal : '', l.ss ? l.ss.alts.filter((x) => x.total > 0).map((x) => `${x.code} (${x.total})`).join(', ') : '',
       ...(() => { const x = l.sap_appr || {}; return [x.label || '', x.qty || '', x.price || '', x.by || '', x.at ? when(x.at) : '', x.po || '', x.remarks || '', x.conflict || '']; })(),
-      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file, l.art_remarks || '', l.appr_manual ? 'Yes' + (l.appr_note ? ': ' + l.appr_note : '') : '']);
+      l.sap_new_qty != null ? 'Yes' : '', l.sap_new_qty, when(l.imported_at), l.source_file, l.art_remarks || '', l.appr_manual ? 'Yes' + (l.appr_note ? ': ' + l.appr_note : '') : '']
+      .concat(M.hasLm ? [l.ss ? l.ss.own.lm : ''] : []));                 // version 42: last month's sale, added at the end so no column moves
   }
+  const exportHead = () => ORDER_HEAD.concat(S.M.hasLm ? ['Store LM Sale'] : []);
   const STOCK_HEAD = ['MC Name', 'MRP', 'Article', 'Description', 'Buyer', 'Same design group', 'Same price group', 'Pack', 'Stock report qty (Total MSA)', 'Inwards since the report', 'Total DC Qty']
     .concat(C.LOCATIONS.map(([, t]) => t + ' (report + inwards)'), ['Allocated to orders', 'Balance DC Qty'], C.LOCATIONS.map(([, t]) => 'Balance in ' + t), ['Pending Order Qty', 'Stores Waiting', 'Short By', 'Pending PO', 'Balance in same design', 'Balance in other designs', 'Expected Qty', 'Next Arrival', 'Expected deliveries']);
   function stockRow(c) {
@@ -4108,7 +4118,7 @@ const r = await A.rpc('stock_commit', Object.assign({ p_batch: batch, p_asof: as
   function exportExcel() {
     const M = S.M;
     return excelFile('Corporate_Orders', true, (sheet, ex, byLine) => {
-      sheet('Order lines', ORDER_HEAD, M.lines.map((l) => orderRow(l, ex, byLine)));
+      sheet('Order lines', exportHead(), M.lines.map((l) => orderRow(l, ex, byLine)));
 sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated Article', 'Type', 'Qty entered', 'Qty in full packs', 'Price approved', 'From DC location', 'State', 'Created', 'By', 'Decided', 'Dispatched'],
         ex.allocations.map((a) => { const l = M.byId[a.line_id] || {};
           return [l.order_no, l.line_item || '', l.store_code, l.orig_article || l.article_code, a.article_code, a.article_code === (l.orig_article || l.article_code) ? 'Ordered article' : 'Alternate',
@@ -4126,7 +4136,7 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
     const what = view === 'approved' ? SEGS[S.a.seg][0] : 'Pending orders';
     if (!rows.length) return tell('Export', 'There are no lines to export here.');
     return excelFile(view === 'approved' ? { todo: 'Approved_Orders', done: 'Dispatched', rej: 'Rejected' }[S.a.seg] : 'Pending_Orders', true, (sheet, ex, byLine) => {
-      sheet(what.slice(0, 31), ORDER_HEAD, rows.map((l) => orderRow(l, ex, byLine)));
+      sheet(what.slice(0, 31), exportHead(), rows.map((l) => orderRow(l, ex, byLine)));
       return `Exported ${inr(rows.length)} ${plural(rows.length, 'line')}` + (filtered ? ' (the filters you have on were applied)' : '');
     });
   }
@@ -4149,8 +4159,8 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
       sRows.push(['All order lines (each once, deleted left out)', all.length, sum(all, (l) => l.req_qty), Math.round(sum(all, (l) => l.req_qty * l.req_price)), sum(all, (l) => l.approved), Math.round(sum(all, (l) => (l.approved > 0 ? l.value : 0)))]);
       sRows.push([], ['Downloaded', when(new Date())], ['Note', 'Partly approved lines are on both the Pending and the Approved sheets, as on the screens.']);
       sheet('Summary', ['Status', 'Lines', 'Qty wanted', 'Value wanted (Rs)', 'Qty approved', 'Value approved (Rs)'], sRows);
-      sheet('All order lines', ORDER_HEAD, all.map((l) => orderRow(l, ex, byLine)));
-      for (const [t, f] of groups) sheet(t, ORDER_HEAD, all.filter(f).map((l) => orderRow(l, ex, byLine)));
+      sheet('All order lines', exportHead(), all.map((l) => orderRow(l, ex, byLine)));
+      for (const [t, f] of groups) sheet(t, exportHead(), all.filter(f).map((l) => orderRow(l, ex, byLine)));
       sheet('Deleted', ['Status', 'Site', 'Store Name', 'Order No', 'Article Code', 'Article Desc', 'MC Desc', 'MRP', 'Qty Wanted', 'Price Wanted', 'Book Date', 'Deleted on', 'Deleted by'],
         del.map((r) => ['Deleted', r.store_code, r.store_name || '', r.order_no, r.article_code, r.description || '', r.mc_name || '', +r.mrp, r.req_qty, +r.req_price, r.order_date || '', when(r.deleted_at), r.deleted_by || '']));
       return `Downloaded ${inr(all.length)} order ${plural(all.length, 'line')}${del.length ? ` and ${inr(del.length)} deleted` : ''}`;

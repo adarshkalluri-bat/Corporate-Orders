@@ -176,22 +176,24 @@
     /* Stock at the ordering store, for the ordered article and for its alternates of both kinds.
        closing = closing stock, transit = in transit + CLA, total = both, mtd = sale this month. */
     const sst = snap.store_stock || {}, hasSS = !!(snap.meta && snap.meta.sstock_batch);
-    const ssOf = (store, art) => { const v = (sst[store] || {})[art]; return v ? { closing: v[0], transit: v[1] + v[2], total: v[0] + v[1] + v[2], mtd: v[3] } : { closing: 0, transit: 0, total: 0, mtd: 0 }; };
+    /* lm = last month's sale (version 42), when the report has it */
+    const hasLm = hasSS && (snap.meta || {}).sstock_lm === '1' && (snap.schema || 1) >= 42;
+    const ssOf = (store, art) => { const v = (sst[store] || {})[art]; return v ? { closing: v[0], transit: v[1] + v[2], total: v[0] + v[1] + v[2], mtd: v[3], lm: Number(v[4]) || 0 } : { closing: 0, transit: 0, total: 0, mtd: 0, lm: 0 }; };
     for (const l of lines) {
       if (!hasSS) { l.ss = null; continue; }
       const own = ssOf(l.store_code, l.article_code), a = articles[l.article_code] || {};
       const gs = (a.group_same || '').trim(), gd = (a.group_diff || '').trim(), seen = new Set([l.article_code]), alts = [];
-      const add = (c, kind) => { if (seen.has(c)) return; seen.add(c); const v = ssOf(l.store_code, c); if (v.total || v.mtd) alts.push(Object.assign({ code: c, kind }, v)); };
+      const add = (c, kind) => { if (seen.has(c)) return; seen.add(c); const v = ssOf(l.store_code, c); if (v.total || v.mtd || (hasLm && v.lm)) alts.push(Object.assign({ code: c, kind }, v)); };
       if (gs) (same[gs] || []).forEach((c) => add(c, 'same'));
       if (gd) (diff[gd] || []).forEach((c) => add(c, 'diff'));
       if (l.orig_article) add(l.orig_article, 'ordered');
       const altTotal = alts.reduce((t, x) => t + Math.max(0, x.total), 0);
-      l.ss = { own, alts, altTotal, family: Math.max(0, own.total) + altTotal, familyMtd: own.mtd + alts.reduce((t, x) => t + x.mtd, 0) };
+      l.ss = { own, alts, altTotal, family: Math.max(0, own.total) + altTotal, familyMtd: own.mtd + alts.reduce((t, x) => t + x.mtd, 0), familyLm: own.lm + alts.reduce((t, x) => t + x.lm, 0) };
     }
     const byId = {};
     for (const l of lines) byId[l.id] = l;
     const locOrder = String(snap.loc_order || DEFAULT_LOC_ORDER).split(',').filter((k) => LOC_NAME[k] && k !== 'oth');
-    return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [], hasStoreStock: hasSS,
+    return { articles, stores, same, diff, pos, lines, byId, meta: snap.meta || {}, imports: snap.imports || [], locOrder, inwardLoads: snap.inward_loads || [], hasStoreStock: hasSS, hasLm,
              oldestOffer: snap.oldest_offer, rev: snap.rev, counts: snap.counts || {}, schema: snap.schema || 1, lyDaily: snap.ly_daily || [], expected: snap.expected || [], tasks: snap.tasks || [], task_opts: snap.task_opts || [],
              milestones: snap.milestones || [], msSeen: snap.ms_seen || 0, trev: snap.trev || 0, proofs: snap.proofs || [] };
   }
@@ -353,6 +355,7 @@
     ss_sname: ['plant (2)', 'store name', 'site name', 'plant name'],
     ss_desc: ['article (2)', 'article description', 'description', 'material description', 'article desc'],
     ss_mcc: ['merchandise category', 'mc code', 'merchandise category code'],
+    ss_lm: ['lm_sale_q', 'lm sale qty', 'lm sales qty', 'lm sale', 'lm sales', 'lm qty', 'last month sale', 'last month sale qty', 'last month sales'],
     ss_mc: ['merchandise category (2)', 'mc name', 'mc desc', 'mc description', 'merchandise category name']
   };
   const SPECS = {
@@ -372,7 +375,7 @@
     sapappr: { required: ['order_no', 'article_code', 'appr_status'], optional: ['qty_alloc', 'qty_appr', 'price_given', 'appr_by', 'cat_date', 'cat_time', 'plan_date', 'plan_time',
       'site_code', 'sap_po', 'remarks', 'reason_cat', 'store_code', 'store_name', 'mc_name', 'description', 'mrp', 'req_qty', 'req_price', 'order_date', 'del_date', 'poc_name', 'phone', 'pack_size'] },
     /* Stock at each store: closing stock, in transit and CLA, and the sale this month. Other sale columns are not used. */
-    storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd', 'ss_sname', 'ss_desc', 'ss_mcc', 'ss_mc', 'mrp'] }
+    storestock: { required: ['store_code', 'article_code', 'ss_cl'], optional: ['ss_it', 'ss_cla', 'ss_mtd', 'ss_lm', 'ss_sname', 'ss_desc', 'ss_mcc', 'ss_mc', 'mrp'] }
   };
   const NICE = { article_code: 'Article', total: 'Total MSA qty', req_qty: 'Qty wanted', order_no: 'Order ID', store_code: 'Store Code', mrp: 'MRP', in_qty: 'Inward qty', ss_cl: 'CL_STK_Q (closing stock)' };
 
@@ -592,16 +595,18 @@
     /* Stock at the stores: one row per store and article, {s, a, c: closing, i: in transit, l: CLA, m: sale this month,
        and when the report has them sn: store name, d: description, mcc: MC code, mc: MC name, p: MRP}. */
     storestock: (rows) => {
-      const agg = new Map(), dk = dotThousands(rows, ['ss_cl', 'ss_it', 'ss_cla', 'ss_mtd']), Q = (v) => Math.round(qtyNum(v, dk));
+      const agg = new Map(), dk = dotThousands(rows, ['ss_cl', 'ss_it', 'ss_cla', 'ss_mtd', 'ss_lm']), Q = (v) => Math.round(qtyNum(v, dk));
+      const hasLm = rows.some((r) => r.ss_lm != null && r.ss_lm !== '');      // version 42: last month's sale, only when the file has it
       for (const r of rows) {
         const a = code(r.article_code), st = code(r.store_code).toUpperCase();
         if (!/^\d{6,}$/.test(a) || !st || st.length > 12) continue;
         const k = st + '|' + a, q = { s: st, a, c: Q(r.ss_cl), i: Q(r.ss_it), l: Q(r.ss_cla), m: Q(r.ss_mtd) };
+        if (hasLm) q.lm = Q(r.ss_lm);
         /* store name, article description, MC and MRP as the report has them (used when the article or store is not in our own files) */
         const sn = txt(r.ss_sname), d = txt(r.ss_desc), mcc = code(r.ss_mcc), mc = txt(r.ss_mc), p = r.mrp == null || r.mrp === '' ? null : qtyNum(r.mrp, dk);
         const cur = agg.get(k);
         if (cur) {
-          cur.c += q.c; cur.i += q.i; cur.l += q.l; cur.m += q.m;
+          cur.c += q.c; cur.i += q.i; cur.l += q.l; cur.m += q.m; if (hasLm) cur.lm += q.lm;
           if (!cur.sn && sn) cur.sn = sn; if (!cur.d && d) cur.d = d; if (!cur.mcc && mcc) cur.mcc = mcc; if (!cur.mc && mc) cur.mc = mc; if (cur.p == null && p) cur.p = p;
         } else {
           if (sn) q.sn = sn; if (d) q.d = d; if (mcc) q.mcc = mcc; if (mc) q.mc = mc; if (p) q.p = p;
@@ -675,7 +680,7 @@
       ['Pstng Date', '', 'Posting date (DD.MM.YYYY)', '13.10.2026']] },
     storestock: { file: 'Template_7_Store_Stock', sheet: 'Store stock', cols: [
       ['Plant', 'Yes', 'Store (site) code', 'VM101'], ['Article', 'Yes', 'Article code', '1005107'], ['Article Description', '', 'Used when the article is not in the article files', 'Casserole 1500ml Red'], ['MC Name', '', 'MC name (same use)', 'HH_C_PO_CASSEROLE'], ['MRP', '', 'MRP (same use)', 499],
-      ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30]] },
+      ['CL_STK_Q', 'Yes', 'Closing stock at the store', 24], ['INTRANSIT_Q', '', 'In transit to the store', 12], ['CLA_STK_Q', '', 'CLA stock (counted as in transit)', 0], ['MTD_SALE_Q', '', 'Sale this month', 30], ['LM_SALE_Q', '', 'Sale last month', 42]] },
     lastyear: { file: 'Template_10_Last_Year_Orders', sheet: 'Sheet1', cols: [
       ['Status', '', 'Approved or Rejected', 'Approved'], ['Store Code', '', 'Store code', 'HA83'], ['Store Name', '', 'Store name', 'TENALI(343)'], ['Order ID', 'Yes', 'Order number', 'HA83042733'],
       ['MC Code', '', 'MC code', '213030006'], ['MC Name', '', 'MC name', 'HH_C_M_DINNER SET'], ['Art Code', 'Yes', 'Article code', '1212012200'], ['Desc', '', 'Article description', '399-HF-DS-LNX-BLUCHN-20P-MLM-DPK-6-25'],
