@@ -29,7 +29,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 43;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 44;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -3746,6 +3746,7 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     try {
       const rd = await R.read(new Uint8Array(await file.arrayBuffer()), kind, XL);
       const rows = C.readTable(rd.rows2d, kind, rd.header);
+      rd.rows2d = null;                                                // not needed any more: frees the memory of a large file before saving
       const where = rd.sheets.length > 1 ? `Sheet read: "${rd.sheet}"\n` : '';
       if (kind === 'master' || kind === 'data') {
         const shaped = C.shape.articles(rows, kind), parts = chunks(shaped, 1000);
@@ -3829,14 +3830,22 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
       } else if (kind === 'storestock') {
         if (!ssOn()) throw new Error('Stock at the stores needs the newest database script. In Supabase open SQL Editor, paste the newest supabase-setup.sql and click Run. Your data stays as it is.');
         prog.set('Reading the store stock ...'); await tick();
-        const shaped = C.shape.storestock(rows), parts = chunks(shaped, 5000);
+        /* version 3.49 (database 44): rows no longer in use are cleared in small steps, and the rows are saved in smaller pieces,
+           so no single step runs past the database's time limit on a small plan; a failure says which step and why */
+        const small = S.M.schema >= 44, PART = small ? 2000 : 5000;
+        const shaped = C.shape.storestock(rows), parts = chunks(shaped, PART);
         if (!shaped.length) throw new Error('No store stock was found in this file.');
-        const batch = await A.rpc('sstock_begin');
+        const step = async (what, fn) => { try { return await fn(); } catch (e) { throw new Error(`${what} did not go through: ${e.message}\n\nNothing has changed: the store stock in use is still the one loaded before. Try the upload again; if it keeps stopping at the same step, send this message.`); } };
+        const tidy = async (keep, label) => { let n = 0, got; do { got = await A.rpc('sstock_tidy', { p_keep: keep }); n += got; if (got) prog.set(`${label} (${inr(n)} rows) ...`); } while (got > 0); };
+        if (small) await step('Clearing an earlier unfinished upload', () => tidy(null, 'Clearing the rows of earlier unfinished uploads'));
+        const batch = await step('Starting the upload', () => A.rpc('sstock_begin', small ? { p_tidy: false } : {}));
         for (let i = 0; i < parts.length; i++) {
-          prog.set(`Saving ${inr(Math.min((i + 1) * 5000, shaped.length))} of ${inr(shaped.length)} store-article rows ...`);
-          await A.rpc('sstock_chunk', { p_batch: batch, p_rows: parts[i] });
+          prog.set(`Saving ${inr(Math.min((i + 1) * PART, shaped.length))} of ${inr(shaped.length)} store-article rows ...`);
+          await step(`Saving rows ${inr(i * PART + 1)} to ${inr(Math.min((i + 1) * PART, shaped.length))}`, () => A.rpc('sstock_chunk', { p_batch: batch, p_rows: parts[i] }));
         }
-        const r = await A.rpc('sstock_commit', { p_batch: batch, p_file: file.name });
+        prog.set('Putting the new store stock in use ...');
+        const r = await step('Putting the new store stock in use', () => A.rpc('sstock_commit', small ? { p_batch: batch, p_file: file.name, p_tidy: false } : { p_batch: batch, p_file: file.name }));
+        if (small) { try { await tidy(null, 'Clearing the store stock loaded before'); } catch (e) { /* the next upload clears it */ } }
         SSC.key = null;                                                  // fetch the new store stock on the reload below, whatever else changed
         const ordering = new Set(S.M.lines.map((l) => l.store_code)), inFile = new Set(shaped.map((x) => x.s));
         const missing = Array.from(ordering).filter((x) => !inFile.has(x));

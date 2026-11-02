@@ -125,6 +125,7 @@
           while ((cm = cellRe.exec(rm[1]))) {
             const span = Math.max(1, Math.min(20, +((/colspan\s*=\s*"?(\d+)/i.exec(cm[2]) || [])[1] || 1)));
             let v = unx(cm[3].replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+            if (v.length > 12) v = (' ' + v).slice(1);                       // a copy of its own: a cut-out piece would keep the whole 8 MB block of the file in memory
             if (v) any = true;
             row.push(v === '' ? null : v);
             for (let k = 1; k < span; k++) row.push(null);
