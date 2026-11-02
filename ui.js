@@ -29,7 +29,7 @@
     qy: { mstat: '', mode: 'one', list: null, rev: null, loading: false, err: '', q: '', form: { store: '', art: '', disc: '', price: '', qty: '', remarks: '' }, found: {}, saving: false, last: null },
     extra: {}                                        // articles looked up on the server that are not part of the everyday data
   };
-  const NEED_SCHEMA = 2, LATEST_SCHEMA = 40;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
+  const NEED_SCHEMA = 2, LATEST_SCHEMA = 41;       // older than NEED: the app stops and asks for the script; older than LATEST: it works, minus the newest features
   const editor = () => !!(S.me && S.me.role === 'editor');
   const locsOn = () => !!S.M && S.M.schema >= 6;      // DC locations per approval and inwards need database version 6
   const ssOn = () => !!S.M && S.M.schema >= 7;        // stock at the stores needs database version 7
@@ -282,9 +282,26 @@
     S.lastSync = new Date();
     render();
   }
+  /* version 41: after the first full download, a screen asks only for what changed since its copy (a few KB instead of
+     megabytes). Anything doubtful - and the editor's switch "Full download each time" - means the whole tracker. */
+  async function fetchSnap() {
+    const base = S.raw;
+    if (base && (base.schema || 1) >= 41) {
+      try {
+        const d = await A.rpc('snapshot_since', { p_rev: +base.rev || 0, p_trev: +base.trev || 0 });
+        if (d && d.full) { S.syncWay = 'full'; return d; }
+        const snap = C.applyDelta(base, d);
+        if (snap) { S.syncWay = 'changes'; return snap; }
+      } catch (e) { if (/sign|connection/i.test(e.message)) throw e; }
+    }
+    S.syncWay = 'full';
+    return A.rpc('snapshot');
+  }
   async function reload() {
-    const snap = await A.rpc('snapshot');
-    if ((snap.schema || 1) < NEED_SCHEMA) { const e = new Error('The database needs the newer setup script.'); e.oldDb = true; throw e; }
+    const raw = await fetchSnap();
+    if ((raw.schema || 1) < NEED_SCHEMA) { const e = new Error('The database needs the newer setup script.'); e.oldDb = true; throw e; }
+    S.raw = raw;                                     // kept as it came, the base for the next "what changed"
+    const snap = Object.assign({}, raw);              // build() copies each line; the store stock is added to this copy only
     await storeStockFor(snap);
     if (snap.me) S.me = snap.me;
     S.M = C.build(snap); S.lastSync = new Date(); S.stale = false; S.online = true;
@@ -3669,6 +3686,14 @@ const locs = C.LOC_KEYS.filter((k) => k === 'v' || rep(k) || inBy[k] || (lf && l
     }
     left.push(step('Export everything', 'One Excel file with every order line (pending, approved, dispatched, rejected), every allocation, stock by location and the activity log. To export only the pending orders, the approved orders or the shortages, use the Export button on that screen.', b('Export to Excel', 'export')));
     if (M.counts.deleted) left.push(step('Deleted order lines', `${inr(M.counts.deleted)} order ${plural(M.counts.deleted, 'line')} deleted from the Orders screen. They stay out when the SAP export is uploaded again. ${ed ? 'You can bring any of them back.' : ''}`, b('Show deleted lines', 'showDeleted')));
+    if (M.schema >= 41) {
+      const full = (M.meta || {}).sync_full === '1';
+      left.push(step('How screens update', full
+        ? '<b>Full download each time</b> (as up to version 3.45): after every change each open screen downloads the whole tracker again - several MB each time, which uses up the Supabase download allowance quickly. Use it only if the screens show something wrong in the other way.'
+        : '<b>Only what changed</b>: after the first load, each open screen downloads just the order lines and figures that changed - a few KB instead of several MB. If a screen ever shows something that does not add up, switch to full download: everyone goes back to the old way at once, nothing to install.',
+        ed ? b(full ? 'Switch to: only what changed' : 'Switch to: full download each time', 'syncMode', `data-full="${full ? 0 : 1}"`) : '',
+        `<span class="small">This screen: ${S.syncWay === 'changes' ? 'got only what changed at its last update' : 'got the full tracker at its last update'}.</span>`));
+    }
     left.push(`<div class="card stack" id="teamcard"><div class="row"><h2 class="grow">Team</h2></div><div id="team" class="muted">Loading ...</div></div>`);
     left.push(step('Your account', `Signed in as ${esc(S.me.email)} (${ed ? 'editor' : 'view only'}).`, b('Change password', 'password') + b('Sign out', 'signout')));
     if (ed) left.push(step('Try it out', 'Loads an invented range in the same file layouts as your real reports: a Diwali master with both kinds of alternates, a larger article data sheet, stores with lead times, DC stock by location and a first batch of orders. "Clear everything" removes all articles, stock, orders and approvals (the team stays).', b('Load test data', 'testdata') + b('Clear everything ...', 'wipe', '', 'danger')));
@@ -4212,7 +4237,14 @@ sheet('Allocations', ['Order No', 'Line', 'Site', 'Ordered Article', 'Allocated 
   const ACT = {
     retry: () => boot(),
     hardReload: () => location.reload(),
-    signout: async () => { clearInterval(poller); poller = null; await A.sb.auth.signOut().catch(() => {}); S.M = null; S.me = null; screenLogin(); },
+    syncMode: async (el) => {
+      const full = el.dataset.full === '1';
+      if (!(await ask(full ? 'Full download each time' : 'Only what changed', full
+        ? '<p>Every open screen will download the whole tracker after each change, as up to version 3.45. It is slower and uses much more of the Supabase download allowance. Switch?</p>'
+        : '<p>Every open screen will download only what changed after each change. Switch?</p>', full ? 'Switch to full download' : 'Switch'))) return;
+      await run(() => A.rpc('sync_mode_set', { p_full: full }), full ? 'All screens now download the full tracker each time' : 'All screens now download only what changed');
+    },
+    signout: async () => { clearInterval(poller); poller = null; await A.sb.auth.signOut().catch(() => {}); S.M = null; S.me = null; S.raw = null; screenLogin(); },
     refresh: () => run(async () => {}),
     nav: (el) => { S.view = el.dataset.view; S.o.sel = null; if (!S.wide) S.s.art = null; render(); window.scrollTo(0, 0); const m = $('main'); if (m) m.scrollTop = 0; },
     orderFind: () => orderFind(''),

@@ -89,6 +89,25 @@
     const all = Array.from(keys);
     for (const l of lines) for (const k of all) if (l[k] === undefined) l[k] = null;
   }
+  /* version 41: put together the tracker from the copy this screen has and only what changed since (snapshot_since).
+     Returns null when the result cannot be trusted - the screen then downloads the whole tracker. */
+  function applyDelta(base, d) {
+    if (!base || !d || !d.delta || !Array.isArray(base.lines)) return null;
+    const s = Object.assign({}, base);
+    for (const k of d.drop || []) delete s[k];
+    Object.assign(s, d.set || {});
+    const byId = new Map();
+    for (const l of base.lines) byId.set(l.id, l);
+    for (const id of d.gone || []) byId.delete(id);
+    for (const l of d.chg || []) byId.set(l.id, l);
+    const ids = d.ids || base.lines.map((l) => l.id);
+    const lines = [];
+    for (const id of ids) { const l = byId.get(id); if (!l) return null; lines.push(l); }
+    if (lines.length !== d.n || byId.size !== d.n) return null;
+    s.lines = lines;
+    s.me = d.me; s.ms_seen = d.ms_seen;
+    return s;
+  }
   function build(snap) {
     fillLines(snap.lines || []);
     const articles = {}, stores = {}, same = {}, diff = {}, pos = {}, now = today();
@@ -856,7 +875,7 @@
     return L.join('\r\n');
   }
 
-  root.Core = { QM_DAYS, QM_KIND, localDay, matchQueries, SEASON, season, growth, TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, alternates, allAlternates, freeOf, suggestSplit,
+  root.Core = { QM_DAYS, QM_KIND, localDay, matchQueries, SEASON, season, growth, TEMPLATES, STATUS_LABEL, STATUS_ORDER, REJECT_REASONS, LOCATIONS, LOC_KEYS, LOC_NAME, LOC_SHORT, DEFAULT_LOC_ORDER, locText, splitByOrder, autoSplit, minutesOf, locOfSloc, statusOf, build, applyDelta, alternates, allAlternates, freeOf, suggestSplit,
     packOf, roundPack, floorPack, marginAt, discountOf, pct, addDays, today, dayDiff, inr, rupees, when, whenLong,
     norm, ALIASES, SPECS, code, num, dateStr, findHeader, readTable, shape, offerSubject, offerText, reorderSubject, reorderText, mailHtml,
     buildEml, esc, b64utf8 };
